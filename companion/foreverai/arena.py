@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import html
 import json
-import os
 import time
 import webbrowser
 from datetime import datetime
@@ -105,7 +104,7 @@ def main() -> None:
     a = ap.parse_args()
     path = run([m.strip() for m in a.models.split(",") if m.strip()], a.search)
     print("Report:", path)
-    if os.name == "nt" and not a.no_open:
+    if not a.no_open:
         webbrowser.open(path)
 
 

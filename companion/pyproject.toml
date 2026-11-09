@@ -1,6 +1,6 @@
 [project]
 name = "foreverai"
-version = "0.3.0"
+version = "0.4.0"
 description = "ForeverAI desktop app: connects the WoW Forever add-on with Claude Code or OpenRouter"
 requires-python = ">=3.12"
 dependencies = [

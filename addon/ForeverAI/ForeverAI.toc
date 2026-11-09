@@ -2,7 +2,7 @@
 ## Title: |cff33ff99ForeverAI|r
 ## Notes: AI assistant for WoW Forever (Claude Code or OpenRouter).
 ## Author: ForeverAI
-## Version: 0.3.0
+## Version: 0.4.0
 ## SavedVariables: ForeverAIDB
 ## SavedVariablesPerCharacter: ForeverAICharDB
 ## IconTexture: Interface\Icons\INV_Misc_Book_09

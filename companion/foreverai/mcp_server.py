@@ -49,7 +49,7 @@ class Server:
         if method == "initialize":
             result = {"protocolVersion": req.get("params", {}).get("protocolVersion", PROTOCOL_VERSION),
                       "capabilities": {"tools": {}},
-                      "serverInfo": {"name": "foreverai", "version": "0.3.0"}}
+                      "serverInfo": {"name": "foreverai", "version": "0.4.0"}}
         elif method == "tools/list":
             result = {"tools": _tool_list()}
         elif method == "tools/call":
