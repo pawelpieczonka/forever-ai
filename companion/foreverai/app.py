@@ -85,7 +85,7 @@ class Companion:
         if info and info.get("loggedIn"):
             activity.info("Claude Code %s (%s)", info.get("version"), info.get("subscription"))
         elif info:
-            activity.warning("Claude Code is installed but not signed in (run claude in a terminal)")
+            activity.warning("Claude Code is installed but not signed in (sign in: claude auth login)")
         else:
             activity.info("Claude Code not found")
         provider = config.choose_provider(self.store.settings, info)

@@ -189,3 +189,37 @@ def test_window_key_dialog_flow_uses_service(env, monkeypatch):  # noqa: F811
     assert done.wait(5)
     assert res["r"] == (True, "Key saved. Using Google Gemini.")
     assert svc.store.settings.provider == "gemini" and config.read_key("gemini") == "AIzaSyGOOD000000000000000000000"
+
+
+def test_key_dialog_paste_shows_and_claude_sign_in(monkeypatch):
+    """A pasted key must be visible as "*" (a Tk without fontconfig draws "•" zero wide); Claude Code that is
+    installed but not signed in gets a sign-in button that runs claude auth login in a terminal."""
+    import tkinter as tk
+    import types
+
+    from foreverai import claude_code, window
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        import pytest
+        pytest.skip("no display")
+    root.withdraw()
+    monkeypatch.setattr(claude_code, "_detect_cache", ({"path": "/opt/claude", "loggedIn": False}, time.time()))
+    opened = []
+    monkeypatch.setattr(window, "open_terminal", lambda argv: opened.append(argv) or True)
+    comp = types.SimpleNamespace(store=types.SimpleNamespace(settings=config.Settings(game_dir="x")))
+    try:
+        d = window.KeyDialog(root, comp)
+        d.entry.insert(0, "AIzaSyPASTED00000000000000000000000")  # (not the clipboard: it is the user's)
+        assert d.entry.cget("show") == "*" and d.entry.get().startswith("AIzaSyPASTED")
+        assert int(root.tk.call("font", "measure", d.entry.cget("font"), "*" * 35)) > 35  # visible
+        root.update()
+        assert d.sign_in_btn.winfo_manager() == "pack" and "claude desktop app" in d.claude_line.cget("text").lower()
+        d.sign_in_btn.invoke()
+        assert opened == [["/opt/claude", "auth", "login"]] and "Check Claude Code again" in d.msg.cget("text")
+        claude_code._detect_cache = ({"path": "/opt/claude", "loggedIn": True, "version": "2"}, time.time())
+        d._show_sign_in()
+        root.update()
+        assert d.sign_in_btn.winfo_manager() == ""
+    finally:
+        root.destroy()

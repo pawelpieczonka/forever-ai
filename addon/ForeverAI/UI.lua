@@ -712,7 +712,7 @@ function UI.RefreshSettings()
     S.provInfo:SetText(gem.hasKey and ("Google Gemini API · key " .. esc(gem.keyMask or "?"))
       or "Google Gemini: paste an API key from aistudio.google.com/apikey below.")
   elseif claude.detected then
-    S.provInfo:SetText(string.format("Claude Code %s — %s%s", esc(claude.version or ""), claude.loggedIn and "signed in" or "|cffffaa44not signed in (run claude)|r",
+    S.provInfo:SetText(string.format("Claude Code %s — %s%s", esc(claude.version or ""), claude.loggedIn and "signed in" or "|cffffaa44not signed in (claude auth login)|r",
       claude.subscription and (", plan " .. esc(claude.subscription)) or ""))
   else
     S.provInfo:SetText("Claude Code not found.")
