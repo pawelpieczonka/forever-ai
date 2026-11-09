@@ -1,4 +1,7 @@
-"""ForeverAI application: a window that runs the background service (game <-> AI) while it is open."""
+"""ForeverAI application: a window that runs the background service (game <-> AI) while it is open.
+
+At start the app checks Claude Code first (a signed-in Claude Code needs no key); without it, and without a saved
+OpenRouter or Google Gemini key, the window asks for one."""
 
 from __future__ import annotations
 
@@ -12,10 +15,10 @@ import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from . import config
+from . import __version__, config
 from .kb.store import KB
 from .kb.sync import kb_path, run_due
-from .service import Service
+from .service import PROVIDER_NAMES, Service
 from .watcher import ScreenshotWatcher
 
 log = logging.getLogger("foreverai")
@@ -53,6 +56,9 @@ class Companion:
         self.watcher = ScreenshotWatcher(self.paths["screenshots"], self.service.on_frame)
         self.status_text = "Starting…"
         self.syncing = False
+        self.claude_checked = False  # the start-up check of Claude Code is done
+        self.needs_key = False  # no AI provider is usable: the window asks for a key
+        self.update: dict | None = None  # a newer release on GitHub
         self._stop = threading.Event()
         self.service.on_event = self.set_status
         self.service.screen_for = self.watcher.screen_for
@@ -65,23 +71,43 @@ class Companion:
         self.watcher.start()
         threading.Thread(target=self._maintenance, daemon=True, name="maintenance").start()
 
-        def warm_claude():
-            from . import claude_code
-            info = claude_code.detect(force=True)
-            log.info("Claude Code: %s", {k: v for k, v in (info or {}).items() if k != "path"} or "not found")
-            if info and info.get("loggedIn"):
-                activity.info("Claude Code %s (%s)", info.get("version"), info.get("subscription"))
-                # a fresh install has no OpenRouter key: use the signed-in Claude Code instead
-                if self.store.settings.provider == "openrouter" and not config.read_api_key():
-                    self.store.update(provider="claude_code")
-                    activity.info("AI provider: Claude Code")
-            elif info:
-                activity.warning("Claude Code is not signed in")
-            else:
-                activity.info("Claude Code not found")
-            self.service._prewarm_safe()  # the first question then skips Claude Code's start-up
-        threading.Thread(target=warm_claude, daemon=True, name="claude-detect").start()
+        threading.Thread(target=self.check_providers, daemon=True, name="claude-detect").start()
+        if not config.dev_mode() and not os.environ.get("FOREVERAI_NO_UPDATE_CHECK"):
+            threading.Thread(target=self._check_update, daemon=True, name="update-check").start()
         self.set_status("Running")
+
+    def check_providers(self) -> str | None:
+        """Claude Code first, then the saved keys; picks the provider (or asks for a key). Returns the provider."""
+        from . import claude_code
+        activity.info("Checking Claude Code…")
+        info = claude_code.detect(force=True)
+        log.info("Claude Code: %s", {k: v for k, v in (info or {}).items() if k != "path"} or "not found")
+        if info and info.get("loggedIn"):
+            activity.info("Claude Code %s (%s)", info.get("version"), info.get("subscription"))
+        elif info:
+            activity.warning("Claude Code is installed but not signed in (run claude in a terminal)")
+        else:
+            activity.info("Claude Code not found")
+        provider = config.choose_provider(self.store.settings, info)
+        if provider is None:
+            self.needs_key = True
+            activity.warning("No AI provider yet: enter an OpenRouter or Google Gemini key")
+        else:
+            self.needs_key = False
+            if provider != self.store.settings.provider:
+                self.store.update(provider=provider)
+            activity.info("AI provider: %s", PROVIDER_NAMES[provider])
+        self.claude_checked = True
+        self.service._prewarm_safe()  # the first question then skips Claude Code's start-up
+        return provider
+
+    def _check_update(self) -> None:
+        from .updates import newer_release
+        rel = newer_release()
+        if rel:
+            self.update = rel
+            activity.info("ForeverAI %s is available (you have %s): click Download update", rel["version"],
+                          __version__)
 
     def _sync(self, force: bool) -> None:
         if self.syncing:

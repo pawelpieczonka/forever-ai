@@ -16,6 +16,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable
 
+from . import __version__
 from .tools import TOOLS
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -49,7 +50,7 @@ class Server:
         if method == "initialize":
             result = {"protocolVersion": req.get("params", {}).get("protocolVersion", PROTOCOL_VERSION),
                       "capabilities": {"tools": {}},
-                      "serverInfo": {"name": "foreverai", "version": "0.4.0"}}
+                      "serverInfo": {"name": "foreverai", "version": __version__}}
         elif method == "tools/list":
             result = {"tools": _tool_list()}
         elif method == "tools/call":

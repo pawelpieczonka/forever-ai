@@ -1,7 +1,7 @@
 -- ForeverAI: core (namespace, saved variables, events, conversations, requests)
 local ADDON, ns = ...
 ForeverAI = ns
-ns.version = "0.4.0"
+ns.version = "0.5.0"
 
 BINDING_HEADER_FOREVERAI = "ForeverAI"
 BINDING_NAME_FOREVERAI_TOGGLE = "Show/hide ForeverAI"
@@ -524,6 +524,8 @@ function ns.HandleRequests(list)
       local ok, err = pcall(function()
         if req.op == "addon_options" and ns.Addons then
           reply(ns.Addons.FindOptions(req.addon, req.query))
+        elseif req.op == "auction_search" and ns.Auction then
+          ns.Auction.Search(req, reply) -- replies when the search is done (it runs over several frames)
         else
           reply({ error = "unknown request " .. tostring(req.op) })
         end

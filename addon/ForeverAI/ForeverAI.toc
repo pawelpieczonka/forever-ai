@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: |cff33ff99ForeverAI|r
-## Notes: AI assistant for WoW Forever (Claude Code or OpenRouter).
+## Notes: AI assistant for WoW Forever (Claude Code, OpenRouter or Google Gemini).
 ## Author: ForeverAI
-## Version: 0.4.0
+## Version: 0.5.0
 ## SavedVariables: ForeverAIDB
 ## SavedVariablesPerCharacter: ForeverAICharDB
 ## IconTexture: Interface\Icons\INV_Misc_Book_09
@@ -16,6 +16,7 @@ Links.lua
 Map.lua
 Players.lua
 Addons.lua
+Auction.lua
 Transport.lua
 UI.lua
 Button.lua

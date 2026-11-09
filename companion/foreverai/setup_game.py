@@ -264,14 +264,11 @@ def install_addon(addons_dir: Path) -> str:
 
 def seed_knowledge_base() -> bool:
     """Copy the bundled knowledge base on first run, so the first update only fetches what changed. From source the
-    copy that ships with the prebuilt Windows app is used."""
+    starter copy in the repository (seed/kb.sqlite) is used."""
     from .kb.sync import kb_path
     target = Path(kb_path())
-    seeds = [bundle_root() / "seed" / "kb.sqlite"]
-    if not getattr(sys, "frozen", False):
-        seeds.append(config.REPO_ROOT / "release" / "ForeverAI" / "_internal" / "seed" / "kb.sqlite")
-    seed = next((s for s in seeds if s.exists()), None)
-    if target.exists() or seed is None:
+    seed = bundle_root() / "seed" / "kb.sqlite"
+    if target.exists() or not seed.exists():
         return False
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(seed, target)

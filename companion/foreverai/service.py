@@ -13,14 +13,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from . import claude_code, config
+from . import claude_code, config, gemini
 from .frames import Frame, FrameAssembler
 from .inbox import pool_size, write_inbox
 from .kb.store import KB
 from .memory import ConversationStore, MemoryStore
+from .gemini import Gemini
 from .openrouter import OpenRouter
 from .prompt import build_messages, entity_names
-from .tools import TOOLS, validate_abandon, validate_vendor, format_addon_options, remember_options, run_fetch, run_kb_search, validate_mark, validate_proposal
+from .tools import (TOOLS, auction_request, format_addon_options, format_auction, remember_options, run_fetch,
+                    run_kb_search, validate_abandon, validate_mark, validate_proposal, validate_vendor)
 from .wowformat import bracket_names, md_to_wow
 
 log = logging.getLogger("foreverai")
@@ -28,7 +30,7 @@ activity = logging.getLogger("foreverai.activity")  # short English lines shown 
 
 _REQUEST_NAMES = {"status": "status refresh", "set_model": "model change", "set_provider": "AI provider change",
                   "set_effort": "thinking level change", "set_search_mode": "web search setting",
-                  "set_api_key": "OpenRouter key change", "memory_add": "memory: add", "memory_delete": "memory: delete",
+                  "set_api_key": "OpenRouter key change", "set_gemini_key": "Gemini key change", "memory_add": "memory: add", "memory_delete": "memory: delete",
                   "memory_clear": "memory: clear", "memory_list": "memory: list", "dismiss_claude": "settings"}
 
 FIRST_FLUSH_S = 1.0
@@ -37,6 +39,7 @@ RETRY_TEXT_S = 2.0      # the addon reads the next inbox this soon while text is
 RETRY_THINKING_S = 3.0  # ... and this soon while the model is still thinking / using tools
 MAX_TOOL_ROUNDS = 5
 EFFORT_NAMES = {"low": "low", "medium": "medium", "high": "high", "xhigh": "very high", "max": "max"}
+PROVIDER_NAMES = {"openrouter": "OpenRouter", "gemini": "Google Gemini", "claude_code": "Claude Code"}
 SCREEN_NOTE = ("The player attached the current screen as an image (top-left corner blacked out). Use it for what "
                "the game data does not contain.")
 MAX_SESSION_TURNS = 8  # then a fresh Claude session (with the last turns inline) keeps the context small
@@ -116,6 +119,9 @@ class TurnContext:
         self.pre_urls: set[str] = set()
         self.known: dict = {}  # addon options the game reported in this answer (validates proposals)
         self.want_screen = bool(msg.get("wantScreen"))
+        self.ah_items: dict[str, dict] = {}  # items the auction search returned (name -> id, price)
+        self.ah_open: bool | None = None
+        self.web_search: Callable[[str], tuple[str, list[dict]]] | None = None  # Gemini: grounded search
 
     def used_sources(self, answer: str, limit: int = 8) -> list[dict]:
         """Sources for the answer card: what the model looked up itself, plus pre-fetched knowledge-base pages only
@@ -130,6 +136,14 @@ class TurnContext:
             out.append(src)
         return out[:limit]
 
+    def auction_card(self, answer: str) -> list[dict] | None:
+        """Auction items the answer recommends (named in [brackets]), for the "Search on the AH" card."""
+        if not self.ah_items:
+            return None
+        named = {n.lower() for n in bracket_names(answer or "")}
+        picked = [v for k, v in self.ah_items.items() if k.lower() in named]
+        return picked[:10] or None
+
     def add_source(self, src: dict) -> None:
         if src.get("url") and all(x["url"] != src["url"] for x in self.sources):
             self.sources.append({k: src.get(k) for k in ("title", "url", "date")})
@@ -137,19 +151,22 @@ class TurnContext:
 
 class Service:
     def __init__(self, settings: config.SettingsStore, kb: KB | None, addons_dir: Path,
-                 client_factory: Callable[[str], OpenRouter] = OpenRouter, lookahead: int = 200):
+                 client_factory: Callable[[str], OpenRouter] = OpenRouter, lookahead: int = 200,
+                 gemini_factory: Callable[[str], Gemini] = Gemini):
         self.store = settings
         self.kb = kb
         self.addons_dir = Path(addons_dir)
         self.client_factory = client_factory
         self.lookahead = lookahead
         self.assembler = FrameAssembler()
+        self.gemini_factory = gemini_factory
         self.memory = MemoryStore(config.data_dir() / "memory.json")
         self.convs = ConversationStore(config.data_dir() / "convs")
         self._char = "?"
         self.last_cost: float | None = None
         self._balance: tuple[float, float] | None = None  # (value, fetched_at)
         self._models: tuple[list[dict], float] | None = None
+        self._gemini_models: tuple[list[dict], float] | None = None
         self._cancel: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
         self.on_event: Callable[[str], None] = lambda s: None
@@ -231,7 +248,9 @@ class Service:
             else:
                 writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"), "text": "Unknown mode."})
         elif kind == "set_api_key":
-            self._set_key(msg, writer)
+            self._set_key(msg, writer, "openrouter")
+        elif kind == "set_gemini_key":
+            self._set_key(msg, writer, "gemini")
         elif kind == "set_provider":
             self._set_provider(msg, writer)
         elif kind == "set_effort":
@@ -246,7 +265,8 @@ class Service:
         elif kind == "dismiss_claude":
             self.store.update(claude_suggest_dismissed=True)
             writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"),
-                         "text": "Keeping OpenRouter.", "status": self.status()})
+                         "text": "Keeping " + PROVIDER_NAMES.get(self.store.settings.provider, "the current provider") + ".",
+                         "status": self.status()})
         elif kind == "new_conversation":
             pass
         else:
@@ -261,14 +281,19 @@ class Service:
                 writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"),
                              "text": "Claude Code is not installed or not signed in (run claude in a terminal to sign in)."})
                 return
-        elif value != "openrouter":
+        elif value in ("openrouter", "gemini"):
+            if not config.read_key(value):
+                writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"), "status": self.status(),
+                             "text": f"No {PROVIDER_NAMES[value]} key yet. Enter it below first."})
+                return
+        else:
             writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"), "text": "Unknown provider."})
             return
         self.store.update(provider=value)
         self.prewarm_later()
         s = self.store.settings
-        label = (f"Claude Code · {model_name(s.claude_model)} · thinking {EFFORT_NAMES.get(s.claude_effort, s.claude_effort)}" if value == "claude_code"
-                 else f"OpenRouter · {s.model}")
+        label = {"claude_code": f"Claude Code · {model_name(s.claude_model)} · thinking {EFFORT_NAMES.get(s.claude_effort, s.claude_effort)}",
+                 "gemini": f"Google Gemini · {s.gemini_model}"}.get(value, f"OpenRouter · {s.model}")
         writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"), "text": "AI provider: " + label,
                      "status": self.status(True)})
 
@@ -285,6 +310,16 @@ class Service:
             writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"),
                          "text": f"Claude model: {model_name(model)}", "status": self.status()})
             return
+        if self.store.settings.provider == "gemini":
+            ids = {m["id"] for m in self.gemini_models()}
+            if not gemini.is_chat_model(model) or (ids and model not in ids and not model.endswith("-latest")):
+                writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"),
+                             "text": f"{model} is not a Gemini chat model available to this key."})
+                return
+            self.store.update(gemini_model=model)
+            writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"), "text": f"Gemini model: {model}",
+                         "status": self.status()})
+            return
         ids = {m["id"] for m in self.models()}
         if ids and model not in ids:
             writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"),
@@ -294,32 +329,51 @@ class Service:
         writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"), "text": f"Model: {model}",
                      "status": self.status()})
 
-    def _set_key(self, msg: dict, writer: InboxWriter) -> None:
-        key = str(msg.get("value") or "").strip()
+    def save_key(self, provider: str, key: str, use: bool = False) -> tuple[bool, str]:
+        """Check the key with the provider and save it; ``use`` also switches to that provider.
+        Returns (ok, message for the player)."""
+        key = key.strip()
+        name = PROVIDER_NAMES[provider]
+        if not key or any(c.isspace() for c in key):
+            return False, f"That does not look like a {name} key."
+        factory = self.gemini_factory if provider == "gemini" else self.client_factory
         try:
-            client = self.client_factory(key)
-            client.key_info()
+            factory(key).key_info()
         except Exception as e:  # invalid key or network
-            writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"),
-                         "text": f"OpenRouter rejected the key ({str(e)[:80]}). Nothing changed."})
-            return
-        config.write_api_key(key)
-        self._balance = None
-        writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"), "text": "Key saved.",
-                     "status": self.status(True)})
+            return False, f"{name} rejected the key ({str(e)[:80]}). Nothing changed."
+        config.write_key(provider, key)
+        if provider == "openrouter":
+            self._balance = self._models = None
+        else:
+            self._gemini_models = None
+        if use:
+            self.store.update(provider=provider)
+        activity.info("%s key saved%s", name, " · AI provider: " + name if use else "")
+        return True, "Key saved." + (f" Using {name}." if use else "")
+
+    def _set_key(self, msg: dict, writer: InboxWriter, provider: str) -> None:
+        # a key entered while that provider has no key yet also switches to it
+        use = not config.read_key(provider) and self.store.settings.provider != "claude_code"
+        ok, text = self.save_key(provider, str(msg.get("value") or ""), use=use)
+        writer.send({"kind": "status" if ok else "error", "final": True, "msgId": msg.get("msgId"), "text": text,
+                     "status": self.status(ok)})
 
     # ---------------------------------------------------------------- status
     def _refresh(self, what: str) -> None:
-        key = config.read_api_key()
+        key = config.read_key("gemini" if what == "gemini_models" else "openrouter")
         if not key:
             return
         try:
-            if what == "models":
+            if what == "gemini_models":
+                self._gemini_models = (self.gemini_factory(key).models(), time.time())
+            elif what == "models":
                 self._models = (self.client_factory(key).models(), time.time())
             else:
                 self._balance = (self.client_factory(key).credits(), time.time())
         except Exception as e:
             log.warning("%s refresh failed: %s", what, e)
+            if what == "gemini_models" and self._gemini_models is None:
+                self._gemini_models = ([], time.time() - 3300)  # do not block every status; retry in 5 minutes
 
     def _refresh_later(self, what: str) -> None:
         """Refresh a cached value in the background so replies never wait on the network."""
@@ -342,6 +396,23 @@ class Service:
             self._refresh_later("models")
         return self._models[0] if self._models else []
 
+    def gemini_models(self) -> list[dict]:
+        if self._gemini_models is None:
+            self._refresh("gemini_models")  # first use: nothing cached yet
+        elif time.time() - self._gemini_models[1] > 3600:
+            self._refresh_later("gemini_models")
+        return self._gemini_models[0] if self._gemini_models else []
+
+    def gemini_status(self) -> dict:
+        s = self.store.settings
+        key = config.read_key("gemini")
+        available = {m["id"]: m for m in self.gemini_models()} if key else {}
+        ids = [s.gemini_model] + [m for m in gemini.FAVORITE_MODELS if m != s.gemini_model]
+        if available:  # aliases (…-latest) are not listed by the API but work
+            ids = [m for m in ids if m in available or m.endswith("-latest") or m == s.gemini_model]
+        return {"hasKey": bool(key), "keyMask": config.mask_key(key), "model": s.gemini_model,
+                "models": [{"id": m, "name": (available.get(m) or {}).get("name") or m} for m in ids[:8]]}
+
     def balance(self, fresh: bool = False) -> float | None:
         if self._balance is None or fresh:
             self._refresh("balance")
@@ -361,7 +432,7 @@ class Service:
 
     def status(self, fresh: bool = False) -> dict:
         s = self.store.settings
-        bal = self.balance(fresh)
+        bal = self.balance(fresh) if config.read_key("openrouter") else None
         by_id = {m["id"]: m for m in self.models()}
         favs = []
         for mid in [s.model] + [f for f in s.favorites if f != s.model]:
@@ -383,6 +454,7 @@ class Service:
             "provider": s.provider,
             "memory": self.memory.get(self._char),
             "claude": self.claude_status(),
+            "gemini": self.gemini_status(),
             "suggestClaude": bool(self.claude_status()["loggedIn"]) and s.provider != "claude_code"
                              and not s.claude_suggest_dismissed,
         }
@@ -445,37 +517,46 @@ class Service:
             if s.provider == "claude_code":
                 self._answer_claude(msg, ctx, messages, conv)
             else:
-                self._answer_openrouter(msg, ctx, messages)
+                self._answer_api(msg, ctx, messages, "gemini" if s.provider == "gemini" else "openrouter")
         finally:
             if self._turn is ctx:
                 self._turn = None
 
-    def _answer_openrouter(self, msg: dict, ctx: TurnContext, messages: list[dict]) -> None:
+    def _answer_api(self, msg: dict, ctx: TurnContext, messages: list[dict], provider: str) -> None:
+        """An answer from an API with OpenAI-style chat (OpenRouter or Gemini), running the tool rounds here."""
         msg_id, writer, cancel, sources = ctx.msg_id, ctx.writer, ctx.cancel, ctx.sources
         question = str(msg.get("text") or "").strip()
         s = self.store.settings
-        key = config.read_api_key()
+        is_gemini = provider == "gemini"
+        key = config.read_key(provider)
         if not key:
-            writer.send({"kind": "error", "final": True, "msgId": msg_id,
-                         "text": "No OpenRouter key. Enter it in Settings → OpenRouter key.", "status": self.status()})
+            writer.send({"kind": "error", "final": True, "msgId": msg_id, "status": self.status(),
+                         "text": f"No {PROVIDER_NAMES[provider]} key. Enter it in the ForeverAI window (AI key…) or "
+                                 f"in Settings → {PROVIDER_NAMES[provider]} key."})
             return
-        client = self.client_factory(key)
+        client = (self.gemini_factory if is_gemini else self.client_factory)(key)
+        model = s.gemini_model if is_gemini else s.model
+        if is_gemini:
+            def search(query: str) -> tuple[str, list[dict]]:
+                return client.web_search(model, query)
+            ctx.web_search = search
+            if s.search_mode == "always":
+                messages[0]["content"] += "\n\nAlways check current information with web_search before answering."
         shot = self.screen_image(ctx)
         if shot:
-            model_info = {m["id"]: m for m in self.models()}.get(s.model) or {}
+            model_info = {"image": True} if is_gemini else ({m["id"]: m for m in self.models()}.get(s.model) or {})
             last = messages[-1]
             if model_info.get("image"):
                 last["content"] = [{"type": "text", "text": last["content"] + "\n\n" + SCREEN_NOTE},
                                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + shot}}]
             else:
-                last["content"] += f"\n\n(The player attached a screenshot, but {s.model} cannot read images.)"
+                last["content"] += f"\n\n(The player attached a screenshot, but {model} cannot read images.)"
         text = ""
         phase = "Thinking…"
         cost = 0.0
         started = time.monotonic()
         last_sent = [0.0, "", ""]  # time, text, phase
-        model = s.model
-        tried_fallback = False
+        tried_fallback = is_gemini  # the fallback model is an OpenRouter one
 
         def flush(force: bool = False) -> None:
             now = time.monotonic()
@@ -537,29 +618,36 @@ class Service:
             if not calls:
                 break
             messages.append({"role": "assistant", "content": round_text or None, "tool_calls": [
-                {"id": c.id or f"call_{i}", "type": "function", "function": {"name": c.name, "arguments": c.arguments}}
+                {"id": c.id or f"call_{i}", "type": "function", "function": {"name": c.name, "arguments": c.arguments},
+                 **({"extra_content": c.extra} if c.extra else {})}
                 for i, c in enumerate(calls)]})
             for i, c in enumerate(calls):
                 log.info("tool %s %s", c.name, {k: str(v)[:60] for k, v in (c.args() or {}).items()})
                 activity.info("Tool: %s", c.name)
                 result, _ = self.run_tool(ctx, c.name, c.args())
                 messages.append({"role": "tool", "tool_call_id": c.id or f"call_{i}", "content": result})
-        self.last_cost = round(cost, 6)
+        self.last_cost = None if is_gemini else round(cost, 6)
         self.ensure_marks(ctx, text)
         self.convs.append(str(msg.get("conv") or "default"), self._char, question, text)
         final_text = md_to_wow(text) if text else "(no answer)"
         writer.send({"kind": "answer", "final": True, "msgId": msg_id, "text": final_text, "sources": ctx.used_sources(text),
                      "actions": ctx.actions, "marks": ctx.marks, "cost": self.last_cost, "model": model,
-                     "links": self.links(text),
-                     "secs": round(time.monotonic() - started, 1), "status": self._status_after(cost)})
-        self.on_event(f"Last answer: {model}, ${self.last_cost:.4f}")
+                     **({"costNote": "Gemini API"} if is_gemini else {}),
+                     "links": self.links(text, ctx), "auction": ctx.auction_card(text),
+                     "secs": round(time.monotonic() - started, 1),
+                     "status": self.status() if is_gemini else self._status_after(cost)})
+        self.on_event(f"Last answer: {model}" + ("" if is_gemini else f", ${self.last_cost:.4f}"))
 
-    def links(self, md: str) -> list[dict]:
+    def links(self, md: str, ctx: TurnContext | None = None) -> list[dict]:
         """Item/spell/quest ids for names written in [brackets], so the game can make them clickable."""
         out = []
-        if not self.kb:
-            return out
+        found = {k.lower(): v for k, v in (ctx.ah_items if ctx else {}).items()}  # items from the auction search
         for name in bracket_names(md)[:40]:
+            if name.lower() in found:
+                out.append({"name": name, "kind": "item", "id": found[name.lower()]["id"]})
+                continue
+            if not self.kb:
+                continue
             try:
                 ent = self.kb.entity(name)
             except Exception:
@@ -624,6 +712,29 @@ class Service:
             if action:
                 ctx.actions.append(action)
             return text, action is None
+        if name == "search_auction_house":
+            req, err = auction_request(args)
+            if err:
+                return err, True
+            ctx.phase_cb("Searching the auction house…")
+            res = self.game_call(ctx, "auction_search", req)
+            for it in (res or {}).get("items") or []:
+                if it.get("name") and it.get("id"):
+                    ctx.ah_items[str(it["name"])] = {"id": it["id"], "name": it["name"], "price": it.get("price")}
+            if res and res.get("ahOpen") is not None:
+                ctx.ah_open = bool(res.get("ahOpen"))
+            return format_auction(res), not res or bool(res.get("error"))
+        if name == "web_search":
+            if not ctx.web_search:
+                return "Web search is not available with this AI provider.", True
+            query = str(args.get("query", "")).strip()[:200]
+            if not query:
+                return "Give a search query.", True
+            ctx.phase_cb(f"Searching the web: {query[:40]}")
+            text, found = ctx.web_search(query)
+            for f in found:
+                ctx.add_source({"title": f.get("title"), "url": f.get("url"), "date": ""})
+            return text, not found and text.startswith("Web search failed")
         if name == "addon_options":
             addon = str(args.get("addon", "")).strip()[:60]
             query = str(args.get("query", "")).strip()[:120]
@@ -726,7 +837,7 @@ class Service:
 
     def _claude_system(self, system: str) -> str:
         s = self.store.settings
-        system += ("\n\nThe foreverai MCP server provides: search_knowledge_base, addon_options, "
+        system += ("\n\nThe foreverai MCP server provides: search_knowledge_base, search_auction_house, addon_options, "
                    "propose_addon_change, propose_quest_abandon, propose_vendor_action, mark_on_map, "
                    "save_memory, delete_memory, fetch_url. Read web pages (e.g. build links) only with fetch_url — it gets "
                    "past bot blocking.")
@@ -808,7 +919,7 @@ class Service:
         if got is None:
             writer.send({"kind": "error", "final": True, "msgId": msg_id, "status": self.status(),
                          "text": "Claude Code is not available or not signed in. Sign in (run claude in a terminal) or switch "
-                                 "the AI provider to OpenRouter in Settings."})
+                                 "the AI provider to OpenRouter or Gemini in Settings."})
             return
         session, continues = got
         # a session that already holds this conversation only needs the new question
@@ -866,7 +977,8 @@ class Service:
         self.convs.append(conv, self._char, question, text)
         self.last_cost = None
         writer.send({"kind": "answer", "final": True, "msgId": msg_id,
-                     "text": md_to_wow(text) if text else "(no answer)", "links": self.links(text),
+                     "text": md_to_wow(text) if text else "(no answer)", "links": self.links(text, ctx),
+                     "auction": ctx.auction_card(text),
                      "marks": ctx.marks, "sources": ctx.used_sources(text), "actions": ctx.actions,
                      "model": model_name(s.claude_model),
                      "costNote": "Claude subscription", "secs": round(time.monotonic() - started, 1),

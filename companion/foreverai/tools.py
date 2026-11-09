@@ -11,6 +11,28 @@ from .kb.store import KB
 
 ALLOWED_OPS = ("set_option", "set_setting", "toggle_addon", "slash_command")
 
+# auction house filters -> the game's numeric item classes (Enum.ItemClass), subclasses and equip slots
+AH_SLOTS = {
+    "head": ["INVTYPE_HEAD"], "neck": ["INVTYPE_NECK"], "shoulder": ["INVTYPE_SHOULDER"], "back": ["INVTYPE_CLOAK"],
+    "chest": ["INVTYPE_CHEST", "INVTYPE_ROBE"], "wrist": ["INVTYPE_WRIST"], "hands": ["INVTYPE_HAND"],
+    "waist": ["INVTYPE_WAIST"], "legs": ["INVTYPE_LEGS"], "feet": ["INVTYPE_FEET"], "finger": ["INVTYPE_FINGER"],
+    "trinket": ["INVTYPE_TRINKET"],
+    "one-hand": ["INVTYPE_WEAPON", "INVTYPE_WEAPONMAINHAND"],  # fits the main hand, wielded with one hand
+    "main-hand": ["INVTYPE_WEAPON", "INVTYPE_WEAPONMAINHAND"],
+    "off-hand": ["INVTYPE_WEAPON", "INVTYPE_WEAPONOFFHAND", "INVTYPE_SHIELD", "INVTYPE_HOLDABLE"],
+    "two-hand": ["INVTYPE_2HWEAPON"], "shield": ["INVTYPE_SHIELD"], "held-in-off-hand": ["INVTYPE_HOLDABLE"],
+    "ranged": ["INVTYPE_RANGED", "INVTYPE_RANGEDRIGHT", "INVTYPE_THROWN", "INVTYPE_RELIC"],
+    "bag": ["INVTYPE_BAG"], "any": [],
+}
+AH_WEAPONS = {
+    "1h_sword": [7], "2h_sword": [8], "sword": [7, 8], "1h_axe": [0], "2h_axe": [1], "axe": [0, 1],
+    "1h_mace": [4], "2h_mace": [5], "mace": [4, 5], "dagger": [15], "fist": [13], "staff": [10], "polearm": [6],
+    "bow": [2], "gun": [3], "crossbow": [18], "wand": [19], "thrown": [16], "fishing_pole": [20],
+}
+AH_ARMOR = {"cloth": [1], "leather": [2], "mail": [3], "plate": [4], "shield": [6], "misc": [0], "relic": [7, 8, 9, 11]}
+AH_CATEGORIES = {"weapon": 2, "armor": 4, "consumable": 0, "container": 1, "gem": 3, "reagent": 5, "projectile": 6,
+                 "trade_goods": 7, "enhancement": 8, "recipe": 9, "quiver": 11, "quest": 12, "misc": 15, "any": -1}
+
 TOOLS = [
     {
         "type": "function",
@@ -215,6 +237,153 @@ TOOLS.append({
         },
     },
 })
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "search_auction_house",
+        "description": "Search the auction house prices IN THE GAME: the player's auction add-on (Auctionator) keeps the "
+                       "lowest buyout of every item from its last scan. Returns matching items with price, how many days "
+                       "ago it was seen, stats, required level, the comparison with the equipped item (vsEquipped) and, "
+                       "with the Pawn add-on, the upgrade in percent. Use it for every question about buying on the AH "
+                       "(upgrades, best item for a budget, cheapest materials, prices). Give filters, not only a name: "
+                       "e.g. 'best one-handed sword up to 100 gold' = weapon_type 1h_sword, slot one-hand, "
+                       "max_price_gold 100, upgrades_only true.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "English words that must be in the item name (optional)"},
+                "slot": {"type": "string", "enum": list(AH_SLOTS)},
+                "weapon_type": {"type": "string", "enum": list(AH_WEAPONS)},
+                "armor_type": {"type": "string", "enum": list(AH_ARMOR)},
+                "category": {"type": "string", "enum": list(AH_CATEGORIES),
+                             "description": "Item class for non-gear searches (materials, potions, bags, recipes)"},
+                "max_price_gold": {"type": "number"},
+                "min_price_gold": {"type": "number"},
+                "usable_only": {"type": "boolean", "description": "Only items the player can use now (default true)"},
+                "upgrades_only": {"type": "boolean", "description": "Only upgrades over the equipped item"},
+                "max_age_days": {"type": "integer", "description": "Only prices seen in the last N days (default 7)"},
+                "sort": {"type": "string", "enum": ["upgrade", "price", "ilvl"]},
+                "limit": {"type": "integer", "description": "Max items returned (default 15, max 30)"},
+            },
+        },
+    },
+})
+
+
+def auction_request(args: dict) -> tuple[dict | None, str | None]:
+    """Model arguments -> the game's auction_search request (numeric item classes, equip slots, copper).
+    Returns (request, error)."""
+    def gold(name):
+        v = args.get(name)
+        if v in (None, ""):
+            return None
+        try:
+            return max(0, int(round(float(v) * 10000)))
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be a number of gold")
+
+    try:
+        max_c, min_c = gold("max_price_gold"), gold("min_price_gold")
+    except ValueError as e:
+        return None, f"Rejected: {e}."
+    req: dict[str, Any] = {"query": str(args.get("query") or "").strip()[:60]}
+    classes: set[int] = set()
+    subclasses: list[int] = []
+    for key, table, cls in (("weapon_type", AH_WEAPONS, 2), ("armor_type", AH_ARMOR, 4)):
+        val = str(args.get(key) or "").strip().lower()
+        if val:
+            if val not in table:
+                return None, f"Rejected: unknown {key} {val!r}; allowed: {', '.join(table)}."
+            classes.add(cls)
+            subclasses += table[val]
+    if len(classes) > 1:
+        return None, "Rejected: give weapon_type or armor_type, not both."
+    cat = str(args.get("category") or "").strip().lower()
+    if cat and cat != "any":
+        if cat not in AH_CATEGORIES:
+            return None, f"Rejected: unknown category {cat!r}."
+        if classes and AH_CATEGORIES[cat] not in classes:
+            return None, "Rejected: the category does not match the weapon/armor type."
+        classes.add(AH_CATEGORIES[cat])
+    slot = str(args.get("slot") or "").strip().lower()
+    if slot and slot != "any":
+        if slot not in AH_SLOTS:
+            return None, f"Rejected: unknown slot {slot!r}; allowed: {', '.join(AH_SLOTS)}."
+        req["equipLocs"] = AH_SLOTS[slot]
+    if classes:
+        req["classIDs"] = sorted(classes)
+    if subclasses:
+        req["subclassIDs"] = subclasses
+    if not (req["query"] or classes or req.get("equipLocs")):
+        return None, "Rejected: give a query (item name words) or filters (slot, weapon_type, armor_type, category)."
+    if max_c is not None:
+        req["maxCopper"] = max_c
+    if min_c:
+        req["minCopper"] = min_c
+
+    def number(name, default, lo, hi):
+        try:
+            return max(lo, min(hi, int(args.get(name) if args.get(name) is not None else default)))
+        except (TypeError, ValueError):
+            return default
+    req["usableOnly"] = args.get("usable_only") is not False
+    req["upgradesOnly"] = args.get("upgrades_only") is True
+    req["maxAgeDays"] = number("max_age_days", 7, 1, 30)
+    req["limit"] = number("limit", 15, 1, 30)
+    req["sort"] = args.get("sort") if args.get("sort") in ("upgrade", "price", "ilvl") else (
+        "upgrade" if classes & {2, 4} or req.get("equipLocs") else "price")
+    return req, None
+
+
+def format_auction(res: dict | None) -> str:
+    """Game result of auction_search -> text for the model."""
+    if not res:
+        return "The game did not respond in time; the auction prices could not be read."
+    if res.get("error"):
+        return f"Auction house search failed: {res['error']}"
+    items = res.get("items") or []
+    head = [f"Auction house prices from {res.get('source', 'the auction add-on')}"
+            + (f" (realm {res['realm']})" if res.get("realm") else "")
+            + (f"; last scan: {res['lastScan']}" if res.get("lastScan") else "") + "."]
+    head.append(f"{res.get('dbItems', '?')} items in the price data, {res.get('matched', len(items))} match the filters, "
+                f"showing {len(items)} (sorted by {res.get('sort', 'upgrade')}). A price is the lowest buyout of the last "
+                "scan that saw the item; listings may have sold or changed since.")
+    if res.get("upgradeMethod"):
+        head.append(f"Upgrade check: {res['upgradeMethod']}.")
+    if res.get("skipped"):
+        head.append("Left out: " + ", ".join(f"{n} {why}" for why, n in sorted(res["skipped"].items()) if n) + ".")
+    if res.get("notLoaded"):
+        head.append(f"{res['notLoaded']} matching items are not in the game's item cache yet; searching again in a "
+                    "moment finds more.")
+    if not items:
+        head.append("No matching items. Widen the filters (price, age, usable_only) or tell the player to open the "
+                    "auction house and scan with Auctionator.")
+    lines = []
+    for it in items:
+        bits = [f"- [{it.get('name')}] (item {it.get('id')}) — {it.get('price', '?')}"]
+        seen = it.get("seen")
+        if seen:
+            bits.append(f"seen {seen}" + (f", {it['available']} available" if it.get("available") else ""))
+        desc = ", ".join(str(x) for x in (it.get("quality"), it.get("ilvl") and f"ilvl {it['ilvl']}",
+                                          it.get("requiresLevel") and f"requires level {it['requiresLevel']}",
+                                          it.get("slot"), it.get("type")) if x)
+        if desc:
+            bits.append(desc)
+        if it.get("stats"):
+            bits.append(f"stats: {it['stats']}")
+        if it.get("vsEquipped"):
+            bits.append(f"vs equipped: {it['vsEquipped']}")
+        if it.get("pawn"):
+            bits.append(f"Pawn: {it['pawn']}")
+        for flag in ("cannotUse", "tooLowLevel"):
+            if it.get(flag):
+                bits.append(f"{flag}: {it[flag]}")
+        lines.append(" | ".join(bits))
+    if res.get("ahOpen"):
+        lines.append("The auction house window is open: the game offers to search the items you recommend in Auctionator.")
+    return "\n".join(head + lines)
 
 
 def validate_vendor(args: dict, snapshot: dict) -> tuple[dict | None, str]:

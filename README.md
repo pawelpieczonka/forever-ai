@@ -1,25 +1,56 @@
 # ForeverAI
 
-AI assistant in a chat window inside World of Warcraft: Forever. It answers using your character, quests, gear and surroundings, and a local Forever knowledge base. Answers come from Claude Code (Claude subscription) or OpenRouter.
+AI assistant in a chat window inside World of Warcraft: Forever. It answers using your character, quests, gear and surroundings, a local Forever knowledge base and the auction house prices of your auction add-on. Answers come from Claude Code (Claude subscription), OpenRouter or Google Gemini.
 
 ## Requirements
 
 - Windows 10/11, or Linux with WoW Forever running under Wine (Lutris, Steam/Proton, Bottles, Heroic or plain Wine)
-- Claude Code signed in, or an OpenRouter API key
-- Recommended: Questie, TomTom
+- One AI provider: Claude Code signed in, an [OpenRouter key](https://openrouter.ai/keys) or a [Google Gemini API key](https://aistudio.google.com/apikey)
+- Recommended: Questie, TomTom; for auction house questions Auctionator (and Pawn for upgrade checks)
+
+## Download
+
+Get the newest version from [GitHub Releases](https://github.com/pawelpieczonka/forever-ai/releases/latest). Each file is for one platform:
+
+| File | Platform | Start |
+|---|---|---|
+| `ForeverAI-<version>-Windows-x64.zip` | Windows 10/11 | `ForeverAI-Windows/ForeverAI-Windows.exe` |
+| `ForeverAI-<version>-Linux-x86_64.tar.gz` | Linux (glibc 2.35 or newer: Ubuntu 22.04, Debian 12 and later) | `ForeverAI-Linux/ForeverAI-Linux` |
+
+No Python is needed. `SHA256SUMS.txt` in the release has the checksums. The app tells you when a newer release is out (**Download update** in its window).
 
 ## Install and run
 
 ### Windows
 
-1. Copy `release/ForeverAI` anywhere and run `ForeverAI.exe`. It finds the game and installs the add-on.
+1. Extract the zip anywhere and run `ForeverAI-Windows\ForeverAI-Windows.exe`. It finds the game and installs the add-on.
 2. In the game type `/reload`, then click the **AI** button or type `/fai`.
-
-Keep `ForeverAI.exe` running while you play. OpenRouter key: in the game, **Settings → OpenRouter key**.
 
 ### Linux
 
-You need Python 3.12+ with Tk from your distribution: `sudo apt install python3-venv python3-tk` (Debian/Ubuntu), `sudo dnf install python3-tkinter` (Fedora) or `sudo pacman -S tk` (Arch). Then, in the repository:
+1. Extract the archive (`tar -xzf ForeverAI-<version>-Linux-x86_64.tar.gz`) and run `ForeverAI-Linux/ForeverAI-Linux` (from a file manager or a terminal).
+2. The app finds the game in your Wine prefixes (`$WINEPREFIX`, Lutris, `~/.wine`, `~/Games`, Heroic, Bottles, Steam) or on mounted disks, and installs the add-on. If it does not, choose the `World of Warcraft` folder or start it with `--game-dir`.
+3. In the game type `/reload`, then click the **AI** button or type `/fai`.
+
+**Desktop shortcut** adds ForeverAI to the application menu and to the desktop. Claude Code is found on `PATH`, in `~/.local/bin`, npm/nvm installs and the Claude desktop app.
+
+Keep ForeverAI running while you play.
+
+### Choosing the AI
+
+At start the app checks Claude Code first: when it is installed and signed in, it is used and no key is needed. Otherwise the window asks for an OpenRouter or a Google Gemini key (checked with the provider before it is saved). You can change it later with **AI key…** in the window, or in the game under **Settings → AI provider**. Keys are stored only on your computer (`.env` in the data folder).
+
+## Usage
+
+- **Alt+click** an item, spell or quest to add it to your question.
+- Changes in the game (add-on options, selling, repairing, abandoning a quest) happen only after you click **Accept**.
+- **Auction house:** ask e.g. "Find the best one-handed sword on the AH that is an upgrade for me, up to 100 gold". The AI searches the prices of Auctionator's last scan (open the auction house and scan in Auctionator first) and, with Pawn, checks which items are upgrades. **Search on the AH** under the answer shows the recommended items in Auctionator's Shopping tab while the auction house is open. ForeverAI only reads the other add-ons' data and never changes them; buying stays with you.
+- **Settings** tab: AI provider, model, thinking level, web search, which game data is sent.
+- Commands: `/fai`, `/fai <question>`, `/fai new`, `/fai debug`.
+
+## Run from source
+
+Python 3.12+ with Tk from your distribution (Linux: `sudo apt install python3-venv python3-tk`, `sudo dnf install python3-tkinter` or `sudo pacman -S tk`). Use the distribution's Python, not a standalone one (uv, python-build-standalone): their Tk has no font rendering, so the window shows bitmap fonts.
 
 ```bash
 python3 -m venv companion/.venv
@@ -27,37 +58,35 @@ companion/.venv/bin/python -m pip install -r companion/requirements.txt
 cd companion && .venv/bin/python -m foreverai
 ```
 
-1. The app finds the game in your Wine prefixes (`$WINEPREFIX`, Lutris, `~/.wine`, `~/Games`, Heroic, Bottles, Steam) or on mounted disks, and installs the add-on. If it does not, choose the `World of Warcraft` folder or pass `--game-dir`.
-2. In the game type `/reload`, then click the **AI** button or type `/fai`.
+Tests: `.venv/bin/python -m pytest -q` (Linux) or `.venv\Scripts\python.exe -m pytest -q` (Windows), in `companion`.
 
-**Desktop shortcut** adds ForeverAI to the application menu and to the desktop. Claude Code is found on `PATH`, in `~/.local/bin`, npm/nvm installs and the Claude desktop app. Use the distribution's Python, not a standalone one (uv, python-build-standalone): their Tk has no font rendering, so the window shows bitmap fonts.
+## Build
 
-## Usage
+The apps are not committed: GitHub Actions (`.github/workflows/release.yml`) builds the Windows and the Linux app from the same commit for every pull request (as workflow artifacts) and publishes both as a GitHub Release for a version tag. Local builds go to `release/` (ignored by git).
 
-- **Alt+click** an item, spell or quest to add it to your question.
-- Changes in the game (add-on options, selling, repairing, abandoning a quest) happen only after you click **Accept**.
-- **Settings** tab: AI provider, model, thinking level, web search, which game data is sent.
-- Commands: `/fai`, `/fai <question>`, `/fai new`, `/fai debug`.
-
-## Build from source
-
-Windows:
+Windows (writes `release\windows\ForeverAI-Windows\`, with `-Package` also the release zip):
 
 ```powershell
 python -m venv companion\.venv
 companion\.venv\Scripts\python.exe -m pip install -r companion\requirements.txt pyinstaller -c companion\constraints.txt
-.\build_exe.ps1
+.\build_exe.ps1 -Package
 ```
 
-Linux (builds `dist/linux/ForeverAI/ForeverAI`; it runs on distributions with the same or a newer glibc):
+Linux (writes `release/linux/ForeverAI-Linux/`, with `--package` also the release archive; it runs on distributions with the same or a newer glibc than the build machine):
 
 ```bash
 python3 -m venv companion/.venv
 companion/.venv/bin/python -m pip install -r companion/requirements.txt pyinstaller -c companion/constraints.txt
-./build_linux.sh
+./build_linux.sh --package
 ```
 
-Tests: `companion\.venv\Scripts\python.exe -m pytest -q` on Windows, `.venv/bin/python -m pytest -q` on Linux (in `companion`).
+The starter knowledge base `seed/kb.sqlite` is bundled into both apps (your own `companion/data/kb.sqlite` is used instead when it exists).
+
+### Publishing a release
+
+1. Set the new version in `addon/ForeverAI/ForeverAI.toc`, `ns.version` in `addon/ForeverAI/Core.lua`, `companion/foreverai/__init__.py` and `companion/pyproject.toml` (a test checks that they agree).
+2. Merge to `main`, then tag it: `git tag v0.5.0 && git push origin v0.5.0`.
+3. The workflow builds both apps, checks that the tag matches the version and publishes the release with both files and `SHA256SUMS.txt`.
 
 ## Uninstall
 

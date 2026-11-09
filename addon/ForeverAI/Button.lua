@@ -55,6 +55,8 @@ function B.Init()
     local s = ns.db.status or {}
     if s.provider == "claude_code" then
       GameTooltip:AddLine("Claude · " .. tostring(s.claude and s.claude.model or "?"):gsub("^claude%-", ""):gsub("%-", " "), 0.85, 0.47, 0.34)
+    elseif s.provider == "gemini" then
+      GameTooltip:AddLine("Gemini · " .. tostring(s.gemini and s.gemini.model or "?"), 0.54, 0.71, 0.97)
     elseif s.model then
       GameTooltip:AddLine("OpenRouter · " .. s.model, 0.8, 0.8, 0.8)
     end
