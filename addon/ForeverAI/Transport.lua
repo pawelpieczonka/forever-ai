@@ -290,8 +290,6 @@ local function shootNext()
   paintChunk(item.msgId, item.index, item.count, item.chunk, function()
     ns.Step("drawBlockTotal", debugprofilestop() - t0)
     if not current then return end
-    ns.Stage("data block on screen")
-    showBlock()
     -- measured in the game: one frame for the block to render, and it can be hidden the frame after the capture
     -- (it is then on screen for a single frame); the capture still holds it
     local function capture()
@@ -311,7 +309,21 @@ local function shootNext()
         end
       end)
     end
-    C_Timer.After(0, capture)
+    -- the game names screenshots to the second (WoWScrnShot_MMDDYY_HHMMSS): a frame taken in the same second as the
+    -- previous one would get its file name, so the block waits (hidden) for the next second
+    local sending, waitFrom = current, debugprofilestop()
+    local function show()
+      if current ~= sending then return end
+      if sending.lastShot and time() <= sending.lastShot then
+        C_Timer.After(0.02, show)
+        return
+      end
+      if sending.lastShot then ns.Step("waitNextSecond", debugprofilestop() - waitFrom) end
+      ns.Stage("data block on screen")
+      showBlock()
+      C_Timer.After(0, capture)
+    end
+    show()
   end)
 end
 
@@ -326,6 +338,7 @@ captureFrame:SetScript("OnEvent", function(_, event)
   end
   if not current or not current.waiting then return end
   current.waiting = false
+  current.lastShot = time()  -- the file is written: its name holds this second or an earlier one
   hideBlock()
   T.timings.shotMs = math.floor(debugprofilestop() - (current.shotStart or debugprofilestop()))
   ns.Step("screenshot", T.timings.shotMs)

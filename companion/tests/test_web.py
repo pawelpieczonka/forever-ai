@@ -107,6 +107,33 @@ def test_watcher_decodes_tga_and_png(tmp_path):
     assert w._try_decode(plain) is False and plain.exists()  # player's own screenshots are left alone
 
 
+def test_watcher_reads_two_frames_saved_under_the_same_name(tmp_path):
+    """The game names screenshots to the second: the second frame of a message can be saved under the name of the
+    first one, after the app decoded and deleted it. It must still be read (it was skipped, so the game got no
+    answer)."""
+    import time
+    data = os.urandom(15000)
+    images = encode_frames(data, msg_id=9)
+    assert len(images) == 2
+    frames = []
+    w = ScreenshotWatcher(tmp_path, frames.append, interval=0.01)
+    w.start()
+    try:
+        path = tmp_path / "WoWScrnShot_111026_002920.tga"
+        for i, frame_img in enumerate(images):
+            screen = Image.new("RGB", (400, 200), (40, 40, 40))
+            screen.paste(frame_img, (0, 0))
+            screen.save(tmp_path / "part.tmp", format="TGA")
+            os.replace(tmp_path / "part.tmp", path)
+            deadline = time.time() + 5
+            while len(frames) <= i and time.time() < deadline:
+                time.sleep(0.01)
+            assert len(frames) == i + 1 and not path.exists()
+    finally:
+        w.stop()
+    assert [f.index for f in frames] == [0, 1] and b"".join(f.payload for f in frames) == data
+
+
 def test_old_data_screenshots_are_removed_on_start(tmp_path):
     data = os.urandom(3000)
     frames = []

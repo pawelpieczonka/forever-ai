@@ -96,6 +96,7 @@ class ScreenshotWatcher(threading.Thread):
             path.unlink()
         except OSError as e:
             log.warning("cannot delete %s: %s", path, e)
+            self._seen[path.name] = time.time()  # the file stays: it must not be decoded again
         self.frames_decoded += 1
         self.on_frame(frame)
         return True
@@ -111,6 +112,7 @@ class ScreenshotWatcher(threading.Thread):
                     frame = decode_frame(im.crop((0, 0, min(im.width, 600), min(im.height, 300))).convert("RGB"))
                 if frame is not None:
                     p.unlink()
+                    self._seen.pop(p.name, None)  # the name is free again (see run)
                     removed += 1
             except (OSError, SyntaxError, ValueError):
                 continue
@@ -128,13 +130,15 @@ class ScreenshotWatcher(threading.Thread):
                 path = self.folder / name
                 if not path.exists():
                     pending.pop(name)
-                    self._seen[name] = time.time()
                     continue
                 res = self._try_decode(path)
                 if res is None and time.time() - first < 10:
                     continue
                 pending.pop(name)
-                self._seen[name] = time.time()
                 if res:
+                    # not remembered: screenshot names have one-second precision, so the next frame of a message can
+                    # arrive under the name of the frame that was just decoded and deleted
                     log.info("decoded frame from %s", name)
+                else:
+                    self._seen[name] = time.time()
             self._stop.wait(self.interval)

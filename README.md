@@ -38,7 +38,7 @@ Keep ForeverAI running while you play.
 
 ### Choosing the AI
 
-At start the app checks Claude Code first: when it is installed and signed in, it is used and no key is needed. Otherwise the window asks for an OpenRouter or a Google Gemini key (checked with the provider before it is saved). You can change it later with **AI key…** in the window, or in the game under **Settings → AI provider**. Keys are stored only on your computer (`.env` in the data folder).
+At start the app checks Claude Code first: when it is installed and signed in, it is used and no key is needed. Otherwise the window asks for an OpenRouter or a Google Gemini key (checked with the provider before it is saved). You can change it later with **AI provider…** in the window (also to switch back to a signed-in Claude Code), or in the game under **Settings → AI provider**. Keys are stored only on your computer, in the system's credential store: Windows Credential Manager, or the Secret Service on Linux (GNOME Keyring, KWallet, KeePassXC). Without one, a key is kept in `.env` in the data folder, readable only by your user, and moves to the credential store once one is available (keys saved by older versions move the same way). If Google cannot serve the chosen Gemini model (overloaded, out of quota or not answering), `gemini-flash-lite-latest` answers instead for the next 10 minutes.
 
 ## Usage
 

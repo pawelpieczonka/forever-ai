@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from . import claude_code, config, gemini
+from . import claude_code, config, gemini, keystore
 from .frames import Frame, FrameAssembler
 from .inbox import pool_size, write_inbox
 from .kb.store import KB
@@ -37,6 +37,7 @@ FIRST_FLUSH_S = 1.0
 FLUSH_EVERY_S = 1.5
 RETRY_TEXT_S = 2.0      # the addon reads the next inbox this soon while text is streaming
 RETRY_THINKING_S = 3.0  # ... and this soon while the model is still thinking / using tools
+GEMINI_DOWN_S = 600  # a Gemini model that could not answer is skipped (the fallback answers) this long
 MAX_TOOL_ROUNDS = 5
 EFFORT_NAMES = {"low": "low", "medium": "medium", "high": "high", "xhigh": "very high", "max": "max"}
 PROVIDER_NAMES = {"openrouter": "OpenRouter", "gemini": "Google Gemini", "claude_code": "Claude Code"}
@@ -167,6 +168,7 @@ class Service:
         self._balance: tuple[float, float] | None = None  # (value, fetched_at)
         self._models: tuple[list[dict], float] | None = None
         self._gemini_models: tuple[list[dict], float] | None = None
+        self._gemini_down: dict[str, float] = {}  # model -> until when the fallback answers instead
         self._cancel: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
         self.on_event: Callable[[str], None] = lambda s: None
@@ -317,6 +319,7 @@ class Service:
                              "text": f"{model} is not a Gemini chat model available to this key."})
                 return
             self.store.update(gemini_model=model)
+            self._gemini_down.pop(model, None)  # chosen again: it gets another chance
             writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"), "text": f"Gemini model: {model}",
                          "status": self.status()})
             return
@@ -341,15 +344,17 @@ class Service:
             factory(key).key_info()
         except Exception as e:  # invalid key or network
             return False, f"{name} rejected the key ({str(e)[:80]}). Nothing changed."
-        config.write_key(provider, key)
+        where = f" in {keystore.NAME}" if config.write_key(provider, key) else ""
+        if not where and config.secure_keys():
+            activity.warning("No system keyring available: the key is in %s, readable only by you", config.env_path())
         if provider == "openrouter":
             self._balance = self._models = None
         else:
             self._gemini_models = None
         if use:
             self.store.update(provider=provider)
-        activity.info("%s key saved%s", name, " · AI provider: " + name if use else "")
-        return True, "Key saved." + (f" Using {name}." if use else "")
+        activity.info("%s key saved%s%s", name, where, " · AI provider: " + name if use else "")
+        return True, f"Key saved{where}." + (f" Using {name}." if use else "")
 
     def _set_key(self, msg: dict, writer: InboxWriter, provider: str) -> None:
         # a key entered while that provider has no key yet also switches to it
@@ -531,11 +536,15 @@ class Service:
         key = config.read_key(provider)
         if not key:
             writer.send({"kind": "error", "final": True, "msgId": msg_id, "status": self.status(),
-                         "text": f"No {PROVIDER_NAMES[provider]} key. Enter it in the ForeverAI window (AI key…) or "
+                         "text": f"No {PROVIDER_NAMES[provider]} key. Enter it in the ForeverAI window (AI provider…) or "
                                  f"in Settings → {PROVIDER_NAMES[provider]} key."})
             return
         client = (self.gemini_factory if is_gemini else self.client_factory)(key)
         model = s.gemini_model if is_gemini else s.model
+        fallback = gemini.FALLBACK_MODEL if is_gemini else s.fallback_model
+        if is_gemini and self._gemini_down.get(model, 0) > time.time():
+            log.info("%s did not answer recently: %s answers", model, fallback)
+            model = fallback
         if is_gemini:
             def search(query: str) -> tuple[str, list[dict]]:
                 return client.web_search(model, query)
@@ -556,7 +565,7 @@ class Service:
         cost = 0.0
         started = time.monotonic()
         last_sent = [0.0, "", ""]  # time, text, phase
-        tried_fallback = is_gemini  # the fallback model is an OpenRouter one
+        tried_fallback = False
 
         def flush(force: bool = False) -> None:
             now = time.monotonic()
@@ -584,6 +593,7 @@ class Service:
             calls = None
             round_text = ""
             error = None
+            unavailable = False  # Gemini: this model cannot answer now, another one may
             for kind, val in client.chat_stream(model, messages, TOOLS, s.search_mode, s.max_answer_tokens):
                 if cancel.is_set():
                     log.info("answer %s cancelled", msg_id)
@@ -603,14 +613,21 @@ class Service:
                     cost += float(val.get("cost") or 0)
                 elif kind == "tool_calls":
                     calls = val
-                elif kind == "error":
-                    error = val
+                elif kind in ("error", "unavailable"):
+                    error, unavailable = val, kind == "unavailable"
             if error:
-                if not text and not tried_fallback and s.fallback_model and s.fallback_model != model and (
-                        "404" in error or "Model" in error or "400" in error):
+                retry = unavailable if is_gemini else ("404" in error or "Model" in error or "400" in error)
+                if not text and not tried_fallback and fallback and fallback != model and retry:
                     tried_fallback = True
-                    model = s.fallback_model
-                    phase = f"Fallback model {model}…"
+                    if is_gemini:
+                        self._gemini_down[model] = time.time() + GEMINI_DOWN_S
+                        activity.warning("%s could not answer, %s takes over for %d minutes: %s", model, fallback,
+                                         GEMINI_DOWN_S // 60, error)
+                        gemini.drop_signatures(messages)
+                        set_phase(f"{model} is unavailable, trying {fallback}…")
+                    else:
+                        phase = f"Fallback model {fallback}…"
+                    model = fallback
                     rounds -= 1
                     continue
                 writer.send({"kind": "error", "final": True, "msgId": msg_id, "text": error, "status": self.status()})

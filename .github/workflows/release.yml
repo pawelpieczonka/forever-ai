@@ -65,6 +65,11 @@ jobs:
           [ "$want" = "$got" ] || { echo "add-on version $got, source $want"; exit 1; }
           listing="$(tar -tzvf release/ForeverAI-*-Linux-x86_64.tar.gz ForeverAI-Linux/ForeverAI-Linux)"
           grep -q '^-rwx' <<< "$listing"
+          # API keys: the credential store that foreverai/keystore.py imports is in the bundle
+          modules="$(companion/.venv/bin/pyi-archive_viewer --recursive --brief "$app/ForeverAI-Linux")"
+          for m in keyring.backends.SecretService secretstorage jeepney cryptography; do
+            grep -qx " $m" <<< "$modules" || { echo "not bundled: $m"; exit 1; }
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: ForeverAI-Linux
@@ -83,6 +88,9 @@ jobs:
         run: |
           python -m venv companion\.venv
           companion\.venv\Scripts\python.exe -m pip install -r companion\requirements.txt pyinstaller -c companion\constraints.txt
+      - name: API keys go to Windows Credential Manager
+        working-directory: companion
+        run: .venv\Scripts\python.exe -c "from foreverai import keystore as k; assert k.available(), 'no credential store'; assert k.put('FOREVERAI_CI_CHECK', 'ok'); k.reset(); assert k.get('FOREVERAI_CI_CHECK') == 'ok'"
       - name: Build
         run: .\build_exe.ps1 -Package
       - name: Smoke test
@@ -93,6 +101,11 @@ jobs:
           $want = Select-String -Path addon\ForeverAI\ForeverAI.toc -Pattern '^## Version:' | ForEach-Object Line
           $got = Select-String -Path "$app\_internal\addon\ForeverAI\ForeverAI.toc" -Pattern '^## Version:' | ForEach-Object Line
           if ($want -ne $got) { throw "add-on version $got, source $want" }
+          # API keys: the credential store that foreverai/keystore.py imports is in the bundle
+          $modules = & companion\.venv\Scripts\pyi-archive_viewer.exe --recursive --brief "$app\ForeverAI-Windows.exe"
+          if (-not ($modules -contains " keyring.backends.Windows")) { throw "not bundled: keyring.backends.Windows" }
+          if (-not ($modules -contains " win32ctypes.pywin32.win32cred")) { throw "not bundled: win32ctypes.pywin32.win32cred" }
+          if (-not ($modules -match '^ win32ctypes\.core\.(cffi|ctypes)\._authentication$')) { throw "not bundled: win32ctypes backend" }
       - uses: actions/upload-artifact@v4
         with:
           name: ForeverAI-Windows

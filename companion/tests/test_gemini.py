@@ -4,7 +4,7 @@ import time
 
 import httpx
 
-from foreverai import config
+from foreverai import config, gemini
 from foreverai.gemini import SKIP_SIGNATURE, Gemini
 from foreverai.openrouter import ToolCall
 
@@ -82,6 +82,38 @@ def test_errors_models_and_web_search():
     assert text.startswith("Patch 1.1 is out.") and sources == [{"title": "x.example", "url": "https://x.example/a"}]
 
 
+def test_errors_another_model_may_answer():
+    def handler(request: httpx.Request):
+        model = json.loads(request.content)["model"]
+        if model == "busy":
+            return httpx.Response(503, json=[{"error": {"code": 503, "message": "The model is overloaded."}}])
+        if model == "silent":
+            raise httpx.ReadTimeout("The read operation timed out", request=request)
+        if model == "streamed-quota":
+            return httpx.Response(200, content=_sse({"error": {"code": 429, "message": "Quota exceeded"}}))
+        return httpx.Response(400, json=[{"error": {"code": 400, "message": "Invalid argument."}}])
+
+    c = _client(handler)
+
+    def first(model):
+        return next(iter(c.chat_stream(model, [], search_mode="never")))
+    assert first("busy") == ("unavailable", "Gemini is overloaded or unavailable (503). Try again in a moment.")
+    assert first("silent") == ("unavailable", "silent did not answer within 45 s.")
+    assert first("streamed-quota")[0] == "unavailable"
+    assert first("bad-request")[0] == "error"  # the same request would fail on any model
+
+
+def test_drop_signatures_before_another_model():
+    messages = [{"role": "user", "content": "hi"},
+                {"role": "assistant", "content": None, "tool_calls": [
+                    {"id": "a", "function": {}, "extra_content": {"google": {"thought_signature": "SIG"}}},
+                    {"id": "b", "function": {}}]}]
+    gemini.drop_signatures(messages)
+    calls = messages[1]["tool_calls"]
+    assert calls[0]["extra_content"] == {"google": {"thought_signature": SKIP_SIGNATURE}}
+    assert "extra_content" not in calls[1]
+
+
 class FakeGemini:
     seen: list = []
 
@@ -152,6 +184,54 @@ def test_gemini_key_provider_and_answer(env, monkeypatch):  # noqa: F811
     assert _read_inbox(addons, 12)["status"]["provider"] == "openrouter"
 
 
+class BusyGemini(FakeGemini):
+    """The chosen model is overloaded; the fallback answers."""
+    models_used: list = []
+
+    def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+        BusyGemini.models_used.append(model)
+        if model != gemini.FALLBACK_MODEL:
+            yield "unavailable", f"{model} did not answer within 45 s."
+            return
+        yield "text", "Hello from the fallback."
+        yield "done", "stop"
+
+
+def _final_answer(addons, n):
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        d = _read_inbox(addons, n)
+        if d.get("final"):
+            return d
+        time.sleep(0.05)
+    return None
+
+
+def test_gemini_falls_back_when_the_model_does_not_answer(env, monkeypatch):  # noqa: F811
+    svc, addons, _ = env
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSyTEST0000000000000000000xyz")
+    svc.gemini_factory = BusyGemini
+    svc.store.update(provider="gemini", gemini_model="gemini-flash-latest")
+    BusyGemini.models_used = []
+    _send(svc, {"type": "question", "msgId": 7, "session": "S", "nextInbox": 1, "conv": "g", "text": "hi",
+                "snapshot": {}})
+    final = _final_answer(addons, 1)
+    assert final and final["kind"] == "answer" and final["model"] == gemini.FALLBACK_MODEL
+    assert "Hello from the fallback." in final["text"]
+    assert BusyGemini.models_used == ["gemini-flash-latest", gemini.FALLBACK_MODEL]
+    # the next question does not wait for the model that just failed
+    _send(svc, {"type": "question", "msgId": 8, "session": "S", "nextInbox": 5, "conv": "g", "text": "again",
+                "snapshot": {}})
+    assert _final_answer(addons, 5)["model"] == gemini.FALLBACK_MODEL
+    assert BusyGemini.models_used[2:] == [gemini.FALLBACK_MODEL]
+    # choosing the model again gives it another chance
+    svc.handle({"type": "set_model", "value": "gemini-flash-latest", "session": "S", "nextInbox": 9})
+    _send(svc, {"type": "question", "msgId": 9, "session": "S", "nextInbox": 10, "conv": "g", "text": "and now",
+                "snapshot": {}})
+    assert _final_answer(addons, 10)["model"] == gemini.FALLBACK_MODEL
+    assert BusyGemini.models_used[3:] == ["gemini-flash-latest", gemini.FALLBACK_MODEL]
+
+
 def test_choose_provider(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "env_path", lambda: tmp_path / ".env")
     for var in ("OPENROUTER_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
@@ -218,8 +298,65 @@ def test_key_dialog_paste_shows_and_claude_sign_in(monkeypatch):
         d.sign_in_btn.invoke()
         assert opened == [["/opt/claude", "auth", "login"]] and "Check Claude Code again" in d.msg.cget("text")
         claude_code._detect_cache = ({"path": "/opt/claude", "loggedIn": True, "version": "2"}, time.time())
-        d._show_sign_in()
+        comp.store.settings.provider = "claude_code"
+        d._show_claude_button()
         root.update()
-        assert d.sign_in_btn.winfo_manager() == ""
+        assert d.sign_in_btn.winfo_manager() == "" and d.use_claude_btn.winfo_manager() == ""
     finally:
         root.destroy()
+
+
+def test_key_dialog_switches_back_to_claude_code(monkeypatch):
+    """After a Gemini key was saved, a signed-in Claude Code could not be chosen again in the window: "Check Claude
+    Code again" kept the working Gemini. "Use Claude Code" switches back."""
+    import tkinter as tk
+    import types
+
+    from foreverai import claude_code, window
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        import pytest
+        pytest.skip("no display")
+    root.withdraw()
+    monkeypatch.setattr(claude_code, "_detect_cache", ({"path": "/opt/claude", "loggedIn": True, "version": "2"},
+                                                       time.time()))
+    settings = config.Settings(game_dir="x", provider="gemini")
+    calls = []
+
+    def check_providers(prefer_claude=False):
+        calls.append(prefer_claude)
+        settings.provider = "claude_code" if prefer_claude else settings.provider
+        return settings.provider
+    comp = types.SimpleNamespace(store=types.SimpleNamespace(settings=settings), check_providers=check_providers)
+    try:
+        d = window.KeyDialog(root, comp)
+        root.update()
+        assert d.use_claude_btn.winfo_manager() == "pack" and d.sign_in_btn.winfo_manager() == ""
+        assert "Google Gemini" in d.claude_line.cget("text")
+        d.use_claude_btn.invoke()
+        deadline = time.time() + 5
+        while "Using Claude Code" not in d.msg.cget("text") and time.time() < deadline:
+            root.update()
+            time.sleep(0.02)
+        assert calls == [True] and settings.provider == "claude_code"
+        assert d.use_claude_btn.winfo_manager() == "" and "in use" in d.claude_line.cget("text")
+    finally:
+        root.destroy()
+
+
+def test_check_providers_prefers_claude_code_on_request(tmp_path, monkeypatch):
+    """At start a working saved provider stays; the player's request switches to a signed-in Claude Code."""
+    import types
+
+    from foreverai import app, claude_code
+    monkeypatch.setattr(config, "env_path", lambda: tmp_path / ".env")
+    config.write_key("gemini", "AIza-saved")
+    monkeypatch.setattr(claude_code, "detect", lambda force=False: {"loggedIn": True, "version": "2"})
+    store = config.SettingsStore(tmp_path / "settings.json")
+    store.update(provider="gemini", game_dir="x")
+    comp = types.SimpleNamespace(store=store, needs_key=True, claude_checked=False,
+                                 service=types.SimpleNamespace(_prewarm_safe=lambda: None))
+    assert app.Companion.check_providers(comp) == "gemini" and store.settings.provider == "gemini"
+    assert app.Companion.check_providers(comp, prefer_claude=True) == "claude_code"
+    assert store.settings.provider == "claude_code" and not comp.needs_key
