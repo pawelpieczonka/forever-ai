@@ -1,0 +1,482 @@
+"""Function tools offered to the model and their execution."""
+
+from __future__ import annotations
+
+import itertools
+import json
+import re
+from typing import Any
+
+from .kb.store import KB
+
+ALLOWED_OPS = ("set_option", "set_setting", "toggle_addon", "slash_command")
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_knowledge_base",
+            "description": "Search the local WoW Forever knowledge base (the Forever pages of warcraft.wiki.gg, official "
+                           "Blizzard news, hotfixes and developer notes). Use short English keywords "
+                           "(item, quest, NPC, zone, class or system names). Returns the best matching pages in full, "
+                           "with URL and date. Content Forever did not change is usually not in it.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_addon_change",
+            "description": "Propose a change to another installed addon. Nothing is applied until the player clicks "
+                           "Accept in the game (with Undo). FIRST find the setting with addon_options. "
+                           "op=set_option (preferred): set an option found by addon_options — path exactly as returned, "
+                           "value of the option's type (toggle: true/false, range: number in min..max, select: one of "
+                           "the listed value KEYS). op=set_setting: raw saved variable from addon_options.savedVariables "
+                           "(only for addons without an options tree). op=toggle_addon: enable/disable an addon "
+                           "(value true/false). op=slash_command: run an addon command that performs an action.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "addon": {"type": "string", "description": "Addon folder name, e.g. Questie"},
+                    "op": {"type": "string", "enum": list(ALLOWED_OPS)},
+                    "path": {"type": "string", "description": "For set_option/set_setting: path exactly as returned "
+                                                              "by addon_options"},
+                    "value": {"description": "New value (boolean, number or string)"},
+                    "command": {"type": "string", "description": "For slash_command"},
+                    "description": {"type": "string", "description": "In the player's language: what the change does and why"},
+                    "needs_reload": {"type": "boolean"},
+                },
+                "required": ["addon", "op", "description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_memory",
+            "description": "Save a LASTING, IMPORTANT fact about the player for future sessions: chosen build/spec (briefly: "
+                           "class/spec, key talents, stat priority, source URL), long-term goal, stable preference "
+                           "(e.g. answer style), main professions. Do NOT save: one-off questions, momentary state "
+                           "(level, gold, location, current quest — that is in the game data), things already saved. "
+                           "Most questions need no save. In the player's language, max ~300 characters.",
+            "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_memory",
+            "description": "Delete an entry from the player's memory by id (ids are listed under \"Memory about the player\"). "
+                           "Use when an entry is outdated or contradicts a new one (the player changed build/goal, reached "
+                           "a goal, asks to remove it), or is trivia. To update an entry: delete the old one and save a new one.",
+            "parameters": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_url",
+            "description": "Fetch a web page the player gave (e.g. a build, guide, talent calculator, news). Returns the "
+                           "page text (no scripts). Use for links in the player's message or from search results.",
+            "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+        },
+    },
+]
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "mark_on_map",
+        "description": "Mark a point on the player's map (waypoint with arrow). Use when the question is about a place: "
+                       "quest turn-in NPC, mobs, herbs, dungeon entrance, trainer. Coordinates 0-100 as in the game "
+                       "(from the quests/zoneNPCs/nearbyMobs data or the wiki). zone = English zone name (e.g. "
+                       "'Teldrassil'); omit for the player's current zone. Can be called several times (up to 8 points).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short name of the point, e.g. 'Conservator Ilthalaine'"},
+                "x": {"type": "number"}, "y": {"type": "number"},
+                "zone": {"type": "string"},
+            },
+            "required": ["title", "x", "y"],
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "addon_options",
+        "description": "Search the settings of an installed add-on IN THE GAME (live): its real options tree (the same as "
+                       "the add-on's options window) — name, description, type, CURRENT value and allowed values; for "
+                       "add-ons without an options tree: saved variables. Also returns the add-on's slash commands. "
+                       "ALWAYS use it when the player asks how to set/enable/disable something in an add-on or how a "
+                       "feature works — then propose a concrete change (propose_addon_change, op=set_option) or explain "
+                       "from the options. query = a few ENGLISH keywords, e.g. 'tomtom arrow waypoint' or 'minimap icon'.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "addon": {"type": "string", "description": "Add-on folder name from the addons list, e.g. Questie"},
+                "query": {"type": "string", "description": "English keywords; empty = overview of the options"},
+            },
+            "required": ["addon"],
+        },
+    },
+})
+
+
+def format_addon_options(addon: str, res: dict | None) -> str:
+    """Game result of addon_options -> text for the model."""
+    if not res:
+        return "The game did not respond in time; the add-on options could not be read."
+    if res.get("error"):
+        return f"Reading the options of {addon} failed: {res['error']}"
+    lines = []
+    opts = res.get("options") or []
+    if opts:
+        lines.append(f"Options of {addon} (matching: {res.get('matched', len(opts))}, shown: {len(opts)}). "
+                     "To change one: propose_addon_change op=set_option, path exactly as below.")
+        for o in opts:
+            bits = [f"- path={o.get('path')}", f"[{o.get('type')}]", f"\"{o.get('name')}\""]
+            if "value" in o:
+                bits.append(f"current={json.dumps(o.get('value'), ensure_ascii=False)}")
+            if o.get("values"):
+                vals = ", ".join(f"{k}={v}" for k, v in o["values"].items())
+                bits.append(f"allowed: {vals}")
+            if o.get("min") is not None or o.get("max") is not None:
+                bits.append(f"range {o.get('min')}..{o.get('max')}")
+            if o.get("disabled"):
+                bits.append("(currently disabled)")
+            if o.get("desc"):
+                bits.append(f"— {o['desc']}")
+            lines.append(" ".join(bits))
+    elif res.get("apps"):
+        lines.append(f"{addon} has an options tree ({', '.join(res['apps'])}), but nothing matches the query; "
+                     "try other English keywords or an empty query.")
+    raw = res.get("savedVariables") or []
+    if raw:
+        lines.append(res.get("note") or "Saved variables (op=set_setting):")
+        for e in raw:
+            lines.append(f"- path={e.get('path')} current={json.dumps(e.get('value'), ensure_ascii=False)}")
+    if not opts and not raw and not res.get("apps"):
+        lines.append(f"No options found for {addon} (no options tree and no matching saved variables).")
+    if res.get("slashCommands"):
+        lines.append("Add-on commands: " + ", ".join(res["slashCommands"][:12]))
+    return chr(10).join(lines)
+
+
+def remember_options(known: dict, addon: str, res: dict | None) -> None:
+    """Keep what the game reported, so a following set_option/set_setting proposal can be validated."""
+    for o in (res or {}).get("options") or []:
+        if o.get("path"):
+            known[(addon.lower(), str(o["path"]))] = o
+    for e in (res or {}).get("savedVariables") or []:
+        if e.get("path"):
+            known[(addon.lower(), str(e["path"]))] = {"raw": True, "value": e.get("value")}
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "propose_quest_abandon",
+        "description": "Propose abandoning a quest from the player's quest log (e.g. FAILED, too hard, not needed, full "
+                       "quest log). Nothing happens until the player clicks Accept in the game; abandoning cannot be "
+                       "undone (the quest can be picked up again from the NPC). quest_id exactly from the quests section.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "quest_id": {"type": "integer"},
+                "reason": {"type": "string", "description": "In the player's language: why abandon it"},
+            },
+            "required": ["quest_id", "reason"],
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "propose_vendor_action",
+        "description": "While the vendor window is OPEN (windows.merchant): op=sell proposes selling items from the bags "
+                       "(items = names or ids from the bags section; whole stacks are sold), op=repair proposes repairing "
+                       "all equipment. The player confirms with a click; a sale can be undone (buyback). Do not propose "
+                       "selling quest items, materials useful for the player's professions or gear worth equipping.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "op": {"type": "string", "enum": ["sell", "repair"]},
+                "items": {"type": "array", "items": {"type": "string"},
+                          "description": "For sell: item names (e.g. 'Ruined Pelt') or ids from bags"},
+                "reason": {"type": "string", "description": "In the player's language, briefly: why"},
+            },
+            "required": ["op", "reason"],
+        },
+    },
+})
+
+
+def validate_vendor(args: dict, snapshot: dict) -> tuple[dict | None, str]:
+    merchant = ((snapshot.get("windows") or {}).get("merchant")) if isinstance(snapshot.get("windows"), dict) else None
+    if not merchant:
+        return None, "Rejected: the vendor window is not open (no windows.merchant). Tell the player to talk to a vendor."
+    op = args.get("op")
+    reason = str(args.get("reason") or "").strip()[:300]
+    if op == "repair":
+        if not merchant.get("canRepair"):
+            return None, "Rejected: this vendor cannot repair (canRepair = false). Point to a [repair] vendor from zoneNPCs."
+        if not merchant.get("repairCopper"):
+            return None, "Rejected: nothing to repair."
+        action = {"id": next(_ids), "op": "vendor_repair", "addon": "Vendor", "cost": merchant.get("repairCost"),
+                  "description": reason}
+        return action, f"Repair for {merchant.get('repairCost')} proposed; waiting for the player to accept."
+    if op != "sell":
+        return None, "Rejected: op must be sell or repair."
+    bags = ((snapshot.get("bags") or {}).get("items")) or []
+    by_id = {int(b["id"]): b for b in bags if isinstance(b, dict) and b.get("id")}
+    by_name = {str(b.get("item", "")).strip("[]").lower(): b for b in bags if isinstance(b, dict)}
+    picked, problems, total = [], [], 0
+    for want in args.get("items") or []:
+        b = by_id.get(int(want)) if isinstance(want, int) or str(want).isdigit() else by_name.get(str(want).strip("[] ").lower())
+        if not b:
+            problems.append(f"{want}: not in the bags")
+            continue
+        if not b.get("sellCopper"):
+            problems.append(f"{b.get('item')}: vendors do not buy it")
+            continue
+        if any(p["id"] == b.get("id") for p in picked):
+            continue
+        value = int(b["sellCopper"]) * int(b.get("count") or 1)
+        total += value
+        picked.append({"id": b.get("id"), "name": b.get("item"), "count": b.get("count"), "price": money(value)})
+    if not picked:
+        return None, "Rejected: nothing to sell. " + "; ".join(problems)
+    action = {"id": next(_ids), "op": "vendor_sell", "addon": "Vendor", "items": picked, "total": money(total),
+              "description": reason}
+    note = (" Skipped: " + "; ".join(problems)) if problems else ""
+    return action, f"Sale of {len(picked)} item types for {money(total)} proposed; waiting for the player to accept.{note}"
+
+
+def validate_abandon(args: dict, snapshot: dict) -> tuple[dict | None, str]:
+    try:
+        qid = int(args.get("quest_id"))
+    except (TypeError, ValueError):
+        return None, "Rejected: quest_id must be a number from the quests section."
+    quests = {int(q["id"]): q for q in (snapshot.get("quests") or []) if isinstance(q, dict) and q.get("id")}
+    q = quests.get(qid)
+    if not q:
+        return None, f"Rejected: quest {qid} is not in the player's quest log (quests section)."
+    reason = str(args.get("reason") or "").strip()
+    if not reason:
+        return None, "Rejected: give a reason."
+    action = {"id": next(_ids), "op": "abandon_quest", "addon": "Quest log", "questId": qid,
+              "title": q.get("title"), "description": reason[:400]}
+    return action, f"Abandoning [{q.get('title')}] proposed; waiting for the player to accept in the game."
+
+
+def money(copper) -> str:
+    try:
+        c = int(round(float(copper)))
+    except (TypeError, ValueError):
+        return "?"
+    g, s, c = c // 10000, c // 100 % 100, c % 100
+    parts = ([f"{g}g"] if g else []) + ([f"{s}s"] if s or g else []) + [f"{c}c"]
+    return " ".join(parts)
+
+
+def validate_mark(args: dict) -> tuple[dict | None, str]:
+    try:
+        x, y = float(args.get("x")), float(args.get("y"))
+    except (TypeError, ValueError):
+        return None, "Rejected: x and y must be numbers 0-100."
+    if 0 < x <= 1 and 0 < y <= 1:  # model gave 0-1 fractions
+        x, y = x * 100, y * 100
+    if not (0 <= x <= 100 and 0 <= y <= 100):
+        return None, "Rejected: coordinates outside 0-100."
+    title = str(args.get("title") or "Point").strip()[:60]
+    mark = {"title": title, "x": round(x, 1), "y": round(y, 1), "zone": str(args.get("zone") or "").strip()[:60]}
+    return mark, f"Marked on the map: {title} ({mark['x']}, {mark['y']})."
+
+
+def run_fetch(url: str) -> str:
+    from .web import fetch
+    return fetch(url)
+
+_ids = itertools.count(1)
+
+
+def _flatten(prefix: str, value: Any, out: dict) -> None:
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _flatten(f"{prefix}.{k}" if prefix else str(k), v, out)
+    else:
+        out[prefix] = value
+
+
+def _check_option(opt: dict, new: Any) -> tuple[Any, str | None]:
+    """Check a new value against an option described by the game. Returns (value, error)."""
+    kind = opt.get("type")
+    if opt.get("disabled"):
+        return None, "this option is currently disabled in the add-on"
+    if kind == "execute":
+        return None, "this is an action button, not a setting"
+    if kind == "toggle":
+        if isinstance(new, str) and new.lower() in ("true", "false"):
+            new = new.lower() == "true"
+        if not isinstance(new, bool):
+            return None, "the value must be true/false"
+    elif kind == "range":
+        if isinstance(new, str):
+            try:
+                new = float(new)
+            except ValueError:
+                return None, "the value must be a number"
+        if isinstance(new, bool) or not isinstance(new, (int, float)):
+            return None, "the value must be a number"
+        lo, hi = opt.get("min"), opt.get("max")
+        if (lo is not None and new < lo) or (hi is not None and new > hi):
+            return None, f"the value is outside {lo}..{hi}"
+        if float(new).is_integer():
+            new = int(new)
+    elif kind == "select":
+        values = opt.get("values") or {}
+        if values and str(new) not in values:
+            by_label = {str(v).lower(): k for k, v in values.items()}
+            if str(new).lower() in by_label:
+                new = by_label[str(new).lower()]
+            else:
+                return None, f"allowed values (keys): {list(values)[:20]}"
+        if isinstance(new, str) and new.lstrip("-").isdigit() and isinstance(opt.get("value"), (int, float)):
+            new = int(new)
+    elif kind == "multiselect":
+        values = opt.get("values") or {}
+        if isinstance(new, str):  # "Bags=true, Repair=false"
+            pairs = [p.split("=", 1) for p in new.replace(";", ",").split(",") if "=" in p]
+            new = {k.strip(): v.strip().lower() in ("true", "1", "on", "tak") for k, v in pairs}
+        if not isinstance(new, dict) or not new:
+            return None, "the value must be a set of {key: true/false}"
+        fixed = {}
+        for k, v in new.items():
+            key = str(k)
+            if values and key not in values:
+                by_label = {str(lbl).lower(): kk for kk, lbl in values.items()}
+                key = by_label.get(key.lower(), key)
+                if key not in values:
+                    return None, f"unknown choice {k!r}; allowed keys: {list(values)[:20]}"
+            if isinstance(v, str):
+                v = v.lower() in ("true", "1", "on", "tak")
+            fixed[key] = bool(v)
+        new = fixed
+    elif kind in ("input", "keybinding"):
+        if not isinstance(new, str):
+            return None, "the value must be text"
+    return new, None
+
+
+def validate_proposal(args: dict, snapshot: dict, known: dict | None = None) -> tuple[dict | None, str]:
+    """Return (action, message_for_model). ``known`` maps (addon lower, path) -> option/variable the game reported
+    through addon_options in this answer."""
+    known = known or {}
+    addon = str(args.get("addon") or "").strip()
+    op = args.get("op")
+    desc = str(args.get("description") or "").strip()
+    if op not in ALLOWED_OPS:
+        return None, f"Rejected: unknown operation {op!r}."
+    installed = {str(a.get("name")) for a in (snapshot.get("addons") or []) if isinstance(a, dict)}
+    if installed and addon not in installed:
+        return None, f"Rejected: add-on {addon!r} is not installed."
+    if not desc:
+        return None, "Rejected: the change has no description."
+    action = {"id": next(_ids), "addon": addon, "op": op, "description": desc[:600],
+              "needsReload": bool(args.get("needs_reload"))}
+    path = str(args.get("path") or "").strip()
+    if op == "set_option":
+        opt = known.get((addon.lower(), path))
+        if not opt or opt.get("raw"):
+            near = [p for (a, p), o in known.items() if a == addon.lower() and not o.get("raw")][:10]
+            return None, (f"Rejected: unknown option {path!r} of {addon}. Call addon_options (addon, keywords) first "
+                          f"and use the path exactly as returned. Known: {near}")
+        value, err = _check_option(opt, args.get("value"))
+        if err:
+            return None, f"Rejected: {err}."
+        values = opt.get("values") or {}
+        if opt.get("type") == "multiselect":
+            def onoff(state: dict) -> str:
+                return ", ".join(f"{values.get(k, k)}: {'on' if v else 'off'}" for k, v in state.items())
+            old_state = opt.get("value") if isinstance(opt.get("value"), dict) else {}
+            old_label = onoff({k: old_state.get(k, False) for k in value})
+            new_label = onoff(value)
+        else:
+            old_label = values.get(str(opt.get("value"))) if values else None
+            new_label = values.get(str(value)) if values else None
+        action.update({"app": opt.get("app"), "path": path, "old": opt.get("value"), "value": value,
+                       "optionName": opt.get("name") or path, "oldLabel": old_label, "valueLabel": new_label})
+        return action, f"Proposal #{action['id']} is waiting for the player to accept in the game."
+    if op == "set_setting":
+        flat: dict = {p: o.get("value") for (a, p), o in known.items() if a == addon.lower() and o.get("raw")}
+        settings = snapshot.get("addonSettings") or {}
+        if isinstance(settings, dict) and settings.get("addon") == addon:
+            _flatten("", settings.get("vars") or {}, flat)
+        if not flat:
+            return None, (f"Rejected: unknown saved variables of {addon}. Call addon_options first; if the add-on "
+                          f"has an options tree, use op=set_option.")
+        if path not in flat:
+            near = [p for p in flat if path.split(".")[-1].lower() in p.lower()][:8]
+            return None, f"Rejected: path {path!r} does not exist. Similar: {near}"
+        old = flat[path]
+        new = args.get("value")
+        if isinstance(old, bool):
+            if not isinstance(new, bool):
+                return None, "Rejected: the value must be true/false."
+        elif isinstance(old, (int, float)):
+            if isinstance(new, bool) or not isinstance(new, (int, float)):
+                return None, "Rejected: the value must be a number."
+        elif isinstance(old, str):
+            if not isinstance(new, str):
+                return None, "Rejected: the value must be text."
+        else:
+            return None, "Rejected: only simple values (bool/number/text) can be changed."
+        action.update({"path": path, "old": old, "value": new})
+    elif op == "toggle_addon":
+        if not isinstance(args.get("value"), bool):
+            return None, "Rejected: toggle_addon needs value true/false."
+        action.update({"value": args["value"], "needsReload": True})
+    elif op == "slash_command":
+        cmd = str(args.get("command") or "").strip()
+        if not cmd.startswith("/") or "\n" in cmd or len(cmd) > 200:
+            return None, "Rejected: invalid command."
+        if cmd.split()[0].lower() in ("/run", "/script", "/dump", "/console", "/reload", "/logout", "/quit", "/camp"):
+            return None, "Rejected: this command is blocked."
+        action.update({"command": cmd})
+    return action, f"Proposal #{action['id']} is waiting for the player to accept in the game."
+
+
+KB_PAGES = 3            # best matching pages returned whole
+KB_PAGE_CHARS = 15000   # safety cap per page (the longest Forever pages are ~12k characters)
+
+
+def _has_content(text: str) -> bool:
+    """Sections like "Patch changes: -" or a bare "[Elinks-item: 1]" say nothing."""
+    return len(re.sub(r"\[Elinks[^\]]*\]|[\s\-|]", "", text or "")) >= 20
+
+
+def run_kb_search(kb: KB | None, query: str) -> tuple[str, list[dict]]:
+    """The best matching pages, each in full (all sections), so the model never works from fragments."""
+    if kb is None:
+        return "The knowledge base is not available.", []
+    pages = []
+    for h in kb.search(query, k=30):
+        if _has_content(h.text) and all(p.url != h.url for p in pages):
+            pages.append(h)
+        if len(pages) >= KB_PAGES:
+            break
+    if not pages:
+        return "No results in the local knowledge base.", []
+    parts = []
+    for h in pages:
+        full = kb.page_text(h.url) or h.text
+        if len(full) > KB_PAGE_CHARS:
+            full = full[:KB_PAGE_CHARS] + "\n(page continues; search with more specific words for the rest)"
+        parts.append(f"[{h.title} | {h.url} | updated {h.ts[:10]}]\n{full}")
+    return "\n\n".join(parts), [{"title": h.title, "url": h.url, "date": h.ts[:10]} for h in pages]

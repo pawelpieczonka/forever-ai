@@ -1,0 +1,144 @@
+"""Paths, .env key handling and persistent settings."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import threading
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+from dotenv import dotenv_values
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+# arena 2026-11-08: gpt-6-luna 5/5 facts, cheapest and ~4x faster than deepseek-v4-flash (4/5, slowest)
+DEFAULT_MODEL = "openai/gpt-6-luna"
+FAVORITE_MODELS = [
+    "openai/gpt-6-luna",
+    "deepseek/deepseek-v4-flash",
+    "deepseek/deepseek-v4.1-flash",
+    "anthropic/claude-haiku-5.5",
+    "z-ai/glm-5.3-flash",
+    "xiaomi/mimo-v2.6-flash",
+    "google/gemini-3.5-flash-lite",
+]
+
+
+def dev_mode() -> bool:
+    """Running from a source checkout (data stays in companion/data); the packaged .exe never is."""
+    if getattr(sys, "frozen", False):
+        return False
+    return (REPO_ROOT / ".git").exists() or (REPO_ROOT / ".env").exists()
+
+
+def data_dir() -> Path:
+    if os.environ.get("FOREVERAI_DATA"):
+        d = Path(os.environ["FOREVERAI_DATA"])
+    elif dev_mode():
+        d = REPO_ROOT / "companion" / "data"
+    else:
+        d = Path(os.environ.get("APPDATA", Path.home())) / "ForeverAI"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def env_path() -> Path:
+    return (REPO_ROOT / ".env") if dev_mode() else data_dir() / ".env"
+
+
+def read_api_key() -> str | None:
+    p = env_path()
+    if p.exists():
+        key = (dotenv_values(p).get("OPENROUTER_API_KEY") or "").strip()
+        if key:
+            return key
+    return os.environ.get("OPENROUTER_API_KEY") or None
+
+
+def write_api_key(key: str) -> None:
+    """Replace OPENROUTER_API_KEY in .env, keeping other lines."""
+    p = env_path()
+    lines = p.read_text(encoding="utf-8").splitlines() if p.exists() else []
+    lines = [ln for ln in lines if not ln.strip().startswith("OPENROUTER_API_KEY=")]
+    lines.insert(0, f"OPENROUTER_API_KEY={key.strip()}")
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def mask_key(key: str | None) -> str:
+    if not key:
+        return "(none)"
+    return f"{key[:6]}…{key[-3:]}" if len(key) > 12 else "…"
+
+
+@dataclass
+class Settings:
+    model: str = DEFAULT_MODEL
+    fallback_model: str = "deepseek/deepseek-v4-flash"
+    search_mode: str = "auto"  # auto | always | never
+    favorites: list[str] = field(default_factory=lambda: list(FAVORITE_MODELS))
+    low_balance: float = 1.0
+    pool_size: int = 1000
+    game_dir: str = ""
+    max_answer_tokens: int = 1800
+    provider: str = "openrouter"  # openrouter | claude_code
+    claude_model: str = "claude-haiku-5-5"
+    claude_effort: str = "high"
+    claude_suggest_dismissed: bool = False
+    shortcut_offered: bool = False
+
+
+class SettingsStore:
+    def __init__(self, path: Path | None = None):
+        self.path = path or data_dir() / "settings.json"
+        self._lock = threading.Lock()
+        self._detected = False
+        self.settings = self._load()
+        if self._detected:  # remember it, so a later start (e.g. autostart) does not depend on detection
+            try:
+                self.save()
+            except OSError:
+                pass
+
+    def _load(self) -> Settings:
+        s = Settings()
+        if self.path.exists():
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8-sig"))
+                for k, v in raw.items():
+                    if hasattr(s, k):
+                        setattr(s, k, v)
+            except (OSError, json.JSONDecodeError):
+                pass
+        if not s.game_dir:
+            found = detect_game_dir()
+            s.game_dir = str(found) if found else ""
+            self._detected = bool(found)
+        return s
+
+    def save(self) -> None:
+        with self._lock:
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(asdict(self.settings), ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, self.path)
+
+    def update(self, **kw) -> Settings:
+        for k, v in kw.items():
+            if hasattr(self.settings, k):
+                setattr(self.settings, k, v)
+        self.save()
+        return self.settings
+
+
+def detect_game_dir() -> Path | None:
+    if os.environ.get("FOREVERAI_GAME_DIR"):
+        return Path(os.environ["FOREVERAI_GAME_DIR"])
+    from .setup_game import find_game_dir
+    return find_game_dir()
+
+
+def game_paths(game_dir: str | Path) -> dict[str, Path]:
+    g = Path(game_dir)
+    return {"game": g, "addons": g / "Interface" / "AddOns", "screenshots": g / "Screenshots", "wtf": g / "WTF"}

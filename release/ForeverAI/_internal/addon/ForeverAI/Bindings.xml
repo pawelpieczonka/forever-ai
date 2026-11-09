@@ -1,0 +1,8 @@
+<Bindings>
+  <Binding name="FOREVERAI_TOGGLE" header="FOREVERAI" category="ADDONS">
+    ForeverAI_Toggle()
+  </Binding>
+  <Binding name="FOREVERAI_ASK_TOOLTIP" category="ADDONS">
+    ForeverAI_AskAboutTooltip()
+  </Binding>
+</Bindings>

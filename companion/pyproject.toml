@@ -1,0 +1,19 @@
+[project]
+name = "foreverai"
+version = "0.3.0"
+description = "ForeverAI desktop app: connects the WoW Forever add-on with Claude Code or OpenRouter"
+requires-python = ">=3.12"
+dependencies = [
+  "httpx>=0.27",
+  "Pillow>=10",
+  "python-dotenv>=1.0",
+  "mwparserfromhell>=0.6",
+  "curl_cffi>=0.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
