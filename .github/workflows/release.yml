@@ -1,5 +1,6 @@
-# Builds the Windows and the Linux app from the same commit. Pull requests and pushes to main get both builds as
-# workflow artifacts; a version tag (v0.5.0) publishes them as a GitHub Release:
+# Builds the Windows and the Linux app from the same commit. Pull requests get both builds as workflow artifacts. A push
+# to main publishes them as the GitHub Release v<version> when the version in the source has no release yet (bump the
+# version to release); pushing a tag v<version> does the same:
 #   ForeverAI-<version>-Windows-x64.zip     -> ForeverAI-Windows/ForeverAI-Windows.exe
 #   ForeverAI-<version>-Linux-x86_64.tar.gz -> ForeverAI-Linux/ForeverAI-Linux
 name: Build and release
@@ -99,23 +100,35 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [build-linux, build-windows]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+    concurrency: release
     steps:
       - uses: actions/checkout@v4
-      - name: The tag matches the version in the source
+      - name: Version to publish
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="$(grep -oP '__version__ = "\K[^"]+' companion/foreverai/__init__.py)"
-          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME, source $version"; exit 1; }
           echo "VERSION=$version" >> "$GITHUB_ENV"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME, source $version"; exit 1
+          fi
+          if gh release view "v$version" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "v$version is already released; bump the version to publish a new release"
+          else
+            echo "PUBLISH=1" >> "$GITHUB_ENV"
+          fi
       - uses: actions/download-artifact@v4
+        if: env.PUBLISH == '1'
         with:
           path: dist
           merge-multiple: true
       - name: Publish
+        if: env.PUBLISH == '1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -131,5 +144,6 @@ jobs:
 
           No Python needed. The Linux app runs on distributions with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and later).
           EOF
-          gh release create "$GITHUB_REF_NAME" ForeverAI-* SHA256SUMS.txt -R "$GITHUB_REPOSITORY" \
+          # creates the tag v<version> on this commit unless it was pushed
+          gh release create "v$VERSION" ForeverAI-* SHA256SUMS.txt -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "ForeverAI $VERSION" --notes-file notes.md --generate-notes

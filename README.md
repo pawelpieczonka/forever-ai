@@ -62,7 +62,7 @@ Tests: `.venv/bin/python -m pytest -q` (Linux) or `.venv\Scripts\python.exe -m p
 
 ## Build
 
-The apps are not committed: GitHub Actions (`.github/workflows/release.yml`) builds the Windows and the Linux app from the same commit for every pull request (as workflow artifacts) and publishes both as a GitHub Release for a version tag. Local builds go to `release/` (ignored by git).
+The apps are not committed: GitHub Actions (`.github/workflows/release.yml`) builds the Windows and the Linux app from the same commit for every pull request (as workflow artifacts) and publishes both as a GitHub Release when a new version reaches `main`. Local builds go to `release/` (ignored by git).
 
 Windows (writes `release\windows\ForeverAI-Windows\`, with `-Package` also the release zip):
 
@@ -85,8 +85,9 @@ The starter knowledge base `seed/kb.sqlite` is bundled into both apps (your own 
 ### Publishing a release
 
 1. Set the new version in `addon/ForeverAI/ForeverAI.toc`, `ns.version` in `addon/ForeverAI/Core.lua`, `companion/foreverai/__init__.py` and `companion/pyproject.toml` (a test checks that they agree).
-2. Merge to `main`, then tag it: `git tag v0.5.0 && git push origin v0.5.0`.
-3. The workflow builds both apps, checks that the tag matches the version and publishes the release with both files and `SHA256SUMS.txt`.
+2. Merge to `main`. The workflow builds both apps and, since this version has no release yet, publishes the release `v<version>` (it creates the tag) with both files and `SHA256SUMS.txt`.
+
+A push to `main` with a version that is already released only builds the apps (workflow artifacts). Pushing a tag `v<version>` that matches the version in the source publishes it as well.
 
 ## Uninstall
 

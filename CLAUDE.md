@@ -9,7 +9,7 @@ The prebuilt apps are not committed. `.github/workflows/release.yml` builds both
 | Windows | `build_exe.ps1` (`-Package`) | `release/windows/ForeverAI-Windows/ForeverAI-Windows.exe` | `ForeverAI-<version>-Windows-x64.zip` |
 | Linux | `build_linux.sh` (`--package`) | `release/linux/ForeverAI-Linux/ForeverAI-Linux` | `ForeverAI-<version>-Linux-x86_64.tar.gz` |
 
-- Every pull request and push to `main` builds both apps (workflow artifacts). A tag `v<version>` publishes a GitHub Release with both files and `SHA256SUMS.txt`; the tag must match the version in the source.
+- Every pull request builds both apps (workflow artifacts). A push to `main` publishes the GitHub Release `v<version>` with both files and `SHA256SUMS.txt` when the version in the source has no release yet; the workflow creates the tag. So a version bump merged to `main` is a release, and changes merged without a bump are released with the next one. Pushing a tag `v<version>` also publishes it; the tag must match the version in the source.
 - `release/`, `build/` and `dist/` are local build output and ignored by git. Never commit build output.
 - The file names carry the platform (Windows / Linux) and must stay that way; `companion/foreverai/updates.py` (`asset_name`) finds the download for the update notice by these names, and `tests/test_release.py` checks that the scripts and the workflow agree.
 - The starter knowledge base is `seed/kb.sqlite` (committed, bundled into both apps).
@@ -20,7 +20,7 @@ Anything that goes into the apps: `companion/**` (code, `requirements.txt`, `con
 
 - The CI builds both platforms for every pull request; check that both build jobs pass before you say a change is done. Do not merge or tag with one platform failing.
 - PyInstaller cannot cross-compile. Locally you can only build your own platform; never copy a build from one platform into the other.
-- Version number: `addon/ForeverAI/ForeverAI.toc`, `ns.version` in `addon/ForeverAI/Core.lua`, `companion/foreverai/__init__.py`, `companion/pyproject.toml` (all four together).
+- Version number: `addon/ForeverAI/ForeverAI.toc`, `ns.version` in `addon/ForeverAI/Core.lua`, `companion/foreverai/__init__.py`, `companion/pyproject.toml` (all four together). Bumping it publishes a release once merged to `main`.
 
 ### Before you finish
 
