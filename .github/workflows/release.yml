@@ -1,0 +1,135 @@
+# Builds the Windows and the Linux app from the same commit. Pull requests and pushes to main get both builds as
+# workflow artifacts; a version tag (v0.5.0) publishes them as a GitHub Release:
+#   ForeverAI-<version>-Windows-x64.zip     -> ForeverAI-Windows/ForeverAI-Windows.exe
+#   ForeverAI-<version>-Linux-x86_64.tar.gz -> ForeverAI-Linux/ForeverAI-Linux
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install packages
+        run: python -m pip install -r companion/requirements.txt -c companion/constraints.txt
+      - name: Tests
+        working-directory: companion
+        run: python -m pytest -q
+      - name: Lua syntax (the add-on)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1
+          for f in addon/ForeverAI/*.lua; do luac5.1 -p "$f"; done
+
+  build-linux:
+    needs: test
+    # the oldest supported runner: the app runs on distributions with the same or a newer glibc (2.35)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tk from the distribution
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tk-dev
+      - name: Virtual environment
+        run: |
+          python -m venv companion/.venv
+          companion/.venv/bin/python -m pip install -r companion/requirements.txt pyinstaller -c companion/constraints.txt
+      - name: Tkinter uses the system Tk (a standalone Tk has no font rendering)
+        run: |
+          tkso="$(companion/.venv/bin/python -c 'import _tkinter; print(_tkinter.__file__)')"
+          ldd "$tkso" | tee /dev/stderr | grep -E '=> /(usr/)?lib/x86_64-linux-gnu/libtk8\.6\.so'
+      - name: Build
+        run: ./build_linux.sh --package
+      - name: Smoke test
+        run: |
+          app=release/linux/ForeverAI-Linux
+          usage="$("$app/ForeverAI-Linux" --help)"
+          grep -q "usage: foreverai" <<< "$usage"
+          test -f "$app/_internal/seed/kb.sqlite"
+          want="$(grep '^## Version:' addon/ForeverAI/ForeverAI.toc)"
+          got="$(grep '^## Version:' "$app/_internal/addon/ForeverAI/ForeverAI.toc")"
+          [ "$want" = "$got" ] || { echo "add-on version $got, source $want"; exit 1; }
+          listing="$(tar -tzvf release/ForeverAI-*-Linux-x86_64.tar.gz ForeverAI-Linux/ForeverAI-Linux)"
+          grep -q '^-rwx' <<< "$listing"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ForeverAI-Linux
+          path: release/ForeverAI-*-Linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  build-windows:
+    needs: test
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Virtual environment
+        run: |
+          python -m venv companion\.venv
+          companion\.venv\Scripts\python.exe -m pip install -r companion\requirements.txt pyinstaller -c companion\constraints.txt
+      - name: Build
+        run: .\build_exe.ps1 -Package
+      - name: Smoke test
+        run: |
+          $app = "release\windows\ForeverAI-Windows"
+          if (-not (Test-Path "$app\ForeverAI-Windows.exe")) { throw "no exe" }
+          if (-not (Test-Path "$app\_internal\seed\kb.sqlite")) { throw "no seed knowledge base" }
+          $want = Select-String -Path addon\ForeverAI\ForeverAI.toc -Pattern '^## Version:' | ForEach-Object Line
+          $got = Select-String -Path "$app\_internal\addon\ForeverAI\ForeverAI.toc" -Pattern '^## Version:' | ForEach-Object Line
+          if ($want -ne $got) { throw "add-on version $got, source $want" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ForeverAI-Windows
+          path: release/ForeverAI-*-Windows-x64.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag matches the version in the source
+        run: |
+          version="$(grep -oP '__version__ = "\K[^"]+' companion/foreverai/__init__.py)"
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME, source $version"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum ForeverAI-* > SHA256SUMS.txt
+          cat > notes.md <<EOF
+          ## Download
+
+          | File | Platform |
+          |---|---|
+          | \`ForeverAI-$VERSION-Windows-x64.zip\` | **Windows 10/11**: extract, run \`ForeverAI-Windows/ForeverAI-Windows.exe\` |
+          | \`ForeverAI-$VERSION-Linux-x86_64.tar.gz\` | **Linux** (WoW Forever under Wine): extract, run \`ForeverAI-Linux/ForeverAI-Linux\` |
+
+          No Python needed. The Linux app runs on distributions with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and later).
+          EOF
+          gh release create "$GITHUB_REF_NAME" ForeverAI-* SHA256SUMS.txt -R "$GITHUB_REPOSITORY" \
+            --title "ForeverAI $VERSION" --notes-file notes.md --generate-notes
