@@ -279,7 +279,7 @@ class Service:
             info = claude_code.detect(force=True)
             if not info or not info.get("loggedIn"):
                 writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"),
-                             "text": "Claude Code is not installed or not signed in (run claude in a terminal to sign in)."})
+                             "text": "Claude Code is not installed or not signed in (sign in: run claude auth login in a terminal)."})
                 return
         elif value in ("openrouter", "gemini"):
             if not config.read_key(value):
@@ -918,7 +918,7 @@ class Service:
         got = self.claude_session_for(system, conv)
         if got is None:
             writer.send({"kind": "error", "final": True, "msgId": msg_id, "status": self.status(),
-                         "text": "Claude Code is not available or not signed in. Sign in (run claude in a terminal) or switch "
+                         "text": "Claude Code is not available or not signed in. Sign in (run claude auth login in a terminal) or switch "
                                  "the AI provider to OpenRouter or Gemini in Settings."})
             return
         session, continues = got

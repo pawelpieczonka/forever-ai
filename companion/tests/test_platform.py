@@ -162,3 +162,21 @@ def test_child_env_restores_library_path_when_frozen(monkeypatch):
     monkeypatch.delenv("LD_LIBRARY_PATH_ORIG")
     env = osutil.child_env()
     assert "LD_LIBRARY_PATH" not in env and "LD_LIBRARY_PATH_ORIG" not in env
+
+
+@linux_only
+def test_open_terminal_runs_the_sign_in_in_a_terminal(monkeypatch):
+    started = []
+    monkeypatch.setattr(osutil.subprocess, "Popen", lambda argv, **kw: started.append(argv))
+    monkeypatch.delenv("TERMINAL", raising=False)
+    monkeypatch.setattr(osutil.shutil, "which", lambda n: "/usr/bin/konsole" if n == "konsole" else None)
+    assert osutil.open_terminal(["/home/me/My Apps/claude", "auth", "login"])
+    exe, flag, sh, c, script = started[0]
+    assert (exe, flag, sh, c) == ("/usr/bin/konsole", "-e", "sh", "-c")
+    assert script.startswith("'/home/me/My Apps/claude' auth login;") and "read _" in script
+    # the user's $TERMINAL first, with the arguments that terminal needs
+    monkeypatch.setenv("TERMINAL", "kitty")
+    monkeypatch.setattr(osutil.shutil, "which", lambda n: f"/usr/bin/{n}")
+    assert osutil.open_terminal(["claude", "auth", "login"]) and started[1][:2] == ["/usr/bin/kitty", "sh"]
+    monkeypatch.setattr(osutil.shutil, "which", lambda n: None)
+    assert not osutil.open_terminal(["claude", "auth", "login"])

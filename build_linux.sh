@@ -23,8 +23,9 @@ done
 # does not follow: bundle the libraries _tkinter cannot resolve on its own
 tkso="$("$py" -c 'import _tkinter; print(_tkinter.__file__)')"
 libdir="$("$py" -c 'import sys; print(sys.base_prefix)')/lib"
+standalone_tk=
 for lib in $(ldd "$tkso" | awk '/not found/ {print $1}'); do
-  if [[ -f "$libdir/$lib" ]]; then data+=(--add-binary "$libdir/$lib:."); fi
+  if [[ -f "$libdir/$lib" ]]; then data+=(--add-binary "$libdir/$lib:."); standalone_tk=1; fi
 done
 
 cd "$root/companion"
@@ -33,6 +34,10 @@ cd "$root/companion"
   --collect-all curl_cffi \
   "${data[@]}" foreverai_app.py
 echo "Built: $root/release/linux/$name/$name (ForeverAI $version)"
+if [[ -n "$standalone_tk" ]]; then
+  echo "Warning: $py is a standalone Python; its Tk has no font rendering, so the window shows bitmap fonts." >&2
+  echo "  Build with the distribution's Python and Tk (e.g. PYTHON=/path/to/venv-from-/usr/bin/python3)." >&2
+fi
 
 if [[ "${1:-}" == "--package" ]]; then
   archive="$root/release/ForeverAI-$version-Linux-x86_64.tar.gz"

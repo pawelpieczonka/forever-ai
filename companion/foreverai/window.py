@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from . import claude_code, config
-from .osutil import WINDOWS, open_path
+from .osutil import WINDOWS, open_path, open_terminal
 
 log = logging.getLogger("foreverai")
 
@@ -238,7 +238,7 @@ class AppWindow:
                 if info and info.get("loggedIn"):
                     who = f"Claude Code {info.get('version') or ''} ({info.get('subscription') or 'signed in'})"
                 elif info:
-                    who = "Claude Code — not signed in (run claude)"
+                    who = "Claude Code — not signed in (claude auth login)"
                 else:
                     who = "Claude Code — checking" if claude_code._detect_cache is None else "Claude Code — not found"
                 ai = f"{who} · {names.get(s.claude_model, s.claude_model)} · thinking {s.claude_effort}"
@@ -286,6 +286,10 @@ class KeyDialog:
         self.claude_line = tk.Label(top, text=self._claude_text(), bg=BG, fg=DIM, font=(UI, 9), anchor="w",
                                     justify="left", wraplength=420)
         self.claude_line.pack(fill="x", **pad)
+        self.claude_row = tk.Frame(top, bg=BG)
+        self.claude_row.pack(fill="x", **pad)
+        self.sign_in_btn = ttk.Button(self.claude_row, text="Sign in to Claude Code", command=self._sign_in)
+        self._show_sign_in()
         tk.Label(top, text="Use an API key instead:", bg=BG, fg=FG, font=(UI, 10), anchor="w").pack(
             fill="x", pady=(12, 4), **pad)
         self.provider = tk.StringVar(value="gemini" if comp.store.settings.provider == "gemini" else "openrouter")
@@ -299,10 +303,15 @@ class KeyDialog:
             link = tk.Label(row, text="Get a key ↗", bg=BG, fg=ACCENT, font=(UI, 9, "underline"), cursor="hand2")
             link.pack(side="right")
             link.bind("<Button-1>", lambda _e, v=value: open_path(self.LINKS[v]))
-        self.entry = tk.Entry(top, show="•", width=52, bg=PANEL, fg=FG, insertbackground=FG, relief="flat",
+        # "*" and not "•": a Tk without fontconfig (core X fonts) draws "•" zero wide, so a pasted key looked empty
+        self.entry = tk.Entry(top, show="*", width=52, bg=PANEL, fg=FG, insertbackground=FG, relief="flat",
                               font=(MONO, 10))
         self.entry.pack(fill="x", pady=(8, 2), ipady=4, **pad)
         self.entry.bind("<Return>", lambda _e: self._save())
+        menu = tk.Menu(top, tearoff=False)
+        menu.add_command(label="Paste", command=lambda: self.entry.event_generate("<<Paste>>"))
+        menu.add_command(label="Clear", command=lambda: self.entry.delete(0, "end"))
+        self.entry.bind("<Button-3>", lambda e: (self.entry.focus_set(), menu.tk_popup(e.x_root, e.y_root)))
         self.msg = tk.Label(top, text="", bg=BG, fg=DIM, font=(UI, 9), anchor="w", justify="left", wraplength=420)
         self.msg.pack(fill="x", pady=(4, 0), **pad)
         buttons = tk.Frame(top, bg=BG)
@@ -326,14 +335,35 @@ class KeyDialog:
         if self.alive():
             self.top.destroy()
 
+    @staticmethod
+    def _claude_info() -> dict | None:
+        return claude_code._detect_cache[0] if claude_code._detect_cache else None
+
     def _claude_text(self) -> str:
-        info = claude_code._detect_cache[0] if claude_code._detect_cache else None
+        info = self._claude_info()
         if info and info.get("loggedIn"):
             return f"Claude Code {info.get('version') or ''} is signed in — no key is needed."
         if info:
-            return ("Claude Code is installed but not signed in. Run claude in a terminal, sign in, then click "
-                    "\"Check Claude Code again\".")
+            # the Claude desktop app signs in its own sessions only; the claude command keeps its own sign-in
+            return ("Claude Code is installed but not signed in (signing in to the Claude desktop app does not sign "
+                    "in Claude Code). Click \"Sign in to Claude Code\", finish in the browser, then click \"Check "
+                    "Claude Code again\".")
         return "Claude Code was not found. With a Claude subscription, install Claude Code and sign in to use it."
+
+    def _show_sign_in(self) -> None:
+        info = self._claude_info()
+        if info and not info.get("loggedIn"):
+            self.sign_in_btn.pack(side="left", pady=(6, 0))
+        else:
+            self.sign_in_btn.pack_forget()
+
+    def _sign_in(self) -> None:
+        info = self._claude_info()
+        if info and open_terminal([info["path"], "auth", "login"]):
+            self.msg.configure(text="Sign in in the terminal window and the browser, then click \"Check Claude Code "
+                                    "again\".", fg=DIM)
+        else:
+            self.msg.configure(text="No terminal was found. Open one and run: claude auth login", fg=WARN)
 
     def _busy(self, text: str) -> None:
         self.msg.configure(text=text, fg=DIM)
@@ -371,6 +401,7 @@ class KeyDialog:
         self.save_btn.state(["!disabled"])
         self.retry_btn.state(["!disabled"])
         self.claude_line.configure(text=self._claude_text())
+        self._show_sign_in()
         if kind == "key":
             self.msg.configure(text=value, fg=ACCENT if ok else WARN)
             if ok:

@@ -4,6 +4,8 @@ case-insensitive paths (the game under Wine does not care about case, the Linux 
 from __future__ import annotations
 
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -34,6 +36,31 @@ def open_path(path: Path | str) -> None:
     opener = "open" if sys.platform == "darwin" else "xdg-open"
     subprocess.Popen([opener, str(path)], env=child_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
+
+
+# Linux terminal emulators and what goes before the command to run; the user's $TERMINAL is tried first
+TERMINALS = {"xdg-terminal-exec": [], "x-terminal-emulator": ["-e"], "konsole": ["-e"], "gnome-terminal": ["--"],
+             "xfce4-terminal": ["-x"], "alacritty": ["-e"], "kitty": [], "foot": [], "wezterm": ["start", "--"],
+             "xterm": ["-e"]}
+
+
+def open_terminal(argv: list[str]) -> bool:
+    """Run a command in a new terminal window the user can type into (Claude Code's sign-in). On Linux the window
+    stays open until Enter is pressed, so an error can be read. False when no terminal emulator was found."""
+    if WINDOWS:
+        subprocess.Popen(argv, env=child_env(), creationflags=subprocess.CREATE_NEW_CONSOLE)
+        return True
+    command = ["sh", "-c", shlex.join(argv) + '; echo; printf "Press Enter to close this window. "; read _']
+    names = list(TERMINALS)
+    if os.environ.get("TERMINAL"):
+        names.insert(0, os.environ["TERMINAL"])
+    for name in names:
+        exe = shutil.which(name)
+        if exe:
+            subprocess.Popen([exe, *TERMINALS.get(Path(name).name, ["-e"]), *command], env=child_env(),
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return True
+    return False
 
 
 def ci_child(parent: Path, name: str) -> Path:
