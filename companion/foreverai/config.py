@@ -11,6 +11,8 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from .osutil import WINDOWS, ci_join
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # arena 2026-11-08: gpt-6-luna 5/5 facts, cheapest and ~4x faster than deepseek-v4-flash (4/5, slowest)
 DEFAULT_MODEL = "openai/gpt-6-luna"
@@ -26,7 +28,7 @@ FAVORITE_MODELS = [
 
 
 def dev_mode() -> bool:
-    """Running from a source checkout (data stays in companion/data); the packaged .exe never is."""
+    """Running from a source checkout (data stays in companion/data); the packaged app never is."""
     if getattr(sys, "frozen", False):
         return False
     return (REPO_ROOT / ".git").exists() or (REPO_ROOT / ".env").exists()
@@ -37,8 +39,10 @@ def data_dir() -> Path:
         d = Path(os.environ["FOREVERAI_DATA"])
     elif dev_mode():
         d = REPO_ROOT / "companion" / "data"
-    else:
+    elif WINDOWS:
         d = Path(os.environ.get("APPDATA", Path.home())) / "ForeverAI"
+    else:
+        d = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "foreverai"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -141,4 +145,5 @@ def detect_game_dir() -> Path | None:
 
 def game_paths(game_dir: str | Path) -> dict[str, Path]:
     g = Path(game_dir)
-    return {"game": g, "addons": g / "Interface" / "AddOns", "screenshots": g / "Screenshots", "wtf": g / "WTF"}
+    return {"game": g, "addons": ci_join(g, "Interface", "AddOns"), "screenshots": ci_join(g, "Screenshots"),
+            "wtf": ci_join(g, "WTF")}

@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 from typing import Iterator
 
+from .osutil import NO_WINDOW, WINDOWS, child_env
+
 log = logging.getLogger("foreverai")
 
 CLAUDE_MODELS = [
@@ -32,29 +34,35 @@ MCP_TOOLS = ["mcp__foreverai__search_knowledge_base", "mcp__foreverai__propose_a
              "mcp__foreverai__mark_on_map", "mcp__foreverai__addon_options", "mcp__foreverai__propose_quest_abandon",
              "mcp__foreverai__propose_vendor_action"]
 TIMEOUT_S = 300
-_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
+def _version_key(name: str) -> tuple:
+    return tuple(int(x) if x.isdigit() else 0 for x in name.lstrip("v").split("."))
 
 
 def candidate_executables() -> list[str]:
-    """Every place Claude Code can live on Windows, most likely first (the npm .cmd shim is avoided: cmd.exe mangles
+    """Every place Claude Code can live, most likely first. Windows (the npm .cmd shim is avoided: cmd.exe mangles
     arguments): npm global install, the native installer, the old local install, and the copy bundled with the
-    Claude desktop app (%APPDATA%\\Claude\\claude-code\\<version>\\…\\claude.exe, newest version first)."""
+    Claude desktop app (%APPDATA%\\Claude\\claude-code\\<version>\\…\\claude.exe, newest version first).
+    Linux: PATH and the same installs, the desktop app copy being ~/.config/Claude/claude-code/<version>/…/claude."""
     out: list[str] = []
     first = _find_listed()
     if first:
         out.append(first)
-    appdata = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-    bundled = appdata / "Claude" / "claude-code"
+    if WINDOWS:
+        bundled = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "Claude" / "claude-code"
+    else:
+        bundled = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "Claude" / "claude-code"
     if bundled.is_dir():
-        def version_key(p: Path):
-            return tuple(int(x) if x.isdigit() else 0 for x in p.name.split("."))
-        for ver in sorted((d for d in bundled.iterdir() if d.is_dir()), key=version_key, reverse=True):
-            for exe in ver.rglob("claude.exe"):
-                out.append(str(exe))
+        for ver in sorted((d for d in bundled.iterdir() if d.is_dir()), key=lambda d: _version_key(d.name),
+                          reverse=True):
+            for exe in ver.rglob("claude.exe" if WINDOWS else "claude"):
+                if exe.is_file():
+                    out.append(str(exe))
     seen, unique = set(), []
     for c in out:
-        if c.lower() not in seen:
-            seen.add(c.lower())
+        if os.path.normcase(c) not in seen:
+            seen.add(os.path.normcase(c))
             unique.append(c)
     return unique
 
@@ -66,6 +74,28 @@ def find_executable() -> str | None:
 
 def _find_listed() -> str | None:
     """Locate the real claude executable on PATH or in the usual install folders."""
+    return _find_listed_windows() if WINDOWS else _find_listed_unix()
+
+
+def _find_listed_unix() -> str | None:
+    """PATH first, then the folders a desktop launcher's PATH often lacks: the native installer (~/.local/bin), the
+    old local install, npm/bun/volta prefixes and nvm (newest node first)."""
+    which = shutil.which("claude")
+    if which:
+        return which
+    home = Path.home()
+    candidates = [home / ".local" / "bin" / "claude", home / ".claude" / "local" / "claude",
+                  home / ".npm-global" / "bin" / "claude", home / ".bun" / "bin" / "claude",
+                  home / ".volta" / "bin" / "claude", Path("/usr/local/bin/claude"), Path("/usr/bin/claude")]
+    candidates += sorted((home / ".nvm" / "versions" / "node").glob("*/bin/claude"),
+                         key=lambda c: _version_key(c.parents[1].name), reverse=True)
+    for c in candidates:
+        if c.is_file() and os.access(c, os.X_OK):
+            return str(c)
+    return None
+
+
+def _find_listed_windows() -> str | None:
     candidates: list[Path] = []
     which = shutil.which("claude")
     if which:
@@ -87,6 +117,15 @@ def _find_listed() -> str | None:
     return None
 
 
+def _env(exe: str, **extra: str) -> dict[str, str]:
+    """Environment for a claude process. Linux: its own folder goes first on PATH, since an npm/nvm install is a node
+    script that needs the node next to it, and a desktop launcher's PATH may not have it."""
+    env = child_env(**extra)
+    if not WINDOWS:
+        env["PATH"] = os.pathsep.join(p for p in (str(Path(exe).parent), env.get("PATH")) if p)
+    return env
+
+
 _detect_cache: tuple[dict | None, float] | None = None
 
 
@@ -99,7 +138,7 @@ def detect(force: bool = False) -> dict | None:
     for exe in candidate_executables():
         try:
             out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=20,
-                                 creationflags=_NO_WINDOW)
+                                 env=_env(exe), creationflags=NO_WINDOW)
         except (OSError, subprocess.TimeoutExpired) as e:
             log.warning("claude candidate %s failed: %s", exe, e)
             continue
@@ -111,7 +150,7 @@ def detect(force: bool = False) -> dict | None:
                      "authMethod": None, "subscription": None}
         try:
             st = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, timeout=30,
-                                creationflags=_NO_WINDOW)
+                                env=_env(exe), creationflags=NO_WINDOW)
             data = json.loads(st.stdout or "{}")
             candidate["loggedIn"] = bool(data.get("loggedIn"))
             candidate["authMethod"] = data.get("authMethod")
@@ -242,8 +281,8 @@ class ClaudeSession:
                "--setting-sources", "project",  # no user plugins/hooks/CLAUDE.md in the game assistant
                "--no-session-persistence", "--disable-slash-commands"]
         self.proc = subprocess.Popen(cmd, cwd=str(self.workdir), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-                                     creationflags=_NO_WINDOW)
+                                     stderr=subprocess.DEVNULL, env=_env(exe, PYTHONIOENCODING="utf-8"),
+                                     creationflags=NO_WINDOW)
         self.queue: "queue.Queue[dict | None]" = queue.Queue()
         self.conv: str | None = None  # conversation this session holds in its context
         self.turns = 0

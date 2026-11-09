@@ -186,7 +186,7 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="foreverai")
     ap.add_argument("--headless", action="store_true", help="no window (development)")
     ap.add_argument("--setup", action="store_true", help="prepare the files in the game folder and exit")
-    ap.add_argument("--game-dir", help="WoW Forever folder (…\\World of Warcraft\\_forever_)")
+    ap.add_argument("--game-dir", help="WoW Forever folder (…/World of Warcraft/_forever_)")
     args = ap.parse_args(argv)
     logfile = setup_logging()
     if args.game_dir:

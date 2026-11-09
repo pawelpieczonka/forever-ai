@@ -11,10 +11,14 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from . import claude_code, config
+from .osutil import WINDOWS, open_path
 
 log = logging.getLogger("foreverai")
 
 BG, PANEL, FG, DIM, ACCENT, WARN = "#14181d", "#1c2229", "#e6e9ec", "#8b96a3", "#3ddc97", "#ffb84d"
+# Linux: fontconfig names (an unknown family such as Consolas would fall back to a proportional font)
+UI, MONO, TITLE = ("Segoe UI", "Consolas", ("Segoe UI Semibold", 16)) if WINDOWS else \
+    ("Sans", "Monospace", ("Sans", 16, "bold"))
 
 
 class _QueueHandler(logging.Handler):
@@ -37,28 +41,50 @@ class _QueueHandler(logging.Handler):
 
 def ask_game_dir(parent: tk.Misc | None = None) -> str | None:
     from .setup_game import normalize_game_dir
+    initial = None
+    if not WINDOWS:
+        _show_hidden_toggle(parent)
+        games = os.path.expanduser("~/Games")
+        initial = games if os.path.isdir(games) else os.path.expanduser("~")
     while True:
-        d = filedialog.askdirectory(parent=parent, title="Select the World of Warcraft folder")
+        d = filedialog.askdirectory(parent=parent, title="Select the World of Warcraft folder", initialdir=initial)
         if not d:
             return None
         found = normalize_game_dir(d)
         if found:
             return str(found)
-        messagebox.showwarning("ForeverAI", "WoW Forever (_forever_\\Wow.exe) not found in this folder.", parent=parent)
+        messagebox.showwarning("ForeverAI", f"WoW Forever ({os.path.join('_forever_', 'Wow.exe')}) not found in this "
+                               "folder.", parent=parent)
+
+
+def _show_hidden_toggle(parent: tk.Misc | None) -> None:
+    """The Tk folder dialog on Linux hides dot folders (~/.wine, ~/.local/share/...) without a way to show them;
+    this adds the "Show hidden" toggle."""
+    w = parent or tk._default_root
+    if w is None:
+        return
+    try:
+        w.tk.call("catch", "tk_getOpenFile -foobarbaz")  # loads the dialog code, so its variables exist
+        w.tk.call("set", "::tk::dialog::file::showHiddenBtn", "1")
+        w.tk.call("set", "::tk::dialog::file::showHiddenVar", "0")
+    except tk.TclError:
+        pass
 
 
 class AppWindow:
     def __init__(self):
-        self.root = tk.Tk()
+        self.root = tk.Tk(className="ForeverAI")  # the WM class matches StartupWMClass of the Linux launcher
         self.root.title("ForeverAI")
         self.root.configure(bg=BG)
         self.root.geometry("640x520")
         self.root.minsize(520, 420)
         try:
             from .setup_game import bundle_root
-            ico = bundle_root() / "assets" / "foreverai.ico"
-            if ico.exists():
-                self.root.iconbitmap(str(ico))
+            if WINDOWS:
+                self.root.iconbitmap(str(bundle_root() / "assets" / "foreverai.ico"))
+            else:  # X11 has no .ico support; kept in self: Tk drops an image nobody references
+                self._icon = tk.PhotoImage(file=str(bundle_root() / "assets" / "foreverai.png"))
+                self.root.iconphoto(True, self._icon)
         except Exception:
             pass
         self.q: queue.Queue = queue.Queue()
@@ -79,8 +105,8 @@ class AppWindow:
 
         top = tk.Frame(self.root, bg=BG)
         top.pack(fill="x", padx=16, pady=(14, 4))
-        tk.Label(top, text="ForeverAI", bg=BG, fg=ACCENT, font=("Segoe UI Semibold", 16)).pack(side="left")
-        self.state = tk.Label(top, text="● Starting…", bg=BG, fg=WARN, font=("Segoe UI", 10))
+        tk.Label(top, text="ForeverAI", bg=BG, fg=ACCENT, font=TITLE).pack(side="left")
+        self.state = tk.Label(top, text="● Starting…", bg=BG, fg=WARN, font=(UI, 10))
         self.state.pack(side="right")
 
         grid = tk.Frame(self.root, bg=PANEL)
@@ -89,9 +115,9 @@ class AppWindow:
         self.rows = {}
         for i, (key, label) in enumerate((("game", "Game"), ("addon", "Add-on"), ("ai", "AI"),
                                           ("kb", "Knowledge base"))):
-            tk.Label(grid, text=label, bg=PANEL, fg=DIM, font=("Segoe UI", 9), anchor="w").grid(
+            tk.Label(grid, text=label, bg=PANEL, fg=DIM, font=(UI, 9), anchor="w").grid(
                 row=i, column=0, sticky="w", padx=(10, 12), pady=5)
-            v = tk.Label(grid, text="…", bg=PANEL, fg=FG, font=("Segoe UI", 9), anchor="w", justify="left",
+            v = tk.Label(grid, text="…", bg=PANEL, fg=FG, font=(UI, 9), anchor="w", justify="left",
                          wraplength=380)
             v.grid(row=i, column=1, sticky="we", pady=5)
             self.rows[key] = v
@@ -100,10 +126,10 @@ class AppWindow:
         self.update_btn = ttk.Button(grid, text="Update now", command=self._update_kb)
         self.update_btn.grid(row=3, column=2, padx=8)
 
-        tk.Label(self.root, text="Activity", bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x", padx=16)
+        tk.Label(self.root, text="Activity", bg=BG, fg=DIM, font=(UI, 9), anchor="w").pack(fill="x", padx=16)
         box = tk.Frame(self.root, bg=PANEL)
         box.pack(fill="both", expand=True, padx=16, pady=(2, 8))
-        self.log = tk.Text(box, bg=PANEL, fg=FG, insertbackground=FG, relief="flat", font=("Consolas", 9),
+        self.log = tk.Text(box, bg=PANEL, fg=FG, insertbackground=FG, relief="flat", font=(MONO, 9),
                            wrap="word", height=12, state="disabled")
         sb = ttk.Scrollbar(box, command=self.log.yview)
         self.log.configure(yscrollcommand=sb.set)
@@ -114,7 +140,7 @@ class AppWindow:
 
         bottom = tk.Frame(self.root, bg=BG)
         bottom.pack(fill="x", padx=16, pady=(0, 14))
-        ttk.Button(bottom, text="Open data folder", command=lambda: os.startfile(str(config.data_dir()))).pack(side="left")
+        ttk.Button(bottom, text="Open data folder", command=lambda: open_path(config.data_dir())).pack(side="left")
         ttk.Button(bottom, text="Desktop shortcut", command=self._shortcut).pack(side="left", padx=8)
         ttk.Button(bottom, text="Quit", command=self.quit).pack(side="right")
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
