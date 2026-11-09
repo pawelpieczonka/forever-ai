@@ -143,7 +143,7 @@ class AppWindow:
         bottom.pack(fill="x", padx=16, pady=(0, 14))
         ttk.Button(bottom, text="Open data folder", command=lambda: open_path(config.data_dir())).pack(side="left")
         ttk.Button(bottom, text="Desktop shortcut", command=self._shortcut).pack(side="left", padx=8)
-        ttk.Button(bottom, text="AI key…", command=self.ask_key).pack(side="left")
+        ttk.Button(bottom, text="AI provider…", command=self.ask_key).pack(side="left")
         ttk.Button(bottom, text="Quit", command=self.quit).pack(side="right")
         self.update_dl = ttk.Button(bottom, text="Download update", command=self._download_update)
         self._key_dialog = None
@@ -229,7 +229,7 @@ class AppWindow:
             if not c.claude_checked:
                 ai = "Checking Claude Code…"
             elif c.needs_key:
-                ai = "No AI connected — click AI key…"
+                ai = "No AI connected — click AI provider…"
             elif s.provider == "gemini":
                 ai = f"Google Gemini · {s.gemini_model}"
             elif s.provider == "claude_code":
@@ -267,7 +267,8 @@ class AppWindow:
 
 class KeyDialog:
     """Connect an AI: Claude Code is checked first; without it the player enters an OpenRouter or a Google Gemini
-    key, which is checked with the provider before it is saved."""
+    key, which is checked with the provider before it is saved. A signed-in Claude Code that is not in use can be
+    switched back to."""
 
     LINKS = {"openrouter": "https://openrouter.ai/keys", "gemini": "https://aistudio.google.com/apikey"}
 
@@ -289,7 +290,8 @@ class KeyDialog:
         self.claude_row = tk.Frame(top, bg=BG)
         self.claude_row.pack(fill="x", **pad)
         self.sign_in_btn = ttk.Button(self.claude_row, text="Sign in to Claude Code", command=self._sign_in)
-        self._show_sign_in()
+        self.use_claude_btn = ttk.Button(self.claude_row, text="Use Claude Code", command=self._retry_claude)
+        self._show_claude_button()
         tk.Label(top, text="Use an API key instead:", bg=BG, fg=FG, font=(UI, 10), anchor="w").pack(
             fill="x", pady=(12, 4), **pad)
         self.provider = tk.StringVar(value="gemini" if comp.store.settings.provider == "gemini" else "openrouter")
@@ -342,7 +344,13 @@ class KeyDialog:
     def _claude_text(self) -> str:
         info = self._claude_info()
         if info and info.get("loggedIn"):
-            return f"Claude Code {info.get('version') or ''} is signed in — no key is needed."
+            provider = self.comp.store.settings.provider
+            if provider == "claude_code":
+                return f"Claude Code {info.get('version') or ''} is signed in and in use — no key is needed."
+            from .service import PROVIDER_NAMES
+            return (f"Claude Code {info.get('version') or ''} is signed in, but ForeverAI uses "
+                    f"{PROVIDER_NAMES.get(provider, provider)} now. Click \"Use Claude Code\" to switch back (no key "
+                    "is needed).")
         if info:
             # the Claude desktop app signs in its own sessions only; the claude command keeps its own sign-in
             return ("Claude Code is installed but not signed in (signing in to the Claude desktop app does not sign "
@@ -350,12 +358,18 @@ class KeyDialog:
                     "Claude Code again\".")
         return "Claude Code was not found. With a Claude subscription, install Claude Code and sign in to use it."
 
-    def _show_sign_in(self) -> None:
+    def _show_claude_button(self) -> None:
+        """Installed but not signed in: "Sign in to Claude Code"; signed in but another provider in use: "Use Claude
+        Code"."""
         info = self._claude_info()
         if info and not info.get("loggedIn"):
             self.sign_in_btn.pack(side="left", pady=(6, 0))
         else:
             self.sign_in_btn.pack_forget()
+        if info and info.get("loggedIn") and self.comp.store.settings.provider != "claude_code":
+            self.use_claude_btn.pack(side="left", pady=(6, 0))
+        else:
+            self.use_claude_btn.pack_forget()
 
     def _sign_in(self) -> None:
         info = self._claude_info()
@@ -367,8 +381,8 @@ class KeyDialog:
 
     def _busy(self, text: str) -> None:
         self.msg.configure(text=text, fg=DIM)
-        self.save_btn.state(["disabled"])
-        self.retry_btn.state(["disabled"])
+        for b in (self.save_btn, self.retry_btn, self.use_claude_btn):
+            b.state(["disabled"])
 
     def _save(self) -> None:
         key, provider = self.entry.get().strip(), self.provider.get()
@@ -385,9 +399,9 @@ class KeyDialog:
     def _retry_claude(self) -> None:
         self._busy("Checking Claude Code…")
 
-        def run():
-            provider = self.comp.check_providers()
-            self.results.put(("claude", provider is not None, provider))
+        def run():  # the player asked for Claude Code: a signed-in one is used even when a key works too
+            provider = self.comp.check_providers(prefer_claude=True)
+            self.results.put(("claude", provider == "claude_code", provider))
         threading.Thread(target=run, daemon=True).start()
 
     def _poll(self) -> None:
@@ -398,10 +412,10 @@ class KeyDialog:
         except queue.Empty:
             self.top.after(100, self._poll)
             return
-        self.save_btn.state(["!disabled"])
-        self.retry_btn.state(["!disabled"])
+        for b in (self.save_btn, self.retry_btn, self.use_claude_btn):
+            b.state(["!disabled"])
         self.claude_line.configure(text=self._claude_text())
-        self._show_sign_in()
+        self._show_claude_button()
         if kind == "key":
             self.msg.configure(text=value, fg=ACCENT if ok else WARN)
             if ok:
@@ -409,9 +423,12 @@ class KeyDialog:
                 self.entry.delete(0, "end")
                 self.top.after(1200, self.close)
         elif ok:
-            from .service import PROVIDER_NAMES
-            self.msg.configure(text=f"Using {PROVIDER_NAMES.get(value, value)}.", fg=ACCENT)
+            self.msg.configure(text="Using Claude Code.", fg=ACCENT)
             self.top.after(1200, self.close)
+        elif value:
+            from .service import PROVIDER_NAMES
+            self.msg.configure(text=f"Claude Code is still not available. Using {PROVIDER_NAMES.get(value, value)}.",
+                               fg=WARN)
         else:
             self.msg.configure(text="Claude Code is still not available. Enter a key instead.", fg=WARN)
         self.top.after(100, self._poll)

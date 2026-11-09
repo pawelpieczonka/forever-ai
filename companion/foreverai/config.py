@@ -1,8 +1,9 @@
-"""Paths, .env key handling and persistent settings."""
+"""Paths, API keys (system credential store, else .env) and persistent settings."""
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import threading
@@ -11,8 +12,11 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from . import keystore
 from .gemini import DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
 from .osutil import WINDOWS, ci_join
+
+log = logging.getLogger("foreverai")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # arena 2026-11-08: gpt-6-luna 5/5 facts, cheapest and ~4x faster than deepseek-v4-flash (4/5, slowest)
@@ -56,29 +60,66 @@ KEY_NAMES = {"openrouter": "OPENROUTER_API_KEY", "gemini": "GEMINI_API_KEY"}
 _ENV_FALLBACK = {"gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
 
 
+_key_lock = threading.Lock()
+
+
+def secure_keys() -> bool:
+    """Keys go to the system credential store (keystore); a source checkout keeps them in its own .env."""
+    return not dev_mode()
+
+
 def read_key(provider: str) -> str | None:
-    """The API key of ``provider`` (openrouter | gemini): from .env, else from the environment."""
+    """The API key of ``provider`` (openrouter | gemini): from the system credential store, else from .env, else from
+    the environment."""
     name = KEY_NAMES[provider]
-    p = env_path()
-    if p.exists():
-        key = (dotenv_values(p).get(name) or "").strip()
+    with _key_lock:
+        p = env_path()
+        key = (dotenv_values(p).get(name) or "").strip() if p.exists() else ""
         if key:
+            # from an older version, or saved while the store could not be used: newer than a stored one, moved there
+            if secure_keys() and keystore.put(name, key):
+                _write_env(p, name, None)
+                log.info("%s moved from %s to %s", name, p, keystore.NAME)
             return key
+        if secure_keys():
+            key = keystore.get(name)
+            if key:
+                return key
     for var in _ENV_FALLBACK.get(provider, (name,)):
         if os.environ.get(var):
             return os.environ[var].strip()
     return None
 
 
-def write_key(provider: str, key: str) -> None:
-    """Replace the provider's key in .env, keeping other lines."""
+def write_key(provider: str, key: str) -> bool:
+    """Save the provider's key. True: in the system credential store; False: in .env (no store, or development)."""
     name = KEY_NAMES[provider]
-    p = env_path()
+    key = key.strip()
+    with _key_lock:
+        p = env_path()
+        if secure_keys() and keystore.put(name, key):
+            _write_env(p, name, None)  # no plain copy stays behind
+            return True
+        _write_env(p, name, key)
+        return False
+
+
+def _write_env(p: Path, name: str, value: str | None) -> None:
+    """Replace (None: remove) one line of .env, keeping the others; the file is readable only by the user, and removed
+    once empty."""
     lines = p.read_text(encoding="utf-8").splitlines() if p.exists() else []
-    lines = [ln for ln in lines if not ln.strip().startswith(f"{name}=")]
-    lines.insert(0, f"{name}={key.strip()}")
+    kept = [ln for ln in lines if not ln.strip().startswith(f"{name}=")]
+    if value is not None:
+        kept.insert(0, f"{name}={value}")
+    elif kept == lines:
+        return
+    if not any(ln.strip() for ln in kept):
+        p.unlink(missing_ok=True)
+        return
     tmp = p.with_suffix(".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.unlink(missing_ok=True)
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
+        f.write("\n".join(kept) + "\n")
     os.replace(tmp, p)
 
 

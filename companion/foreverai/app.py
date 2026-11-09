@@ -76,8 +76,10 @@ class Companion:
             threading.Thread(target=self._check_update, daemon=True, name="update-check").start()
         self.set_status("Running")
 
-    def check_providers(self) -> str | None:
-        """Claude Code first, then the saved keys; picks the provider (or asks for a key). Returns the provider."""
+    def check_providers(self, prefer_claude: bool = False) -> str | None:
+        """Claude Code first, then the saved keys; picks the provider (or asks for a key). Returns the provider.
+        ``prefer_claude`` (the player asked for Claude Code) switches to a signed-in Claude Code even when the chosen
+        provider still works."""
         from . import claude_code
         activity.info("Checking Claude Code…")
         info = claude_code.detect(force=True)
@@ -88,7 +90,10 @@ class Companion:
             activity.warning("Claude Code is installed but not signed in (sign in: claude auth login)")
         else:
             activity.info("Claude Code not found")
-        provider = config.choose_provider(self.store.settings, info)
+        if prefer_claude and info and info.get("loggedIn"):
+            provider = "claude_code"
+        else:
+            provider = config.choose_provider(self.store.settings, info)
         if provider is None:
             self.needs_key = True
             activity.warning("No AI provider yet: enter an OpenRouter or Google Gemini key")

@@ -16,6 +16,10 @@ from .openrouter import ToolCall
 
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_MODEL = "gemini-flash-latest"  # Google's alias for the newest Flash model
+# answers when the chosen model cannot (overloaded, out of quota, not answering): a lighter model on its own quota
+FALLBACK_MODEL = "gemini-flash-lite-latest"
+# statuses after which another model may still answer
+UNAVAILABLE_STATUSES = (404, 429, 500, 503, 504)
 FAVORITE_MODELS = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
                    "gemini-flash-lite-latest", "gemini-4-argon"]
 KEY_URL = "https://aistudio.google.com/apikey"
@@ -63,7 +67,9 @@ def is_chat_model(model_id: str) -> bool:
 
 
 class Gemini:
-    def __init__(self, api_key: str, transport: httpx.BaseTransport | None = None, timeout: float = 120.0):
+    # the read timeout is also the wait for the first byte: a model Google cannot serve sometimes never answers instead
+    # of returning 503, and the player waits that long before the fallback model is tried
+    def __init__(self, api_key: str, transport: httpx.BaseTransport | None = None, timeout: float = 45.0):
         self.api_key = api_key
         self._client = httpx.Client(
             base_url=BASE_URL,
@@ -125,7 +131,8 @@ class Gemini:
     def chat_stream(self, model: str, messages: list[dict], tools: list[dict] | None = None,
                     search_mode: str = "auto", max_tokens: int = 1800) -> Iterator[tuple[str, Any]]:
         """Yield ("text", str) | ("tool_calls", [ToolCall]) | ("usage", dict) | ("error", str) |
-        ("done", finish_reason), like OpenRouter.chat_stream."""
+        ("done", finish_reason), like OpenRouter.chat_stream; ("unavailable", str) is an error after which another
+        model may still answer (overloaded, out of quota, missing or not answering)."""
         body = self.build_body(model, messages, tools, search_mode, max_tokens)
         calls: dict[int, dict] = {}
         finish = None
@@ -134,7 +141,7 @@ class Gemini:
                                      headers={"Authorization": f"Bearer {self.api_key}"}) as r:
                 if r.status_code != 200:
                     r.read()
-                    yield "error", friendly_error(r.status_code, _error_text(r))
+                    yield _error_kind(r.status_code), friendly_error(r.status_code, _error_text(r))
                     return
                 for line in r.iter_lines():
                     if not line.startswith("data:"):
@@ -150,7 +157,8 @@ class Gemini:
                         chunk = chunk[0] if chunk and isinstance(chunk[0], dict) else {}
                     if "error" in chunk:
                         err = chunk["error"] or {}
-                        yield "error", friendly_error(int(err.get("code") or 500), str(err.get("message")))
+                        status = int(err.get("code") or 500)
+                        yield _error_kind(status), friendly_error(status, str(err.get("message")))
                         return
                     if chunk.get("usage"):
                         yield "usage", chunk["usage"]
@@ -174,6 +182,9 @@ class Gemini:
                                 slot["arguments"] += args if isinstance(args, str) else json.dumps(args)
                         if choice.get("finish_reason"):
                             finish = choice["finish_reason"]
+        except httpx.ReadTimeout:
+            yield "unavailable", f"{model} did not answer within {self._client.timeout.read:.0f} s."
+            return
         except httpx.HTTPError as e:
             yield "error", f"Cannot connect to Gemini: {e}"
             return
@@ -211,6 +222,19 @@ class Gemini:
         if sources:
             text += "\n\nSources: " + "; ".join(f"{s['title']} <{s['url']}>" for s in sources[:8])
         return text or "No web results.", sources
+
+
+def drop_signatures(messages: list[dict]) -> None:
+    """Before another model continues a turn: a thought signature is only valid for the model that wrote it, so the
+    tool calls so far get the documented placeholder."""
+    for m in messages:
+        for tc in m.get("tool_calls") or []:
+            if tc.get("extra_content"):
+                tc["extra_content"] = {"google": {"thought_signature": SKIP_SIGNATURE}}
+
+
+def _error_kind(status: int) -> str:
+    return "unavailable" if status in UNAVAILABLE_STATUSES else "error"
 
 
 def _signature(extra: dict | None) -> str | None:
