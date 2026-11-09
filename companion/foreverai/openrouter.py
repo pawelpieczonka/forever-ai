@@ -45,6 +45,7 @@ class ToolCall:
     id: str
     name: str
     arguments: str
+    extra: dict | None = None  # provider data that must go back with the call (Gemini: thought signature)
 
     def args(self) -> dict:
         try:

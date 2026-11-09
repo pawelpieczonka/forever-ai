@@ -254,7 +254,8 @@ def test_mcp_server_protocol():
     assert init["result"]["capabilities"] == {"tools": {}}
     names = [t["name"] for t in srv.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]]
     assert names == ["search_knowledge_base", "propose_addon_change", "save_memory", "delete_memory", "fetch_url",
-                     "mark_on_map", "addon_options", "propose_quest_abandon", "propose_vendor_action"]
+                     "mark_on_map", "addon_options", "propose_quest_abandon", "propose_vendor_action",
+                     "search_auction_house"]
     res = srv.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                       "params": {"name": "addon_options", "arguments": {"addon": "Questie"}}})
     assert res["result"] == {"content": [{"type": "text", "text": "ok addon_options"}], "isError": False}

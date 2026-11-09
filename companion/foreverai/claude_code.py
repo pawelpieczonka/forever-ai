@@ -32,7 +32,7 @@ DEFAULT_EFFORT = "high"
 MCP_TOOLS = ["mcp__foreverai__search_knowledge_base", "mcp__foreverai__propose_addon_change",
              "mcp__foreverai__save_memory", "mcp__foreverai__delete_memory", "mcp__foreverai__fetch_url",
              "mcp__foreverai__mark_on_map", "mcp__foreverai__addon_options", "mcp__foreverai__propose_quest_abandon",
-             "mcp__foreverai__propose_vendor_action"]
+             "mcp__foreverai__propose_vendor_action", "mcp__foreverai__search_auction_house"]
 TIMEOUT_S = 300
 
 
@@ -247,7 +247,8 @@ def tool_phase(name: str) -> str | None:
                        ("fetch_url", "Reading page…"), ("mark_on_map", "Marking the map…"),
                        ("save_memory", "Saving to memory…"), ("delete_memory", "Updating memory…"),
                        ("addon_options", "Checking add-on options…"), ("propose_quest_abandon", "Preparing quest abandon…"),
-                       ("propose_vendor_action", "Preparing vendor list…")):
+                       ("propose_vendor_action", "Preparing vendor list…"),
+                       ("search_auction_house", "Searching the auction house…")):
         if key in name:
             return phase
     if "web" in name.lower():

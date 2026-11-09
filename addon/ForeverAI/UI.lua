@@ -108,7 +108,7 @@ local function Input(parent, w, placeholder)
   e:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
   e:SetScript("OnEditFocusGained", function() holder:SetBackdropBorderColor(unpack(P.accent)) end)
   e:SetScript("OnEditFocusLost", function() holder:SetBackdropBorderColor(unpack(P.edge)) end)
-  holder.edit = e
+  holder.edit, holder.hint = e, hint
   return holder
 end
 
@@ -350,6 +350,7 @@ function UI.UpdateAnswer(data)
     ns.RecordEntry({ k = "a", t = data.text or "", links = data.links, meta = metaText ~= "" and metaText or nil })
     for _, a in ipairs(data.actions or {}) do UI.ActionCard(a) end
     if data.marks and #data.marks > 0 then UI.MarksCard(data.marks) end
+    if type(data.auction) == "table" and #data.auction > 0 then UI.AuctionCard(data.auction) end
     currentAnswer = nil
   else
     e.body = ns.Links.Linkify(data.text or "", nil)
@@ -492,17 +493,35 @@ function UI.MarksCard(marks)
   relayout()
 end
 
+-- items the answer recommends from the auction search: one click shows them in Auctionator's Shopping tab
+function UI.AuctionCard(items)
+  local lines, names = {}, {}
+  for i, it in ipairs(items) do
+    lines[#lines + 1] = string.format("• %s  |cffffd100%s|r", esc(it.name or "?"), esc(it.price or ""))
+    names[i] = it.name
+  end
+  card("|cffffd27aAuction house|r |cff6a7380(prices from the last Auctionator scan)|r\n" .. table.concat(lines, "\n"),
+    { 0.95, 0.8, 0.3, 0.7 }, {
+    { "Search on the AH", 130, function(self)
+      local ok, err = ns.Auction.ShowInAuctionator(names)
+      if ok then self:Done("|cff5dff9dShown in Auctionator (Shopping tab).|r") else UI.Notice(err, "warn") end
+    end, "primary" },
+    { "Dismiss", 80, function(self) self:Done("|cff8a93a0Dismissed.|r") end },
+  })
+  relayout()
+end
+
 function UI.SuggestClaude(claude)
   if not chat then return end
   local text = "|cffe58b6aClaude Code detected|r" .. (claude and claude.subscription and (" |cff9aa3ad(plan " .. esc(claude.subscription) .. ")|r") or "") ..
-    "\nUse your Claude subscription instead of OpenRouter (no per-token cost)."
+    "\nUse your Claude subscription instead of an API key (no per-token cost)."
   card(text, P.claude, {
     { "Use Claude Code", 140, function(self)
       self:Done("Switching…")
       ns.SendSetting("set_provider", "claude_code", "Switching to Claude Code…")
     end, "primary" },
-    { "Keep OpenRouter", 130, function(self)
-      self:Done("Keeping OpenRouter.")
+    { "Keep current", 110, function(self)
+      self:Done("Keeping the current AI provider.")
       ns.SendSetting("dismiss_claude", true)
     end },
   })
@@ -516,17 +535,21 @@ function UI.UpdateHeader()
   if s.provider == "claude_code" then
     local c = s.claude or {}
     pill:SetText("|cffe58b6aClaude|r  " .. esc((tostring(c.model or "?"):gsub("^claude%-", ""):gsub("%-", " "))) .. "  ·  " .. esc(ns.EffortName(c.effort)))
+  elseif s.provider == "gemini" then
+    pill:SetText("|cff8ab4f8Gemini|r  " .. esc((tostring((s.gemini or {}).model or "?"):gsub("^gemini%-", ""))))
   else
     local model = s.model and esc((s.model:gsub("^[^/]+/", ""))) or "OpenRouter"
     pill:SetText("|cff7fd6ffOpenRouter|r  " .. model)
   end
   local left = ns.Transport.InboxLeft()
   local parts = {}
-  if s.provider ~= "claude_code" and s.balance then
+  if (s.provider == nil or s.provider == "openrouter") and s.balance then
     local low = s.lowBalance and s.balance < s.lowBalance
     parts[#parts + 1] = string.format("%s$%.2f|r", low and "|cffff5555" or "|cff5dff9d", s.balance)
   elseif s.provider == "claude_code" then
     parts[#parts + 1] = "subscription"
+  elseif s.provider == "gemini" then
+    parts[#parts + 1] = "Gemini API"
   end
   if s.searchMode then parts[#parts + 1] = "web search: " .. ({ auto = "auto", always = "always", never = "off" })[s.searchMode] end
   if left < 15 then parts[#parts + 1] = "|cffffaa44/reload needed soon|r" end
@@ -653,15 +676,42 @@ end
 
 ------------------------------------------------------------------------ settings panel
 local S = {}
+local PROVIDERS = { openrouter = "OpenRouter", gemini = "Google Gemini", claude_code = "Claude Code" }
+
+local function hasKey(s, provider)
+  if provider == "gemini" then return (s.gemini or {}).hasKey == true end
+  return s.keyMask ~= nil and s.keyMask ~= "(none)"
+end
+
+-- a provider with a key (or Claude Code) is switched to; one without a key first shows where to enter it
+local function pickProvider(provider)
+  local s = ns.db.status or {}
+  if provider == "claude_code" or hasKey(s, provider) then
+    S.view = nil
+    ns.SendSetting("set_provider", provider, "Switching to " .. PROVIDERS[provider] .. "…")
+  else
+    S.view = provider
+    UI.Notice("Enter your " .. PROVIDERS[provider] .. " key below.", "warn")
+  end
+  UI.RefreshSettings()
+end
+
 function UI.RefreshSettings()
   if not S.built then return end
   local s = ns.db.status or {}
-  local claude = s.claude or {}
-  local isClaude = s.provider == "claude_code"
-  S.provOR:SetActive(not isClaude)
+  local claude, gem = s.claude or {}, s.gemini or {}
+  if S.view and (S.view == s.provider or hasKey(s, S.view)) then S.view = nil end
+  local view = S.view or s.provider or "openrouter" -- the provider shown: the active one, or one waiting for its key
+  local pending = S.view ~= nil
+  local isClaude, isGemini = view == "claude_code", view == "gemini"
+  S.provOR:SetActive(view == "openrouter")
+  S.provGM:SetActive(isGemini)
   S.provCC:SetActive(isClaude)
   S.provCC:SetUsable(claude.loggedIn == true or isClaude)
-  if claude.detected then
+  if isGemini then
+    S.provInfo:SetText(gem.hasKey and ("Google Gemini API · key " .. esc(gem.keyMask or "?"))
+      or "Google Gemini: paste an API key from aistudio.google.com/apikey below.")
+  elseif claude.detected then
     S.provInfo:SetText(string.format("Claude Code %s — %s%s", esc(claude.version or ""), claude.loggedIn and "signed in" or "|cffffaa44not signed in (run claude)|r",
       claude.subscription and (", plan " .. esc(claude.subscription)) or ""))
   else
@@ -672,6 +722,9 @@ function UI.RefreshSettings()
   if isClaude then
     for _, m in ipairs(claude.models or {}) do models[#models + 1] = { id = m.id, label = m.name } end
     current = claude.model
+  elseif isGemini then
+    for _, m in ipairs(gem.models or {}) do models[#models + 1] = { id = m.id, label = m.name or m.id } end
+    current = gem.model
   else
     for _, m in ipairs(s.models or {}) do
       local price = (m["in"] and m.out) and string.format("  $%.2f/%.2f", m["in"], m.out) or ""
@@ -692,9 +745,15 @@ function UI.RefreshSettings()
   end
   for _, b in ipairs(S.search) do b:SetActive(b.mode == s.searchMode) end
   for _, b in ipairs(S.effort) do b:SetActive(isClaude and b.effort == claude.effort) end
-  S.keyInfo:SetText("current key: " .. esc(s.keyMask or "?") .. (s.balance and string.format("   ·   balance $%.2f", s.balance) or ""))
+  if isGemini then
+    S.keyInfo:SetText("current key: " .. esc(gem.keyMask or "(none)"))
+  else
+    S.keyInfo:SetText("current key: " .. esc(s.keyMask or "?") .. (s.balance and string.format("   ·   balance $%.2f", s.balance) or ""))
+  end
+  S.kin.hint:SetText(isGemini and "AIza…" or "sk-or-…")
+  S.cin.hint:SetText(isGemini and "e.g. gemini-3.8-flash" or "e.g. openai/gpt-6-luna")
   for _, b in ipairs(S.fonts) do b:SetActive(b.size == ns.db.fontSize) end
-  S.Layout(isClaude, #models)
+  S.Layout(view, #models, pending)
 end
 
 local function buildSettings(p)
@@ -717,10 +776,12 @@ local function buildSettings(p)
   head("AI provider")
   local prov = CreateFrame("Frame", nil, c)
   prov:SetSize(400, 24)
-  S.provOR = Btn(prov, "OpenRouter", 120, 22, function() ns.SendSetting("set_provider", "openrouter", "Switching to OpenRouter…") end)
+  S.provOR = Btn(prov, "OpenRouter", 100, 22, function() pickProvider("openrouter") end)
   S.provOR:SetPoint("LEFT")
-  S.provCC = Btn(prov, "Claude Code (subscription)", 190, 22, function() ns.SendSetting("set_provider", "claude_code", "Switching to Claude Code…") end)
-  S.provCC:SetPoint("LEFT", S.provOR, "RIGHT", 6, 0)
+  S.provGM = Btn(prov, "Gemini", 80, 22, function() pickProvider("gemini") end)
+  S.provGM:SetPoint("LEFT", S.provOR, "RIGHT", 6, 0)
+  S.provCC = Btn(prov, "Claude Code (subscription)", 190, 22, function() pickProvider("claude_code") end)
+  S.provCC:SetPoint("LEFT", S.provGM, "RIGHT", 6, 0)
   row(prov, 26)
   S.provInfo = label(c, "", F.small)
   row(S.provInfo, 18)
@@ -754,6 +815,7 @@ local function buildSettings(p)
   local custom = CreateFrame("Frame", nil, c)
   custom:SetSize(400, 26)
   local cin = Input(custom, 280, "e.g. openai/gpt-6-luna")
+  S.cin = cin
   cin:SetPoint("LEFT")
   local cset = Btn(custom, "Set", 80, 24, function()
     local id = cin.edit:GetText():gsub("%s", "")
@@ -767,12 +829,19 @@ local function buildSettings(p)
   keyRow:SetSize(400, 26)
   local kin = Input(keyRow, 280, "sk-or-…")
   kin:SetPoint("LEFT")
+  S.kin = kin
   local kset = Btn(keyRow, "Save", 80, 24, function()
     local key = kin.edit:GetText():gsub("%s", "")
-    if not key:match("^sk%-or%-") then UI.Notice("The key should start with sk-or-.", "warn") return end
+    local gemini = (S.view or (ns.db.status or {}).provider) == "gemini"
+    if gemini then
+      if #key < 20 then UI.Notice("Paste the whole Gemini API key.", "warn") return end
+    elseif not key:match("^sk%-or%-") then
+      UI.Notice("The key should start with sk-or-.", "warn")
+      return
+    end
     kin.edit:SetText("")
     kin.edit:ClearFocus()
-    ns.SendSetting("set_api_key", key, "Verifying key…")
+    ns.SendSetting(gemini and "set_gemini_key" or "set_api_key", key, "Verifying key…")
   end, "primary")
   kset:SetPoint("LEFT", kin, "RIGHT", 6, 0)
   S.keyRow = row(keyRow, 28)
@@ -842,13 +911,18 @@ local function buildSettings(p)
   local info = label(c, "Stored only on this computer by the ForeverAI app.", F.small)
   row(info, 30)
 
-  function S.Layout(isClaude, nModels)
+  function S.Layout(view, nModels, pending)
+    local isClaude, isGemini = view == "claude_code", view == "gemini"
     local hidden = {
       [S.effortHead] = not isClaude, [S.effortRow] = not isClaude,
-      [S.customHead] = isClaude, [S.customRow] = isClaude,
+      [S.customHead] = isClaude or pending, [S.customRow] = isClaude or pending,
       [S.keyHead] = isClaude, [S.keyRow] = isClaude, [S.keyInfoRow] = isClaude,
+      [S.modelHead] = pending, [S.grid] = pending,
     }
-    S.modelHead:SetText(isClaude and "Claude model" or "OpenRouter model (price per 1M tokens: in / out)")
+    S.modelHead:SetText(isClaude and "Claude model" or isGemini and "Gemini model"
+      or "OpenRouter model (price per 1M tokens: in / out)")
+    S.customHead:SetText(isGemini and "Other Gemini model (ID)" or "Other OpenRouter model (ID)")
+    S.keyHead:SetText(isGemini and "Google Gemini API key" or "OpenRouter key")
     local width = c:GetWidth()
     local y = 0
     for _, r in ipairs(rows) do

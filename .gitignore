@@ -10,16 +10,17 @@ venv/
 *.egg-info/
 .pytest_cache/
 
-# Build output (release/ForeverAI is the prebuilt app and is committed)
+# Build output: the apps are published as GitHub Releases (.github/workflows/release.yml), not committed
 build/
 dist/
+release/
 
 # Local data: knowledge base, memory, conversations, logs
 companion/data/
 *.sqlite
 *.sqlite-journal
 *.log
-!release/ForeverAI/_internal/seed/kb.sqlite
+!seed/kb.sqlite
 
 # Development only
 docs/superpowers/

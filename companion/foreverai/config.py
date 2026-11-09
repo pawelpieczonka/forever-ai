@@ -11,6 +11,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from .gemini import DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
 from .osutil import WINDOWS, ci_join
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -51,24 +52,42 @@ def env_path() -> Path:
     return (REPO_ROOT / ".env") if dev_mode() else data_dir() / ".env"
 
 
-def read_api_key() -> str | None:
+KEY_NAMES = {"openrouter": "OPENROUTER_API_KEY", "gemini": "GEMINI_API_KEY"}
+_ENV_FALLBACK = {"gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
+
+
+def read_key(provider: str) -> str | None:
+    """The API key of ``provider`` (openrouter | gemini): from .env, else from the environment."""
+    name = KEY_NAMES[provider]
     p = env_path()
     if p.exists():
-        key = (dotenv_values(p).get("OPENROUTER_API_KEY") or "").strip()
+        key = (dotenv_values(p).get(name) or "").strip()
         if key:
             return key
-    return os.environ.get("OPENROUTER_API_KEY") or None
+    for var in _ENV_FALLBACK.get(provider, (name,)):
+        if os.environ.get(var):
+            return os.environ[var].strip()
+    return None
 
 
-def write_api_key(key: str) -> None:
-    """Replace OPENROUTER_API_KEY in .env, keeping other lines."""
+def write_key(provider: str, key: str) -> None:
+    """Replace the provider's key in .env, keeping other lines."""
+    name = KEY_NAMES[provider]
     p = env_path()
     lines = p.read_text(encoding="utf-8").splitlines() if p.exists() else []
-    lines = [ln for ln in lines if not ln.strip().startswith("OPENROUTER_API_KEY=")]
-    lines.insert(0, f"OPENROUTER_API_KEY={key.strip()}")
+    lines = [ln for ln in lines if not ln.strip().startswith(f"{name}=")]
+    lines.insert(0, f"{name}={key.strip()}")
     tmp = p.with_suffix(".tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     os.replace(tmp, p)
+
+
+def read_api_key() -> str | None:
+    return read_key("openrouter")
+
+
+def write_api_key(key: str) -> None:
+    write_key("openrouter", key)
 
 
 def mask_key(key: str | None) -> str:
@@ -87,7 +106,8 @@ class Settings:
     pool_size: int = 1000
     game_dir: str = ""
     max_answer_tokens: int = 1800
-    provider: str = "openrouter"  # openrouter | claude_code
+    provider: str = "openrouter"  # openrouter | claude_code | gemini
+    gemini_model: str = GEMINI_DEFAULT_MODEL
     claude_model: str = "claude-haiku-5-5"
     claude_effort: str = "high"
     claude_suggest_dismissed: bool = False
@@ -134,6 +154,19 @@ class SettingsStore:
                 setattr(self.settings, k, v)
         self.save()
         return self.settings
+
+
+def choose_provider(settings: Settings, claude_info: dict | None) -> str | None:
+    """The AI provider to use at start: the chosen one while it still works, else the signed-in Claude Code, else a
+    provider with a saved key; None when nothing is available (the app then asks for a key)."""
+    claude_ok = bool(claude_info and claude_info.get("loggedIn"))
+    usable = {"claude_code": claude_ok, "openrouter": bool(read_key("openrouter")), "gemini": bool(read_key("gemini"))}
+    if usable.get(settings.provider):
+        return settings.provider
+    for provider in ("claude_code", "openrouter", "gemini"):
+        if usable[provider]:
+            return provider
+    return None
 
 
 def detect_game_dir() -> Path | None:

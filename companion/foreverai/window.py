@@ -1,5 +1,6 @@
 """The ForeverAI window: shows that the app is running, what it is connected to, the knowledge base state with an
-"Update now" button, and a short English activity log. Closing the window quits the app."""
+"Update now" button, and a short English activity log. It asks for an OpenRouter or Google Gemini key when Claude
+Code is not available. Closing the window quits the app."""
 
 from __future__ import annotations
 
@@ -142,7 +143,11 @@ class AppWindow:
         bottom.pack(fill="x", padx=16, pady=(0, 14))
         ttk.Button(bottom, text="Open data folder", command=lambda: open_path(config.data_dir())).pack(side="left")
         ttk.Button(bottom, text="Desktop shortcut", command=self._shortcut).pack(side="left", padx=8)
+        ttk.Button(bottom, text="AI key…", command=self.ask_key).pack(side="left")
         ttk.Button(bottom, text="Quit", command=self.quit).pack(side="right")
+        self.update_dl = ttk.Button(bottom, text="Download update", command=self._download_update)
+        self._key_dialog = None
+        self._key_asked = False
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
 
     # ---------------------------------------------------------------- actions
@@ -165,6 +170,19 @@ class AppWindow:
             logging.getLogger("foreverai.activity").info("Desktop shortcut created")
         else:
             messagebox.showwarning("ForeverAI", "Could not create the desktop shortcut.", parent=self.root)
+
+    def ask_key(self) -> None:
+        if not self.comp:
+            return
+        if self._key_dialog and self._key_dialog.alive():
+            self._key_dialog.top.lift()
+            return
+        self._key_dialog = KeyDialog(self.root, self.comp)
+
+    def _download_update(self) -> None:
+        rel = self.comp.update if self.comp else None
+        if rel:
+            open_path(rel.get("url"))
 
     def quit(self) -> None:
         try:
@@ -200,7 +218,21 @@ class AppWindow:
         if c:
             self.state.configure(text="● Running", fg=ACCENT)
             s = c.store.settings
-            if s.provider == "claude_code":
+            if c.needs_key and (config.read_key("openrouter") or config.read_key("gemini")):
+                c.needs_key = False  # a key was entered in the game
+            if c.needs_key and not self._key_asked:
+                self._key_asked = True
+                self.ask_key()
+            if c.update and not self.update_dl.winfo_ismapped():
+                self.update_dl.configure(text=f"Download update {c.update['version']}")
+                self.update_dl.pack(side="right", padx=8)
+            if not c.claude_checked:
+                ai = "Checking Claude Code…"
+            elif c.needs_key:
+                ai = "No AI connected — click AI key…"
+            elif s.provider == "gemini":
+                ai = f"Google Gemini · {s.gemini_model}"
+            elif s.provider == "claude_code":
                 info = claude_code.detect_cached() if claude_code._detect_cache else None
                 names = {m["id"]: m["name"] for m in claude_code.CLAUDE_MODELS}
                 if info and info.get("loggedIn"):
@@ -213,7 +245,7 @@ class AppWindow:
             else:
                 bal = c.service._balance[0] if c.service._balance else None
                 ai = f"OpenRouter · {s.model}" + (f" · balance ${bal:.2f}" if bal is not None else "")
-            self.rows["ai"].configure(text=ai)
+            self.rows["ai"].configure(text=ai, fg=WARN if c.needs_key else FG)
             import time as _t
             if not getattr(self, "_kb_at", 0) or _t.time() - self._kb_at > 5 or c.syncing != getattr(self, "_kb_sync", None):
                 try:
@@ -231,3 +263,124 @@ class AppWindow:
     def run(self) -> None:
         self.root.after(200, self._refresh)
         self.root.mainloop()
+
+
+class KeyDialog:
+    """Connect an AI: Claude Code is checked first; without it the player enters an OpenRouter or a Google Gemini
+    key, which is checked with the provider before it is saved."""
+
+    LINKS = {"openrouter": "https://openrouter.ai/keys", "gemini": "https://aistudio.google.com/apikey"}
+
+    def __init__(self, root: tk.Tk, comp):
+        from .gemini import KEY_URL
+        self.LINKS = dict(self.LINKS, gemini=KEY_URL)
+        self.comp = comp
+        self.results: queue.Queue = queue.Queue()
+        top = self.top = tk.Toplevel(root, bg=BG)
+        top.title("ForeverAI — connect an AI")
+        top.transient(root)
+        top.resizable(False, False)
+        pad = {"padx": 18}
+        tk.Label(top, text="Connect an AI", bg=BG, fg=ACCENT, font=(UI, 13, "bold"), anchor="w").pack(
+            fill="x", pady=(14, 4), **pad)
+        self.claude_line = tk.Label(top, text=self._claude_text(), bg=BG, fg=DIM, font=(UI, 9), anchor="w",
+                                    justify="left", wraplength=420)
+        self.claude_line.pack(fill="x", **pad)
+        tk.Label(top, text="Use an API key instead:", bg=BG, fg=FG, font=(UI, 10), anchor="w").pack(
+            fill="x", pady=(12, 4), **pad)
+        self.provider = tk.StringVar(value="gemini" if comp.store.settings.provider == "gemini" else "openrouter")
+        for value, text in (("openrouter", "OpenRouter — many models, pay per use"),
+                            ("gemini", "Google Gemini — key from Google AI Studio")):
+            row = tk.Frame(top, bg=BG)
+            row.pack(fill="x", **pad)
+            tk.Radiobutton(row, text=text, value=value, variable=self.provider, bg=BG, fg=FG, selectcolor=PANEL,
+                           activebackground=BG, activeforeground=FG, font=(UI, 9), anchor="w",
+                           highlightthickness=0).pack(side="left")
+            link = tk.Label(row, text="Get a key ↗", bg=BG, fg=ACCENT, font=(UI, 9, "underline"), cursor="hand2")
+            link.pack(side="right")
+            link.bind("<Button-1>", lambda _e, v=value: open_path(self.LINKS[v]))
+        self.entry = tk.Entry(top, show="•", width=52, bg=PANEL, fg=FG, insertbackground=FG, relief="flat",
+                              font=(MONO, 10))
+        self.entry.pack(fill="x", pady=(8, 2), ipady=4, **pad)
+        self.entry.bind("<Return>", lambda _e: self._save())
+        self.msg = tk.Label(top, text="", bg=BG, fg=DIM, font=(UI, 9), anchor="w", justify="left", wraplength=420)
+        self.msg.pack(fill="x", pady=(4, 0), **pad)
+        buttons = tk.Frame(top, bg=BG)
+        buttons.pack(fill="x", pady=(10, 16), **pad)
+        self.save_btn = ttk.Button(buttons, text="Save key", command=self._save)
+        self.save_btn.pack(side="left")
+        self.retry_btn = ttk.Button(buttons, text="Check Claude Code again", command=self._retry_claude)
+        self.retry_btn.pack(side="left", padx=8)
+        ttk.Button(buttons, text="Later", command=self.close).pack(side="right")
+        top.protocol("WM_DELETE_WINDOW", self.close)
+        self.entry.focus_set()
+        top.after(100, self._poll)
+
+    def alive(self) -> bool:
+        try:
+            return bool(self.top.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def close(self) -> None:
+        if self.alive():
+            self.top.destroy()
+
+    def _claude_text(self) -> str:
+        info = claude_code._detect_cache[0] if claude_code._detect_cache else None
+        if info and info.get("loggedIn"):
+            return f"Claude Code {info.get('version') or ''} is signed in — no key is needed."
+        if info:
+            return ("Claude Code is installed but not signed in. Run claude in a terminal, sign in, then click "
+                    "\"Check Claude Code again\".")
+        return "Claude Code was not found. With a Claude subscription, install Claude Code and sign in to use it."
+
+    def _busy(self, text: str) -> None:
+        self.msg.configure(text=text, fg=DIM)
+        self.save_btn.state(["disabled"])
+        self.retry_btn.state(["disabled"])
+
+    def _save(self) -> None:
+        key, provider = self.entry.get().strip(), self.provider.get()
+        if not key:
+            self.msg.configure(text="Paste the key first.", fg=WARN)
+            return
+        self._busy("Checking the key…")
+
+        def run():
+            ok, text = self.comp.service.save_key(provider, key, use=True)
+            self.results.put(("key", ok, text))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _retry_claude(self) -> None:
+        self._busy("Checking Claude Code…")
+
+        def run():
+            provider = self.comp.check_providers()
+            self.results.put(("claude", provider is not None, provider))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _poll(self) -> None:
+        if not self.alive():
+            return
+        try:
+            kind, ok, value = self.results.get_nowait()
+        except queue.Empty:
+            self.top.after(100, self._poll)
+            return
+        self.save_btn.state(["!disabled"])
+        self.retry_btn.state(["!disabled"])
+        self.claude_line.configure(text=self._claude_text())
+        if kind == "key":
+            self.msg.configure(text=value, fg=ACCENT if ok else WARN)
+            if ok:
+                self.comp.needs_key = False
+                self.entry.delete(0, "end")
+                self.top.after(1200, self.close)
+        elif ok:
+            from .service import PROVIDER_NAMES
+            self.msg.configure(text=f"Using {PROVIDER_NAMES.get(value, value)}.", fg=ACCENT)
+            self.top.after(1200, self.close)
+        else:
+            self.msg.configure(text="Claude Code is still not available. Enter a key instead.", fg=WARN)
+        self.top.after(100, self._poll)
