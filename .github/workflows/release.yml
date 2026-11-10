@@ -25,14 +25,16 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install packages
-        run: python -m pip install -r companion/requirements.txt -c companion/constraints.txt
+        run: |
+          python -m pip install -r companion/requirements.txt -c companion/constraints.txt
+          sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1
+      - name: Lua syntax (the add-on)
+        run: for f in addon/ForeverAI/*.lua; do luac5.1 -p "$f"; done
       - name: Tests
         working-directory: companion
+        # lua5.1 is installed first: the auction test runs the add-on's Lua with it, and the simulator test checks the
+        # add-on's globals with luac5.1
         run: python -m pytest -q
-      - name: Lua syntax (the add-on)
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1
-          for f in addon/ForeverAI/*.lua; do luac5.1 -p "$f"; done
 
   version:
     # a pull request that changes the apps raises the version by one step, so merging it publishes a release
