@@ -30,6 +30,36 @@ def test_auction_request_maps_filters():
         assert req is None and err.startswith("Rejected")
 
 
+def test_auction_request_exact_items():
+    req, err = auction_request({"items": ["Linen Cloth", "[Wool Cloth]", 2589, "2589", "Silk Cloth (item 4306)", "",
+                                          True, {"id": 2592}, "linen cloth"], "query": "ignored", "slot": "head"})
+    assert err is None
+    # duplicates (also by case) dropped, filters ignored, older prices allowed by default
+    assert req == {"items": [{"name": "Linen Cloth"}, {"name": "Wool Cloth"}, {"id": 2589}, {"id": 4306}, {"id": 2592}],
+                   "maxAgeDays": 30}
+    assert auction_request({"items": "Linen Cloth", "max_age_days": 3})[0] == {"items": [{"name": "Linen Cloth"}],
+                                                                                "maxAgeDays": 3}
+    for bad, why in (({"items": [""]}, "item names"), ({"items": list(range(1, 42))}, "at most 40"),
+                     ({"items": {"a": 1}}, "must be a list")):
+        req, err = auction_request(bad)
+        assert req is None and why in err
+
+
+def test_format_auction_exact_items():
+    text = format_auction({"source": "Auctionator", "realm": "Forever", "lastScan": "1 h ago (full scan)", "exact": True,
+                           "maxAgeDays": 30, "ahOpen": True,
+                           "items": [{"id": 2589, "name": "Linen Cloth", "price": "12s 0c", "seen": "yesterday",
+                                      "available": 40}],
+                           "missing": [{"id": 2592, "name": "Wool Cloth", "why": "no auction price seen in the last 30 days"},
+                                       {"name": "Moon Dust", "why": "unknown item name (not in the game's item cache): "
+                                                                    "give the item id"}]})
+    assert "Prices of the requested items" in text and "last 30 days" in text
+    assert "- [Linen Cloth] (item 2589) — 12s 0c | seen yesterday, 40 available" in text
+    assert "- [Wool Cloth] (item 2592): no auction price seen in the last 30 days" in text
+    assert "- [Moon Dust]: unknown item name" in text and "window is open" in text
+    assert "No prices found." in format_auction({"exact": True, "items": []})
+
+
 def test_format_auction():
     text = format_auction({"source": "Auctionator", "realm": "Forever-EU", "lastScan": "2 h ago (full scan)",
                            "dbItems": 1200, "matched": 3, "sort": "upgrade", "upgradeMethod": "Pawn (the player's scales)",
@@ -72,6 +102,35 @@ def test_search_tool_round_trip_and_card(env):  # noqa: F811
     assert {"name": "Gleaming Sword", "kind": "item", "id": 2042} in svc.links(answer, ctx)
 
 
+def test_exact_items_tool_round_trip_and_shopping_card(env):  # noqa: F811
+    """A shopping list: one call with the exact items, and the "Search on the AH" card offers the ones the answer names."""
+    from foreverai.service import InboxWriter, TurnContext
+    svc, addons, _ = env
+    writer = InboxWriter(addons, "S", 1, 20, 4)
+    writer.send({"kind": "answer", "final": False, "msgId": 4, "text": "", "phase": "x"})
+    ctx = TurnContext({"msgId": 4}, writer, {}, threading.Event(), [])
+    out = {}
+    t = threading.Thread(target=lambda: out.update(r=svc.run_tool(ctx, "search_auction_house", {
+        "items": ["Linen Cloth", "2592", "Coarse Thread"]})))
+    t.start()
+    deadline, req = time.time() + 5, None
+    while time.time() < deadline and not req:
+        req = (_read_inbox(addons, 1).get("requests") or [None])[0]
+        time.sleep(0.02)
+    assert req["op"] == "auction_search" and req["items"] == [{"name": "Linen Cloth"}, {"id": 2592}, {"name": "Coarse Thread"}]
+    _send(svc, {"type": "game_result", "id": req["id"], "result": {
+        "source": "Auctionator", "exact": True, "maxAgeDays": 30, "matched": 2, "ahOpen": True,
+        "items": [{"id": 2589, "name": "Linen Cloth", "price": "12s 0c", "seen": "today"},
+                  {"id": 2592, "name": "Wool Cloth", "price": "35s 0c", "seen": "yesterday"}],
+        "missing": [{"name": "Coarse Thread", "why": "unknown item name (not in the game's item cache): give the item id"}]}})
+    t.join(5)
+    text, err = out["r"]
+    assert not err and "[Linen Cloth] (item 2589) — 12s 0c" in text and "[Coarse Thread]: unknown item name" in text
+    answer = "Buy 20 **[Linen Cloth]** and 5 [Wool Cloth]; get [Coarse Thread] from a trade goods vendor."
+    assert ctx.auction_card(answer) == [{"id": 2589, "name": "Linen Cloth", "price": "12s 0c"},
+                                        {"id": 2592, "name": "Wool Cloth", "price": "35s 0c"}]
+
+
 LUA_HARNESS = r"""
 local addonDir = arg[1]
 local now = 1000000
@@ -101,8 +160,14 @@ local items = {
   [106] = { "Slow Sword", 2, 7, "INVTYPE_WEAPON", 21, 18 },      -- not cached yet, arrives later
 }
 local cached = { [100] = true, [101] = true, [102] = true, [103] = true, [104] = true, [105] = true }
+items[107] = { "Linen Cloth", 7, 5, "", 5, 0 }  -- not cached yet: its name comes from the server
+items[108] = { "Wool Cloth", 7, 5, "", 15, 0 }  -- no price in the data
+local instantNames = { ["Gleaming Sword"] = 100, ["Old Sword"] = 105, ["Wool Cloth"] = 108 } -- names the client resolves
 C_Item = {
-  GetItemInfoInstant = function(id) local i = items[id] return id, "Weapon", "Swords", i[4], 0, i[2], i[3] end,
+  GetItemInfoInstant = function(id)
+    if type(id) == "string" then id = instantNames[id] if not id then return nil end end
+    local i = items[id] return id, "Weapon", "Swords", i[4], 0, i[2], i[3]
+  end,
   GetItemInfo = function(id)
     local i = items[id]
     if not cached[id] then return nil end
@@ -114,7 +179,8 @@ C_Item = {
 GetInventoryItemLink = function() return nil end
 local ns = { safe = function(fn, ...) return fn(...) end, stripCodes = function(s) return s end,
   On = function() end }
-ns.Collect = { ItemFacts = function(link, compare)
+ns.Collect = { knownLinks = { ["Cheap Sword"] = "|cffffffff|Hitem:102::::|h[Cheap Sword]|h|r" },
+  ItemFacts = function(link, compare)
   local id = tonumber(link:match("item:(%d+)"))
   local i = items[id]
   return { quality = "uncommon", stats = "DPS +" .. i[5], tooLowLevel = i[6] > 30 or nil,
@@ -126,7 +192,8 @@ AUCTIONATOR_PRICE_DATABASE = { __dbversion = 6, Forever = {
   ["100"] = { m = 450000, h = day(0), a = { [tostring(today)] = 3 } },
   ["101"] = { m = 600000, h = day(1) }, ["102"] = { m = 10000, h = day(2) }, ["103"] = { m = 200000, h = day(0) },
   ["104"] = { m = 2000000, h = day(0) }, ["105"] = { m = 300000, h = day(20) }, ["106"] = { m = 350000, h = day(0) },
-  ["g:100:30"] = { m = 900000, h = day(0) }, ["p:55"] = { m = 1, h = day(0) } } }
+  ["g:100:30"] = { m = 900000, h = day(0) }, ["p:55"] = { m = 1, h = day(0) },
+  ["107"] = { m = 1200, h = day(1), a = { [tostring(today - 1)] = 40 } } } }
 AUCTIONATOR_SAVEDVARS = { TimeOfLastReplicateScan = now - 7200 }
 local chunk = assert(loadfile(addonDir .. "/Auction.lua"))
 chunk("ForeverAI", ns)
@@ -150,6 +217,38 @@ print("META " .. tostring(result.source) .. "|" .. tostring(result.dbItems) .. "
   .. tostring(result.lastScan) .. "|" .. tostring(result.skipped["too high level"]) .. "|" .. tostring(result.notLoaded))
 local ok, why = ns.Auction.ShowInAuctionator({ "Gleaming Sword" })
 print("SHOW " .. tostring(ok) .. "|" .. tostring(why))
+
+-- exact items: ids, names the client knows, a name from the player's bags, a name only the price data's cached items
+-- have, an item whose name must be loaded, one without a price, an unknown name; the price data stays untouched
+local before = 0
+for _ in pairs(AUCTIONATOR_PRICE_DATABASE.Forever) do before = before + 1 end
+local function run(req)
+  local res
+  ns.Auction.Search(req, function(r) res = r end)
+  for _ = 1, 400 do
+    if res then break end
+    frameT = frameT + 0.05
+    for _, f in ipairs(frames) do
+      if f.shown and f.scripts.OnUpdate then f.scripts.OnUpdate(f, 0.016) end
+    end
+    if cached[107] == "soon" and frameT > 20 then cached[107] = true end
+  end
+  return res
+end
+local function show(res)
+  local found, gone = {}, {}
+  for _, it in ipairs(res.items) do found[#found + 1] = it.name .. "=" .. it.price .. "@" .. it.seen .. "#" .. tostring(it.available) end
+  for _, m in ipairs(res.missing or {}) do gone[#gone + 1] = tostring(m.name) .. ":" .. tostring(m.id) .. ":" .. m.why end
+  return table.concat(found, ",") .. " || " .. table.concat(gone, ";")
+end
+local exact = run({ items = { { id = 100 }, { name = "Old Sword" }, { name = "Cheap Sword" }, { name = "Battle Axe" },
+  { id = 107 }, { name = "Wool Cloth" }, { name = "Nothing Like This" } }, maxAgeDays = 30 })
+print("EXACT " .. show(exact))
+print("EXACTMETA " .. tostring(exact.exact) .. "|" .. exact.matched .. "|" .. exact.maxAgeDays .. "|" .. tostring(exact.lastScan))
+print("EXACT7 " .. show(run({ items = { { name = "Old Sword" }, { id = 100 } }, maxAgeDays = 7 })))
+local after = 0
+for _ in pairs(AUCTIONATOR_PRICE_DATABASE.Forever) do after = after + 1 end
+print("UNTOUCHED " .. tostring(before == after) .. "|" .. AUCTIONATOR_PRICE_DATABASE.Forever["100"].m)
 """
 
 
@@ -166,7 +265,28 @@ def test_auction_lua_reads_auctionator_prices(tmp_path):
     assert sorted(i.split("=")[0] for i in items) == ["Cheap Sword", "Gleaming Sword", "Slow Sword"]
     assert "Gleaming Sword=45g 0s 0c@today" in items and "Cheap Sword=1g 0s 0c@2 days ago" in items
     source, db_items, matched, last_scan, too_high, not_loaded = lines["META"].split("|")
-    assert source == "Auctionator" and db_items == "9" and matched == "3" and last_scan == "2 h ago (full scan)"
+    assert source == "Auctionator" and db_items == "10" and matched == "3" and last_scan == "2 h ago (full scan)"
     assert too_high == "1" and not_loaded == "nil"
     assert lines["SHOW"] == "false|Open the auction house first."
     json.dumps(lines)
+
+
+@pytest.mark.skipif(not shutil.which("lua5.1"), reason="needs lua5.1")
+def test_auction_lua_exact_items(tmp_path):
+    """Exact items (a shopping list): ids and names resolved without a search, prices in one pass, names loaded."""
+    script = tmp_path / "harness.lua"
+    script.write_text(LUA_HARNESS)
+    run = subprocess.run(["lua5.1", str(script), str(ADDON)], capture_output=True, text=True, timeout=30)
+    assert run.returncode == 0, run.stderr
+    lines = dict(line.split(" ", 1) for line in run.stdout.strip().splitlines())
+    found, missing = lines["EXACT"].split(" || ")
+    # in the requested order; the gear's cheapest variant; the late name arrives; the bags name the Cheap Sword;
+    # the Battle Axe is found by the names of the priced items the client has cached
+    assert found.split(",") == ["Gleaming Sword=45g 0s 0c@today#3", "Old Sword=30g 0s 0c@20 days ago#nil",
+                                "Cheap Sword=1g 0s 0c@2 days ago#nil", "Battle Axe=20g 0s 0c@today#nil",
+                                "Linen Cloth=12s 0c@yesterday#40"]
+    assert missing.split(";") == ["Wool Cloth:108:no auction price seen in the last 30 days",
+                                  "Nothing Like This:nil:unknown item name (not in the game's item cache): give the item id"]
+    assert lines["EXACTMETA"] == "true|5|30|2 h ago (full scan)"
+    assert lines["EXACT7"] == "Gleaming Sword=45g 0s 0c@today#3 || Old Sword:105:no auction price seen in the last 7 days"
+    assert lines["UNTOUCHED"] == "true|450000"  # ForeverAI only reads Auctionator's data

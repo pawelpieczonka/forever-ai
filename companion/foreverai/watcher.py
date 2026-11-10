@@ -26,7 +26,7 @@ class ScreenshotWatcher(threading.Thread):
         self.folder = Path(folder)
         self.on_frame = on_frame
         self.interval = interval
-        self._stop = threading.Event()
+        self._halt = threading.Event()  # not _stop: threading.Thread has a method of that name (join, is_alive)
         self._seen: dict[str, float] = {}
         self.frames_decoded = 0
         # msg_id -> (image, frame) of the screenshot that carried a question; turned into a JPEG only when the player
@@ -60,7 +60,7 @@ class ScreenshotWatcher(threading.Thread):
         return buf.getvalue()
 
     def stop(self) -> None:
-        self._stop.set()
+        self._halt.set()
 
     def _scan(self) -> list[Path]:
         if not self.folder.exists():
@@ -126,7 +126,7 @@ class ScreenshotWatcher(threading.Thread):
         # first use, and the packaged app reads that code from files a new build or version unpacked over it replaces
         Image.init()
         pending: dict[str, float] = {}
-        while not self._stop.is_set():
+        while not self._halt.is_set():
             for p in self._scan():
                 pending.setdefault(p.name, time.time())
             for name, first in list(pending.items()):
@@ -151,4 +151,4 @@ class ScreenshotWatcher(threading.Thread):
                     log.info("decoded frame from %s", name)
                 else:
                     self._seen[name] = time.time()
-            self._stop.wait(self.interval)
+            self._halt.wait(self.interval)

@@ -151,7 +151,6 @@ class Settings:
     gemini_model: str = GEMINI_DEFAULT_MODEL
     claude_model: str = "claude-haiku-5-5"
     claude_effort: str = "high"
-    claude_suggest_dismissed: bool = False
     shortcut_offered: bool = False
 
 

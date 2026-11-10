@@ -1,7 +1,7 @@
 -- ForeverAI: core (namespace, saved variables, events, conversations, requests)
 local ADDON, ns = ...
 ForeverAI = ns
-ns.version = "0.5.2"
+ns.version = "0.6.0"
 
 BINDING_HEADER_FOREVERAI = "ForeverAI"
 BINDING_NAME_FOREVERAI_TOGGLE = "Show/hide ForeverAI"
@@ -9,7 +9,8 @@ BINDING_NAME_FOREVERAI_ASK_TOOLTIP = "Ask about the object under the cursor"
 
 ns.defaults = {
   sections = { bags = true, spells = true, skills = true, reputations = true, nearby = true, windows = true,
-               addons = true, auras = true, chat = false, talents = true, quests = true },
+               addons = true, auras = true, chat = false, talents = true, quests = true, progress = true,
+               professions = true },
   maxSnapshotKB = 200,
   window = { point = "CENTER", x = 260, y = 40, w = 470, h = 600 },
   button = { show = true, point = "TOPRIGHT", x = -24, y = -250 },
@@ -160,6 +161,7 @@ ns.On("ADDON_LOADED", function(_, name)
   ForeverAIDB.maxSnapshotKB = math.max(ForeverAIDB.maxSnapshotKB or 0, ns.defaults.maxSnapshotKB) -- old limit dropped data
   ForeverAIDB.sections.screen = nil  -- the screen is now chosen per message, next to Send
   ForeverAIDB.block = nil            -- timing test setting, no longer used
+  ForeverAIDB.probe = nil            -- a one-time check of the game's profession API, typed in the chat
   ForeverAICharDB = ForeverAICharDB or {}
   local char = ForeverAICharDB
   char.convs = char.convs or {}
@@ -296,6 +298,10 @@ SlashCmdList.FOREVERAI = function(msg)
   elseif msg == "button" then
     ns.db.button.show = not ns.db.button.show
     ns.Button.Refresh()
+  elseif msg == "progress" then
+    if ns.Progress then ns.Progress.Debug() end
+  elseif msg == "professions" then
+    if ns.Professions then ns.Professions.Debug() end
   elseif msg == "debug" then
     local t = ns.Transport and ns.Transport.timings or {}
     ns.print("session", ns.session, "inbox", ns.Transport and ns.Transport.nextInbox, "/", ns.Transport and ns.Transport.poolSize,
@@ -547,10 +553,9 @@ function ns.OnMessage(data)
     end
     ns.db.status = data.status
     ns.UI.UpdateHeader()
-    if data.status.suggestClaude and not ns.claudeSuggested then
-      ns.claudeSuggested = true
-      ns.UI.SuggestClaude(data.status.claude)
-    end
+  elseif type(data.ai) == "table" then -- the AI in use (chosen in the app window) comes with the first reply
+    for k, v in pairs(data.ai) do ns.db.status[k] = v end
+    ns.UI.UpdateHeader()
   end
   if data.kind == "answer" then
     ns.UI.UpdateAnswer(data)
