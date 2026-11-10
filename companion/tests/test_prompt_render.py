@@ -53,3 +53,14 @@ def test_the_real_snapshot_got_shorter():
     text = render_snapshot(BASE)
     assert len(section(text, "nearby")) < 300
     assert len(text) < 38000  # 42,500 before; the action bars shrink further in the add-on itself
+
+
+def test_profession_tools_in_the_bags_are_named():
+    """A Skinning Knife looks like a weak dagger (and was sold as one); what it is for is a fact, so the data says it."""
+    bags = {"freeSlots": 3, "items": [
+        {"item": "[Skinning Knife]", "id": 7005, "count": 1, "facts": {"stats": "DPS +1.3", "vsEquipped": "DPS -0.8"}},
+        {"item": "[Mining Pick]", "id": 2901, "count": 1}, {"item": "[Linen Cloth]", "id": 2589, "count": 12}]}
+    out = section(render_snapshot({"bags": bags}), "bags")
+    assert '"item":"[Skinning Knife]","id":7005,"count":1,"professionTool":"Skinning"' in out
+    assert '"item":"[Mining Pick]","id":2901,"count":1,"professionTool":"Mining"' in out
+    assert out.count("professionTool") == 2 and bags["items"][0].get("professionTool") is None  # the snapshot stays as it came

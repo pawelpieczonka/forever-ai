@@ -57,6 +57,7 @@ def run_scenario(sc, *, model: str, effort: str, search_mode: str = "never", kb=
     """Ask the scenario's questions in one conversation. Needs FOREVERAI_DATA to point at a scratch folder.
     Returns {"name", "why", "turns": [{"question", "answer", "tools", "did", "secs", "checks"}], "passed", "failed"}."""
     from foreverai import config
+    from foreverai.memory import MemoryStore
     from foreverai.service import Service
     from foreverai.turnlog import TurnLog
 
@@ -65,6 +66,7 @@ def run_scenario(sc, *, model: str, effort: str, search_mode: str = "never", kb=
     store.update(provider="claude_code", claude_model=model, claude_effort=effort, search_mode=search_mode)
     svc = Service(store, kb, data / "AddOns")
     svc.turns = TurnLog(data / "turns" / sc.name)
+    svc.memory = MemoryStore(data / f"memory-{sc.name}.json")  # scenarios run side by side: not one file for all
     svc._balance = (0.0, time.time() + 1e9)  # never ask OpenRouter for the balance
     svc.game_call = lambda ctx, op, args, timeout=45.0: {"error": "not available in this test run"}
     char, conv = f"Evalhunter-{sc.name}", f"eval-{sc.name}"

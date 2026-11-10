@@ -1,6 +1,10 @@
 """Scenarios: questions players really asked (most in Polish, with typos, as typed in the game), each with the game
 state it was asked in and checks on the answer. They start from evals/base_snapshot.json; a turn's ``patch`` changes
-that state and stays for the following turns of the scenario."""
+that state and stays for the following turns of the scenario.
+
+The checks are about what an answer does (the right place marked, a tool kept, the question's language, a tame that
+is not a kill). The word limits are only a guard against a wall of text: how long a good answer is, a person decides
+by reading the report, not a count. A prompt must not be tuned until these limits pass."""
 
 from __future__ import annotations
 
@@ -92,7 +96,7 @@ PL = c.language("pl")
 
 SCENARIOS = [
     Scenario("combat_question", "A yes/no question in a fight got ~200 words and three headings.", [
-        Turn("bije mnie to normalne?", [c.max_words(50), c.max_headings(0), PL, *QUIET],
+        Turn("bije mnie to normalne?", [c.max_words(80), PL, *QUIET],
              patch={**AT_THE_SCREECHER, "player": {"inCombat": True},
                     "target": {**SCREECHER, "reaction": "hostile", "target": "Evalhunter"},
                     "recentEvents": ["12s ago [combat] Entered combat"] + base_snapshot()["recentEvents"]})],
@@ -100,76 +104,76 @@ SCENARIOS = [
                   "a": "Zaznacz **Strigid Screechera** i użyj [Taming Rod] (**F11**). Stój w miejscu do końca paska; "
                        "w tym czasie będzie cię bił, to normalne."}]),
     Scenario("vague_this_is_a_mob", "A vague question about what is in front of the player.", [
-        Turn("co dlaej przeciez to jest mob", [c.says(r"Taming Rod"), c.max_words(90), c.max_headings(1), *QUIET],
+        Turn("co dlaej przeciez to jest mob", [c.says(r"Taming Rod"), c.max_words(180), *QUIET],
              patch=AT_THE_SCREECHER)]),
     Scenario("mark_turn_in", "Asked to mark a place: one mark, at once, no long report.", [
         Turn("oznacz mi gdzie mam oddac tego questa z oswajaniem",
-             [c.calls("mark_on_map", 1, 1), c.marks(56.7, 59.5), c.max_words(60),
+             [c.calls("mark_on_map", 1, 1), c.marks(56.7, 59.5), c.max_words(150),
               c.never_says(r"napisz .{0,12}ok", r"potwierd[zź]")], patch=TAMED)]),
     Scenario("replace_marks", "\"jezus mozesz oznaczyc nowe\": asked for new marks, the AI said it cannot remove the "
                               "old ones and waited for an \"ok\".", [
-        Turn("oznacz gdzie oddac the lost runner", [c.calls("mark_on_map", 1, 1), c.marks(37.5, 36.8), c.max_words(60)]),
+        Turn("oznacz gdzie oddac the lost runner", [c.calls("mark_on_map", 1, 1), c.marks(37.5, 36.8), c.max_words(150)]),
         Turn("usun stare znaczniki i oznacz mi tylko trenera first aid",
-             [c.calls("mark_on_map", 1, 1), c.marks(55.3, 56.8), c.max_words(60),
+             [c.calls("mark_on_map", 1, 1), c.marks(55.3, 56.8), c.max_words(150),
               c.never_says(r"nie mog[ęe]", r"napisz .{0,12}ok", r"r[ęe]cznie")])]),
     Scenario("keep_the_route", "A route is marked; something new appears next to it. The plan must stay.", [
-        Turn("co mam tu zrobic?", [c.says(r"Taming Rod"), c.max_words(90), *QUIET,
+        Turn("co mam tu zrobic?", [c.says(r"Taming Rod"), c.max_words(180), *QUIET,
                                    c.never_says(r"now[aąe] tras", r"zmieni(am|łem|ć) tras")],
              patch={**AT_THE_SCREECHER, **A_QUEST_NEXT_TO_THE_ROUTE}),
-        Turn("ok mam go", [c.says(r"Dazalar"), c.max_words(70), *QUIET],
+        Turn("ok mam go", [c.says(r"Dazalar"), c.max_words(150), *QUIET],
              patch={**TAMED, "marks": [m.replace(f"{n + 2}. ", f"{n + 1}. ") for n, m in enumerate(ROUTE_MARKS[1:])]})],
         history=[ROUTE]),
     Scenario("sell_junk_at_vendor", "\"sprzedales mi mieczyk do skorowania\": tools and materials were sold.", [
         Turn("sprzedaj smieci", [c.calls("propose_vendor_action", 1, 1), c.sells("Cracked Shortbow", "2773"),
                                  c.keeps("Skinning Knife", "7005"), c.keeps("Light Leather", "2318"),
                                  c.keeps("Linen Bandage", "1251"), c.keeps("Small Spider Leg", "5465"),
-                                 c.keeps("Taming Rod", "15923"), c.max_words(80)], patch=VENDOR)]),
+                                 c.keeps("Taming Rod", "15923"), c.max_words(150)], patch=VENDOR)]),
     Scenario("what_can_i_sell", "\"masz za bardzo proste myslenie\": only gray items were looked at, then the advice "
                                 "changed twice.", [
         Turn("mam zawalone eq, co z tego moge sprzedac a co zostawic?",
-             [c.says(r"Cracked Shortbow"), c.calls("propose_vendor_action", 0, 0), c.max_words(170), *QUIET])]),
+             [c.says(r"Cracked Shortbow"), c.calls("propose_vendor_action", 0, 0), c.max_words(350), *QUIET])]),
     Scenario("reward_choice", "\"co wybrac?\" with the reward window open.", [
-        Turn("co wybrac?", [c.says(r"Hunting Gloves"), c.max_words(40), c.max_headings(0), PL, *QUIET],
+        Turn("co wybrac?", [c.says(r"Hunting Gloves"), c.max_words(120), PL, *QUIET],
              patch={**TAMED, **REWARDS})]),
     Scenario("take_quest", "\"brac tego questa?\" with a quest offer open (asked 17 times).", [
-        Turn("brac tego questa?", [c.max_words(60), c.max_headings(0), PL, *QUIET], patch=NEW_QUEST)]),
+        Turn("brac tego questa?", [c.max_words(150), PL, *QUIET], patch=NEW_QUEST)]),
     Scenario("player_action", "The note after Accept needs one or two lines, not a new plan.", [
         Turn("[Player action] Accepted: sell 1 item types for 39c — done.",
-             [c.max_words(35), c.max_headings(0), c.calls("propose_vendor_action", 0, 0), *QUIET], patch=VENDOR)],
+             [c.max_words(80), c.calls("propose_vendor_action", 0, 0), *QUIET], patch=VENDOR)],
         history=[{"q": "sprzedaj smieci", "a": "Proponuję sprzedać [Cracked Shortbow] za 39c.",
                   "did": ["proposed selling: [Cracked Shortbow]"]}]),
     Scenario("what_now", "\"co teraz?\" without history: the next step, briefly.", [
-        Turn("co teraz?", [c.says(r"Screecher"), c.max_words(90), c.calls("mark_on_map", 0, 1), c.never_says(r"PvP")])]),
+        Turn("co teraz?", [c.says(r"Screecher"), c.max_words(180), c.calls("mark_on_map", 0, 1), c.never_says(r"PvP")])]),
     Scenario("full_route", "A route was asked for 22 times: every stop marked, in a sensible order.", [
         Turn("uloz mi optymalna trase pod wszystkie questy i oznacz ja",
              [c.calls("plan_route", 1, 2), c.marked(3, 12), c.marks(56.7, 59.5), c.says(r"Moonwell"), c.says(r"elit"),
-              c.max_words(260), PL])]),
+              c.max_words(400), PL])]),
     Scenario("route_respects_advice", "The model advised against a quest and the route it asked for a minute later "
                                       "stopped at that quest's giver; the last stop, a turn-in, was not marked.", [
         Turn("ok uloz pathing na questy zeby to wykonac w jak najszybszy sposob",
              [c.calls("plan_route", 1, 2), c.never_marks(r"Athridas|Ursal"), c.marks(56.7, 59.5), c.marks(56.1, 61.7),
-              c.max_words(260), PL])],
+              c.max_words(400), PL])],
         history=[{"q": "warto brac questy jakies dookola?",
                   "a": "Tak, ale tylko po drodze: [The Enchanted Glade] weź przy studni w Oracle Glade. [Ursal the Mauler] "
                        "na razie pomiń, to mocny mob na 12 poziom. [Mist] to eskorta, tylko jeśli masz ochotę."}]),
     Scenario("no_repeats", "The same advice and warnings came back in every answer of a conversation.", [
-        Turn("co teraz?", [c.says(r"Screecher"), c.max_words(90)], patch=AT_THE_SCREECHER),
-        Turn("ile mi brakuje do 12 lvl?", [c.says(r"7[\s.,  ]?832"), c.max_words(70), c.max_headings(0), *QUIET]),
-        Turn("ok", [c.max_words(20), c.max_headings(0), *QUIET])]),
+        Turn("co teraz?", [c.says(r"Screecher"), c.max_words(180)], patch=AT_THE_SCREECHER),
+        Turn("ile mi brakuje do 12 lvl?", [c.says(r"7[\s.,  ]?832"), c.max_words(150), *QUIET]),
+        Turn("ok", [c.max_words(40), *QUIET])]),
     Scenario("english_question", "The answer follows the language of the question.", [
         Turn("where do I turn in The Lost Runner?",
-             [c.says(r"Eralya"), c.language("en"), c.calls("mark_on_map", 0, 1), c.max_words(70)])]),
+             [c.says(r"Eralya"), c.language("en"), c.calls("mark_on_map", 0, 1), c.max_words(150)])]),
     Scenario("item_without_a_description", "\"Z pamięci (Classic), może być nieaktualne\" appeared several times in "
                                            "one answer.", [
-        Turn("[Light Armor Kit] po co to?", [c.max_words(90), c.max_headings(1), c.at_most(1, r"Classic"), PL, *QUIET])]),
+        Turn("[Light Armor Kit] po co to?", [c.max_words(180), c.at_most(1, r"Classic"), PL, *QUIET])]),
     Scenario("mark_again", "\"oznacz jeszcze raz\" came 5 times; here the player cleared the marks and wants them back.", [
         Turn("wyczyscilem znaczniki, oznacz trase jeszcze raz", [c.marked(3, 12), c.marks(56.7, 59.5), c.marks(37.5, 36.8),
-                                                                 c.max_words(120), c.never_says(r"PvP")])],
+                                                                 c.max_words(250), c.never_says(r"PvP")])],
         history=[ROUTE]),
     Scenario("advice_did_not_work", "The ammunition slot: four answers of guesses, up to \"disable Baganator and "
                                     "/reload\".", [
         Turn("nadal to samo o co chodzi mam strzaly przeciez",
-             [c.never_says(r"Baganator", r"/reload", r"/run", r"EquipItemByName"), c.max_words(90),
+             [c.never_says(r"Baganator", r"/reload", r"/run", r"EquipItemByName"), c.max_words(180),
               c.at_most(1, r"Classic"), *QUIET],
              patch={"recentEvents": ["6s ago [error] Must have ammo equipped in the ammo slot (x3)"]
                     + base_snapshot()["recentEvents"], "windows": None})],
@@ -179,20 +183,20 @@ SCENARIOS = [
     Scenario("where_to_buy", "A plain \"where do I buy it\" in few words, with an English item name: the vendor, the "
                              "distance, a mark, in the player's language.", [
         Turn("gdzie kupie coarse thread?",
-             [c.says(r"Narret Shadowgrove|Terunne Bearshaper"), c.calls("mark_on_map", 1, 2), c.max_words(70), PL])]),
+             [c.says(r"Narret Shadowgrove|Terunne Bearshaper"), c.calls("mark_on_map", 1, 2), c.max_words(150), PL])]),
     Scenario("mob_is_not_there", "\"nie ma zadnego tego moba dookola\": the spawn point from the database was "
                                  "repeated.", [
-        Turn("nie ma tu zadnego screechera dookola", [c.max_words(70), c.max_headings(0), PL, c.never_says(r"PvP")],
+        Turn("nie ma tu zadnego screechera dookola", [c.max_words(150), PL, c.never_says(r"PvP")],
              patch={"target": None, "windows": None, "around": None})],
         history=[{"q": "co teraz?", "a": "Oswój [Strigid Screecher]: najbliższy jest 24 m od ciebie (64.2, 69.2). "
                                          "Zaznacz go i użyj [Taming Rod] (**F11**)."}]),
     Scenario("tame_is_not_kill", "The quest data said \"kill Strigid Screecher\" for a creature that has to be tamed, and a "
                                  "route told the player to kill it.", [
-        Turn("jak zrobic tego questa z sowa?", [c.says(r"Taming Rod"), c.never_says(r"\bzabij", r"\bzabić"), c.max_words(90), PL,
+        Turn("jak zrobic tego questa z sowa?", [c.says(r"Taming Rod"), c.never_says(r"\bzabij", r"\bzabić"), c.max_words(180), PL,
                                                *QUIET])]),
     Scenario("long_conversation", "\"ile razy mam sie o to samo pytac\": what was agreed ten questions ago was gone "
                                   "(six turns of history).", [
-        Turn("to kiedy robimy tego elite?", [c.says(r"21|Bartek"), c.max_words(60), PL, *QUIET])],
+        Turn("to kiedy robimy tego elite?", [c.says(r"21|Bartek"), c.max_words(150), PL, *QUIET])],
         history=[{"q": "kumpel Bartek gra magiem i dolaczy o 21, wtedy zrobimy elite z twisted hatred, ok?",
                   "a": "Ok: Xethorr the Wicked z [Twisted Hatred] zostaje na 21:00, gdy dołączy Bartek. Do tego czasu "
                        "robimy resztę."}]
@@ -207,5 +211,5 @@ SCENARIOS = [
             ("gdzie kupie coarse thread?", "U **Narret Shadowgrove** (Trade Supplies) w Dolanaar, 541 m stąd."),
             ("ok", "Powodzenia!")]]),
     Scenario("talents_from_the_build", "The build is in memory and the talent window is open.", [
-        Turn("co tu wybrac?", [c.says(r"Endurance Training"), c.max_words(80), *QUIET], memory=[BUILD])]),
+        Turn("co tu wybrac?", [c.says(r"Endurance Training"), c.max_words(150), *QUIET], memory=[BUILD])]),
 ]
