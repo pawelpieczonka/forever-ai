@@ -51,15 +51,15 @@ def _log_thread_error(args: threading.ExceptHookArgs) -> None:
               exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
 
 
-def _exe_id() -> tuple[int, int] | None:
-    """Identity of the packaged app's executable (None from source)."""
+def _exe_id() -> tuple[int, int, int] | None:
+    """Identity of the packaged app's executable (None from source); a replaced file can get the old inode back."""
     if not getattr(sys, "frozen", False):
         return None
     try:
         st = os.stat(sys.executable)
     except OSError:
-        return (0, 0)
-    return st.st_ino, st.st_mtime_ns
+        return (0, 0, 0)
+    return st.st_ino, st.st_size, st.st_mtime_ns
 
 
 class Companion:

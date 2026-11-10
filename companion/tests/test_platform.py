@@ -213,7 +213,7 @@ def test_replaced_app_files_ask_for_a_restart(tmp_path, monkeypatch):
     comp = SimpleNamespace(_exe=app._exe_id(), _replaced=False)
     assert app.Companion.files_replaced(comp) is False
     exe.unlink()
-    exe.write_bytes(b"new build")  # a new file, as PyInstaller and tar write it
+    exe.write_bytes(b"new build")  # a new file, as PyInstaller and tar write it (it may get the old inode back)
     assert app.Companion.files_replaced(comp) is True
     monkeypatch.setattr(sys, "frozen", False)
     assert app._exe_id() is None  # from source nothing is checked
