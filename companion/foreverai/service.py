@@ -6,6 +6,7 @@ import itertools
 import json
 import logging
 import re
+import secrets
 import threading
 import time
 import zlib
@@ -20,9 +21,10 @@ from .kb.store import KB
 from .memory import ConversationStore, MemoryStore
 from .gemini import Gemini
 from .openrouter import OpenRouter
-from .prompt import build_messages, entity_names
+from .prompt import build_messages, entity_names, prompt_hash
 from .tools import (TOOLS, auction_request, format_addon_options, format_auction, remember_options, run_fetch,
                     run_kb_search, validate_abandon, validate_mark, validate_proposal, validate_vendor)
+from .turnlog import TurnLog
 from .wowformat import bracket_names, md_to_wow
 
 log = logging.getLogger("foreverai")
@@ -47,6 +49,7 @@ EFFORT_NAMES = {"low": "low", "medium": "medium", "high": "high", "xhigh": "very
 PROVIDER_NAMES = {"openrouter": "OpenRouter", "gemini": "Google Gemini", "claude_code": "Claude Code"}
 SCREEN_NOTE = ("The player attached the current screen as an image (top-left corner blacked out). Use it for what "
                "the game data does not contain.")
+HISTORY_TURNS = 6  # earlier turns of the conversation that go with a question
 MAX_SESSION_TURNS = 8  # then a fresh Claude session (with the last turns inline) keeps the context small
 MAX_SESSION_CHARS = 350_000  # ~90k tokens of questions with game data: a fresh session before the context fills up
 
@@ -120,6 +123,7 @@ class TurnContext:
         self.sources = sources
         self.actions: list[dict] = []
         self.marks: list[dict] = []
+        self.mark_adds: list[bool] = []  # per mark_on_map call: the model asked to keep the earlier marks
         self.phase_cb: Callable[[str], None] = lambda p: None
         self.pre_urls: set[str] = set()
         self.known: dict = {}  # addon options the game reported in this answer (validates proposals)
@@ -127,6 +131,34 @@ class TurnContext:
         self.ah_items: dict[str, dict] = {}  # items the auction search returned (name -> id, price)
         self.ah_open: bool | None = None
         self.web_search: Callable[[str], tuple[str, list[dict]]] | None = None  # Gemini: grounded search
+        self.conv = str(msg.get("conv") or "default")
+        self.history: list[dict] = []  # the earlier turns the model got
+        self.memory: list[dict] = []
+        self.tool_log: list[dict] = []  # every tool call of this answer, for the turn record
+        self.notes: list[str] = []  # what the answer did that neither marks nor actions show (memory)
+
+    def did(self) -> list[str]:
+        """What this answer did besides its text, in words the model reads in the following turns."""
+        out = []
+        for i, m in enumerate(self.marks):
+            how = ("marked on the map (earlier marks removed)" if i == 0 else "marked on the map")                 if self.replaces_marks else "added to the marks on the map"
+            out.append(f"{how}: {m['title']} ({m['x']}, {m['y']})")
+        for a in self.actions:
+            op = a.get("op")
+            if op == "vendor_sell":
+                out.append("proposed selling: " + ", ".join(str(i.get("name")) for i in a.get("items") or []))
+            elif op == "vendor_repair":
+                out.append(f"proposed repairing for {a.get('cost')}")
+            elif op == "abandon_quest":
+                out.append(f"proposed abandoning [{a.get('title')}]")
+            else:
+                out.append(f"proposed a change in {a.get('addon')}: {str(a.get('description') or '')[:80]}")
+        return out + self.notes
+
+    @property
+    def replaces_marks(self) -> bool:
+        """This answer's marks replace the marks of earlier answers, unless every one of them was an addition."""
+        return not (self.mark_adds and all(self.mark_adds) and len(self.mark_adds) == len(self.marks))
 
     def used_sources(self, answer: str, limit: int = 8) -> list[dict]:
         """Sources for the answer card: what the model looked up itself, plus pre-fetched knowledge-base pages only
@@ -167,6 +199,7 @@ class Service:
         self.gemini_factory = gemini_factory
         self.memory = MemoryStore(config.data_dir() / "memory.json")
         self.convs = ConversationStore(config.data_dir() / "convs")
+        self.turns = TurnLog(config.data_dir() / "turns")
         self._char = "?"
         self.last_cost: float | None = None
         self._balance: tuple[float, float] | None = None  # (value, fetched_at)
@@ -490,13 +523,15 @@ class Service:
         if self.kb:
             names = entity_names(snapshot)
             pre_hits = self.kb.search_titles(names, k=3)
+        memory = self.memory.get(self._char)
         messages = build_messages(question, snapshot, history, pre_hits, now=datetime.now(),
                                   kb_date=self.kb.meta("kb_date") if self.kb else None,
                                   hotfix_date=self.kb.meta("hotfix_date") if self.kb else None,
-                                  memory=self.memory.get(self._char))
+                                  memory=memory)
         sources: list[dict] = [{"title": h.title, "url": h.url, "date": h.ts[:10]} for h in pre_hits]
         ctx = TurnContext(msg, writer, snapshot, cancel, sources)
         ctx.pre_urls = {x["url"] for x in sources}  # guessed from names in the game, not chosen by the model
+        ctx.history, ctx.memory = history[-HISTORY_TURNS:], memory
         self._turn = ctx
         try:
             if s.provider == "claude_code":
@@ -626,10 +661,11 @@ class Service:
                 messages.append({"role": "tool", "tool_call_id": c.id or f"call_{i}", "content": result})
         self.last_cost = None if is_gemini else round(cost, 6)
         self.ensure_marks(ctx, text)
-        self.convs.append(str(msg.get("conv") or "default"), self._char, question, text)
+        self._keep_turn(ctx, question, text, provider, model, time.monotonic() - started)
         final_text = md_to_wow(text) if text else "(no answer)"
         writer.send({"kind": "answer", "final": True, "msgId": msg_id, "text": final_text, "sources": ctx.used_sources(text),
-                     "actions": ctx.actions, "marks": ctx.marks, "cost": self.last_cost, "model": model,
+                     "actions": ctx.actions, "marks": ctx.marks, "marksReplace": ctx.replaces_marks,
+                     "cost": self.last_cost, "model": model,
                      **({"costNote": "Gemini API"} if is_gemini else {}),
                      "links": self.links(text, ctx), "auction": ctx.auction_card(text),
                      "secs": round(time.monotonic() - started, 1),
@@ -669,11 +705,29 @@ class Service:
                 out.append({"name": name, "kind": ent[0], "id": ent[1]})
         return out
 
+    def _keep_turn(self, ctx: TurnContext, question: str, answer: str, provider: str, model: str, secs: float) -> None:
+        """The finished answer goes into the conversation (with what it did) and into the turn records."""
+        did = ctx.did()
+        self.convs.append(ctx.conv, self._char, question, answer, did)
+        try:
+            self.turns.save({"at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "conv": ctx.conv, "char": self._char,
+                             "question": question, "snapshot": ctx.snapshot, "history": ctx.history,
+                             "memory": ctx.memory, "answer": answer, "tools": ctx.tool_log, "did": did,
+                             "provider": provider, "model": model, "secs": round(secs, 1),
+                             "promptHash": prompt_hash()})
+        except Exception:  # a record that cannot be written must not cost the player the answer
+            log.exception("turn record not saved")
+
     # ---------------------------------------------------------------- tools (both providers)
     def run_tool(self, ctx: TurnContext | None, name: str, args: dict) -> tuple[str, bool]:
         """Execute one model tool call for the answer in progress. Returns (text for the model, is_error)."""
         if ctx is None:
             return "No question in progress; the tool is not available.", True
+        text, is_error = self._run_tool(ctx, name, args)
+        ctx.tool_log.append({"name": name, "args": args, "result": text[:500], "error": is_error})
+        return text, is_error
+
+    def _run_tool(self, ctx: TurnContext, name: str, args: dict) -> tuple[str, bool]:
         phase = claude_code.tool_phase(name)
         if name == "search_knowledge_base":
             query = str(args.get("query", ""))
@@ -691,7 +745,11 @@ class Service:
         if name == "mark_on_map":
             mark, text = validate_mark(args)
             if mark and len(ctx.marks) < 8:
+                add = args.get("add") is True
                 ctx.marks.append(mark)
+                ctx.mark_adds.append(add)
+                text = text.rstrip(".") + (", added to your earlier marks." if add else
+                                           "; the marks of your earlier answers are off the map.")
             return text, mark is None
         if name == "save_memory":
             if phase:
@@ -699,6 +757,7 @@ class Service:
             item = self.memory.add(self._char, str(args.get("text", "")))
             if not item:
                 return "Not saved (empty or already saved).", True
+            ctx.notes.append(f"saved to memory: {item['text']}")
             return f"Saved to memory (id {item['id']}).", False
         if name == "delete_memory":
             try:
@@ -706,6 +765,8 @@ class Service:
             except (TypeError, ValueError):
                 return "Give the entry id (a number).", True
             ok = self.memory.delete(self._char, item_id)
+            if ok:
+                ctx.notes.append(f"deleted memory entry {item_id}")
             return ("Deleted from memory." if ok else f"No entry with id {item_id}."), not ok
         if name == "fetch_url":
             url = str(args.get("url", ""))
@@ -861,7 +922,8 @@ class Service:
     def _new_claude_session(self, exe: str, system: str) -> claude_code.ClaudeSession:
         s = self.store.settings
         url, token = self._bridge_info()
-        workdir = config.data_dir() / "claude_session" / f"{int(time.time() * 1000)}"
+        # its own folder (it holds the address of this app's tools), also for sessions started in the same instant
+        workdir = config.data_dir() / "claude_session" / f"{int(time.time() * 1000)}-{secrets.token_hex(4)}"
         return claude_code.ClaudeSession(exe, workdir, system, s.claude_model, s.claude_effort, s.search_mode,
                                          url, token)
 
@@ -987,12 +1049,13 @@ class Service:
             return
         text = final or state["text"]
         self.ensure_marks(ctx, text)
-        self.convs.append(conv, self._char, question, text)
+        self._keep_turn(ctx, question, text, "claude_code", s.claude_model, time.monotonic() - started)
         self.last_cost = None
         writer.send({"kind": "answer", "final": True, "msgId": msg_id,
                      "text": md_to_wow(text) if text else "(no answer)", "links": self.links(text, ctx),
                      "auction": ctx.auction_card(text),
-                     "marks": ctx.marks, "sources": ctx.used_sources(text), "actions": ctx.actions,
+                     "marks": ctx.marks, "marksReplace": ctx.replaces_marks,
+                     "sources": ctx.used_sources(text), "actions": ctx.actions,
                      "model": model_name(s.claude_model),
                      "costNote": "Claude subscription", "secs": round(time.monotonic() - started, 1),
                      "status": self.status()})

@@ -612,3 +612,103 @@ def test_mcp_over_http_in_the_app():
             post({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, token="bad")
     finally:
         br.close()
+
+
+def _wait_final(addons, n, timeout=5):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        d = _read_inbox(addons, n)
+        if d.get("final"):
+            return d
+        time.sleep(0.05)
+    raise AssertionError("no final answer")
+
+
+def test_every_answered_question_is_recorded_for_replay(env):
+    svc, addons, _ = env
+    snapshot = {"game": {"build": "1.60.1.70862"}, "quests": [{"title": "The Balance of Nature"}]}
+    svc.handle({"type": "question", "msgId": 42, "session": "S1", "nextInbox": 3, "conv": "c", "char": "Aldric-Realm",
+                "text": "What should I do with my quest?", "snapshot": snapshot})
+    _wait_final(addons, 3)
+    (rec,) = svc.turns.load()
+    assert rec["question"] == "What should I do with my quest?" and rec["snapshot"] == snapshot
+    assert rec["conv"] == "c" and rec["char"] == "Aldric-Realm" and rec["history"] == [] and rec["memory"] == []
+    assert "[Young Nightsaber]" in rec["answer"]
+    assert [(t["name"], t["args"]) for t in rec["tools"]] == [("search_knowledge_base", {"query": "Balance of Nature"})]
+    assert rec["tools"][0]["result"] == "The knowledge base is not available." and rec["tools"][0]["error"] is False
+    assert rec["provider"] == "openrouter" and rec["model"] == "openai/gpt-6-luna"
+    assert rec["secs"] >= 0 and len(rec["promptHash"]) == 8 and rec["at"].startswith("20")
+    # the second question of the conversation is recorded with the history the model got
+    svc.handle({"type": "question", "msgId": 43, "session": "S1", "nextInbox": 8, "conv": "c", "char": "Aldric-Realm",
+                "text": "And then?", "snapshot": snapshot})
+    _wait_final(addons, 8)
+    assert [h["q"] for h in svc.turns.load()[-1]["history"]] == ["What should I do with my quest?"]
+
+
+class MarkingClient(FakeClient):
+    def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+        if not any(m["role"] == "tool" for m in messages):
+            yield "tool_calls", [ToolCall("c1", "mark_on_map", '{"title":"Dazalar","x":56.7,"y":59.5}'),
+                                 ToolCall("c2", "save_memory", '{"text":"Plays Beast Mastery"}')]
+            return
+        yield "text", "Go to Dazalar."
+
+
+def test_what_an_answer_did_stays_in_the_conversation(env):
+    svc, addons, tmp = env
+    svc = Service(svc.store, None, addons, client_factory=MarkingClient, lookahead=4)
+    svc.handle({"type": "question", "msgId": 5, "session": "S", "nextInbox": 2, "conv": "c", "char": "A-R",
+                "text": "Where do I turn it in?", "snapshot": {}})
+    _wait_final(addons, 2)
+    (turn,) = svc.convs.history("c")
+    assert turn["did"] == ["marked on the map (earlier marks removed): Dazalar (56.7, 59.5)",
+                           "saved to memory: Plays Beast Mastery"]
+    assert svc.turns.load()[-1]["did"] == turn["did"]
+
+
+def test_marks_of_an_answer_replace_earlier_ones_unless_added(env):
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        marks = []
+
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            if not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall(f"c{i}", "mark_on_map", json.dumps(m)) for i, m in enumerate(self.marks)]
+                return
+            yield "text", "Done."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+
+    def ask(n, marks):
+        Client.marks = marks
+        svc.handle({"type": "question", "msgId": n, "session": "S", "nextInbox": n, "conv": "c", "text": "mark it",
+                    "snapshot": {}})
+        return _wait_final(addons, n)
+
+    d = ask(2, [{"title": "1. Dazalar", "x": 56.7, "y": 59.5}, {"title": "2. Byancie", "x": 55.3, "y": 56.8}])
+    assert d["marksReplace"] is True and len(d["marks"]) == 2
+    assert svc.convs.history("c")[-1]["did"] == ["marked on the map (earlier marks removed): 1. Dazalar (56.7, 59.5)",
+                                                 "marked on the map: 2. Byancie (55.3, 56.8)"]
+    d = ask(8, [{"title": "Lyreena", "x": 57.6, "y": 56.6, "add": True}])
+    assert d["marksReplace"] is False
+    assert svc.convs.history("c")[-1]["did"] == ["added to the marks on the map: Lyreena (57.6, 56.6)"]
+    tool = svc.turns.load()[-1]["tools"][0]
+    assert tool["result"] == "Marked on the map: Lyreena (57.6, 56.6), added to your earlier marks."
+
+
+def test_claude_sessions_started_together_get_their_own_folders(env, monkeypatch):
+    from foreverai import claude_code
+    svc, addons, _ = env
+    folders = []
+
+    class FakeSession:
+        def __init__(self, exe, workdir, *rest):
+            folders.append(str(workdir))
+
+    monkeypatch.setattr(claude_code, "ClaudeSession", FakeSession)
+    other = Service(svc.store, None, addons, client_factory=FakeClient, lookahead=4)
+    for _ in range(20):  # within the same millisecond
+        svc._new_claude_session("claude", "system")
+        other._new_claude_session("claude", "system")
+    assert len(set(folders)) == 40

@@ -1,0 +1,1432 @@
+{
+ "talents": {
+  "unspentTalents": 0,
+  "trees": [
+   {
+    "config": "class",
+    "unspent": "2/2",
+    "nodes": 52,
+    "tree": 1091,
+    "picked": []
+   }
+  ]
+ },
+ "addonChanges": [
+  "2026-11-10 02:03 Vendor vendor_sell: 2 stacks → sold (applied)",
+  "2026-11-10 04:05 Vendor vendor_sell: 5 stacks → sold (applied)",
+  "2026-11-10 04:05 Vendor vendor_repair: 85 → repaired (applied)",
+  "2026-11-10 15:13 Vendor vendor_sell: 3 stacks → sold (applied)",
+  "2026-11-10 19:36 Vendor vendor_sell: 2 stacks → sold (applied)"
+ ],
+ "actionBars": [
+  "MultiBar6ButtonContainer12 — shown, 0 of 1 buttons used",
+  "MultiBar6ButtonContainer11 — shown, 0 of 1 buttons used",
+  "MultiBar6ButtonContainer10 — shown, 0 of 1 buttons used",
+  "MultiBar6ButtonContainer9 — shown, 0 of 1 buttons used",
+  "MultiBar6ButtonContainer8 — shown, 0 of 1 buttons used",
+  "MultiBar6ButtonContainer7 — shown, 0 of 1 buttons used",
+  "MultiBar6ButtonContainer6 — shown, 0 of 1 buttons used",
+  "MultiBar6ButtonContainer5 — shown, 0 of 1 buttons used",
+  "MultiBar6ButtonContainer4 — shown, 0 of 1 buttons used",
+  "MultiBar6ButtonContainer3 — shown, 0 of 1 buttons used",
+  "MultiBar6ButtonContainer2 — shown, 0 of 1 buttons used",
+  "MultiBar6ButtonContainer1 — shown, 0 of 1 buttons used",
+  "MultiBarBottomRightButtonContainer12 — shown, 1 of 1 buttons used",
+  "  button 12 [key F12]: Linen Bandage x31",
+  "MultiBarBottomRightButtonContainer11 — shown, 1 of 1 buttons used",
+  "  button 11 [key F11]: Taming Rod",
+  "MultiBarBottomRightButtonContainer10 — shown, 0 of 1 buttons used",
+  "MultiBarBottomRightButtonContainer9 — shown, 0 of 1 buttons used",
+  "MultiBarBottomRightButtonContainer8 — shown, 0 of 1 buttons used",
+  "MultiBarBottomRightButtonContainer7 — shown, 0 of 1 buttons used",
+  "MultiBarBottomRightButtonContainer6 — shown, 0 of 1 buttons used",
+  "MultiBarBottomRightButtonContainer5 — shown, 0 of 1 buttons used",
+  "MultiBarBottomRightButtonContainer4 — shown, 0 of 1 buttons used",
+  "MultiBarBottomRightButtonContainer3 — shown, 0 of 1 buttons used",
+  "MultiBarBottomRightButtonContainer2 — shown, 1 of 1 buttons used",
+  "  button 2 [key F2]: Aspect of the Monkey",
+  "MultiBarBottomRightButtonContainer1 — shown, 1 of 1 buttons used",
+  "  button 1 [key F1]: Track Beasts",
+  "MultiBarLeftButtonContainer12 — shown, 0 of 1 buttons used",
+  "MultiBarLeftButtonContainer11 — shown, 0 of 1 buttons used",
+  "MultiBarLeftButtonContainer10 — shown, 0 of 1 buttons used",
+  "MultiBarLeftButtonContainer9 — shown, 0 of 1 buttons used",
+  "MultiBarLeftButtonContainer8 — shown, 0 of 1 buttons used",
+  "MultiBarLeftButtonContainer7 — shown, 0 of 1 buttons used",
+  "MultiBarLeftButtonContainer6 — shown, 0 of 1 buttons used",
+  "MultiBarLeftButtonContainer5 — shown, 0 of 1 buttons used",
+  "MultiBarLeftButtonContainer4 — shown, 0 of 1 buttons used",
+  "MultiBarLeftButtonContainer3 — shown, 0 of 1 buttons used",
+  "MultiBarLeftButtonContainer2 — shown, 0 of 1 buttons used",
+  "MultiBarLeftButtonContainer1 — shown, 0 of 1 buttons used",
+  "MultiBarRightButtonContainer12 — shown, 0 of 1 buttons used",
+  "MultiBarRightButtonContainer11 — shown, 0 of 1 buttons used",
+  "MultiBarRightButtonContainer10 — shown, 0 of 1 buttons used",
+  "MultiBarRightButtonContainer9 — shown, 0 of 1 buttons used",
+  "MultiBarRightButtonContainer8 — shown, 0 of 1 buttons used",
+  "MultiBarRightButtonContainer7 — shown, 0 of 1 buttons used",
+  "MultiBarRightButtonContainer6 — shown, 0 of 1 buttons used",
+  "MultiBarRightButtonContainer5 — shown, 0 of 1 buttons used",
+  "MultiBarRightButtonContainer4 — shown, 0 of 1 buttons used",
+  "MultiBarRightButtonContainer3 — shown, 0 of 1 buttons used",
+  "MultiBarRightButtonContainer2 — shown, 0 of 1 buttons used",
+  "MultiBarRightButtonContainer1 — shown, 0 of 1 buttons used",
+  "MultiBar5ButtonContainer12 — shown, 0 of 1 buttons used",
+  "MultiBar5ButtonContainer11 — shown, 0 of 1 buttons used",
+  "MultiBar5ButtonContainer10 — shown, 0 of 1 buttons used",
+  "MultiBar5ButtonContainer9 — shown, 0 of 1 buttons used",
+  "MultiBar5ButtonContainer8 — shown, 0 of 1 buttons used",
+  "MultiBar5ButtonContainer7 — shown, 0 of 1 buttons used",
+  "MultiBar5ButtonContainer6 — shown, 0 of 1 buttons used",
+  "MultiBar5ButtonContainer5 — shown, 0 of 1 buttons used",
+  "MultiBar5ButtonContainer4 — shown, 0 of 1 buttons used",
+  "MultiBar5ButtonContainer3 — shown, 0 of 1 buttons used",
+  "MultiBar5ButtonContainer2 — shown, 0 of 1 buttons used",
+  "MultiBar5ButtonContainer1 — shown, 0 of 1 buttons used",
+  "MultiBarBottomLeftButtonContainer12 — shown, 0 of 1 buttons used",
+  "MultiBarBottomLeftButtonContainer11 — shown, 0 of 1 buttons used",
+  "MultiBarBottomLeftButtonContainer10 — shown, 0 of 1 buttons used",
+  "MultiBarBottomLeftButtonContainer9 — shown, 0 of 1 buttons used",
+  "MultiBarBottomLeftButtonContainer8 — shown, 0 of 1 buttons used",
+  "MultiBarBottomLeftButtonContainer7 — shown, 0 of 1 buttons used",
+  "MultiBarBottomLeftButtonContainer6 — shown, 0 of 1 buttons used",
+  "MultiBarBottomLeftButtonContainer5 — shown, 0 of 1 buttons used",
+  "MultiBarBottomLeftButtonContainer4 — shown, 0 of 1 buttons used",
+  "MultiBarBottomLeftButtonContainer3 — shown, 0 of 1 buttons used",
+  "MultiBarBottomLeftButtonContainer2 — shown, 1 of 1 buttons used",
+  "  button 2 [key c-2]: Concussive Shot",
+  "MultiBarBottomLeftButtonContainer1 — shown, 1 of 1 buttons used",
+  "  button 1 [key c-1]: Hunter's Mark",
+  "MainActionBarButtonContainer7 — shown, 0 of 1 buttons used",
+  "MainActionBarButtonContainer6 — shown, 0 of 1 buttons used",
+  "MainActionBarButtonContainer4 — shown, 0 of 1 buttons used",
+  "MainActionBarButtonContainer12 — shown, 1 of 1 buttons used",
+  "  button 12 [key =]: Tough Jerky",
+  "MainActionBarButtonContainer11 — shown, 1 of 1 buttons used",
+  "  button 11 [key -]: Refreshing Spring Water x5",
+  "MainActionBarButtonContainer10 — shown, 1 of 1 buttons used",
+  "  button 10 [key 0]: Shadowmeld",
+  "MainActionBarButtonContainer9 — shown, 1 of 1 buttons used",
+  "  button 9 [key 9]: Elune's Light",
+  "MainActionBarButtonContainer8 — shown, 1 of 1 buttons used",
+  "  button 8 [key 8]: Auto Shot",
+  "MainActionBarButtonContainer5 — shown, 1 of 1 buttons used",
+  "  button 5 [key 5]: Serpent Sting",
+  "MainActionBarButtonContainer3 — shown, 1 of 1 buttons used",
+  "  button 3 [key 3]: Arcane Shot",
+  "MainActionBarButtonContainer2 — shown, 1 of 1 buttons used",
+  "  button 2 [key 2]: Raptor Strike",
+  "MainActionBarButtonContainer1 — shown, 1 of 1 buttons used",
+  "  button 1 [key 1]: Attack",
+  "OverrideActionBar — hidden, 4 of 6 buttons used",
+  "  button 1: Attack",
+  "  button 2: Raptor Strike",
+  "  button 3: Arcane Shot",
+  "  button 5: Serpent Sting",
+  "GamepadMainActionBarFramePageUnitTopCenteredAnchorTopBarActionButton — hidden, 4 of 4 buttons used",
+  "  button 1: Refreshing Spring Water x5",
+  "  button 2: Elune's Light",
+  "  button 3: Shadowmeld",
+  "  button 4: Tough Jerky",
+  "GamepadMainActionBarFramePageUnitTopCenteredAnchorStanceBarActionButton — hidden, 8 of 8 buttons used",
+  "  button 1: Attack",
+  "  button 2: Attack",
+  "  button 3: Attack",
+  "  button 4: Attack",
+  "  button 5: Attack",
+  "  button 6: Attack",
+  "  button 7: Attack",
+  "  button 8: Attack",
+  "GamepadMainActionBarFramePageUnitRightCenteredAnchorRightBarActionButton — hidden, 2 of 8 buttons used",
+  "  button 5: Auto Shot",
+  "  button 8: Raptor Strike",
+  "GamepadActionBarEditFramePageUnitTopCenteredAnchorTopBarActionButton — hidden, 4 of 4 buttons used",
+  "  button 1: Refreshing Spring Water x5",
+  "  button 2: Elune's Light",
+  "  button 3: Shadowmeld",
+  "  button 4: Tough Jerky",
+  "GamepadActionBarEditFramePageUnitTopCenteredAnchorStanceBarActionButton — hidden, 8 of 8 buttons used",
+  "  button 1: Attack",
+  "  button 2: Attack",
+  "  button 3: Attack",
+  "  button 4: Attack",
+  "  button 5: Attack",
+  "  button 6: Attack",
+  "  button 7: Attack",
+  "  button 8: Attack",
+  "GamepadActionBarEditFramePageUnitRightCenteredAnchorRightBarActionButton — hidden, 2 of 8 buttons used",
+  "  button 5: Auto Shot",
+  "  button 8: Raptor Strike"
+ ],
+ "progress": {
+  "money": 1143,
+  "samples": [
+   [
+    1794334858,
+    0,
+    10,
+    6744,
+    7600,
+    170,
+    1079
+   ],
+   [
+    1794335760,
+    422,
+    10,
+    6744,
+    7600,
+    170,
+    1104
+   ],
+   [
+    1794335820,
+    482,
+    10,
+    6744,
+    7600,
+    170,
+    1137
+   ],
+   [
+    1794336412,
+    1074,
+    10,
+    6784,
+    7600,
+    130,
+    1137
+   ],
+   [
+    1794336729,
+    1391,
+    11,
+    34,
+    8800,
+    130,
+    1137
+   ],
+   [
+    1794336730,
+    1392,
+    11,
+    34,
+    8800,
+    130,
+    1137
+   ],
+   [
+    1794338687,
+    2269,
+    11,
+    34,
+    8800,
+    130,
+    1139
+   ],
+   [
+    1794338747,
+    2329,
+    11,
+    118,
+    8800,
+    46,
+    1143
+   ],
+   [
+    1794338932,
+    2514,
+    11,
+    968,
+    8800,
+    46,
+    1143
+   ]
+  ],
+  "xp": 968,
+  "since": 1794334858,
+  "xpMax": 8800,
+  "online": 4473,
+  "now": 1794339331,
+  "levels": [
+   {
+    "at": 1794336730,
+    "level": 11,
+    "online": 1872
+   }
+  ],
+  "session": {
+   "gain": 1824,
+   "deaths": 0,
+   "zones": {
+    "Teldrassil": 2913
+   },
+   "act": 2913,
+   "lvl0": 10,
+   "earned": {
+    "vendor": 58,
+    "loot": 6
+   },
+   "xp0": 6744,
+   "reloads": 0,
+   "money0": 1079,
+   "levels": 1,
+   "kills": 3,
+   "questXp": 1700,
+   "start": 1794334858,
+   "money": 1143,
+   "quests": 2,
+   "lvl": 11
+  },
+  "level": 11,
+  "rested": 46,
+  "maxLevel": 60
+ },
+ "bags": {
+  "freeSlots": 15,
+  "items": [
+   {
+    "item": "[Hearthstone]",
+    "id": 6948,
+    "bound": true,
+    "count": 1,
+    "quality": "common"
+   },
+   {
+    "item": "[Light Armor Kit]",
+    "count": 2,
+    "id": 2304,
+    "sellCopper": 15,
+    "sellPrice": "0g 0s 15c",
+    "quality": "common"
+   },
+   {
+    "item": "[Kaldorei Spider Kabob]",
+    "count": 3,
+    "id": 5472,
+    "sellCopper": 10,
+    "sellPrice": "0g 0s 10c",
+    "quality": "common"
+   },
+   {
+    "item": "[Darnassian Bleu]",
+    "count": 7,
+    "id": 2070,
+    "sellCopper": 1,
+    "sellPrice": "0g 0s 1c",
+    "quality": "common"
+   },
+   {
+    "item": "[Forest Mushroom Cap]",
+    "count": 14,
+    "id": 4604,
+    "sellCopper": 1,
+    "sellPrice": "0g 0s 1c",
+    "quality": "common"
+   },
+   {
+    "item": "[Refreshing Spring Water]",
+    "count": 5,
+    "id": 159,
+    "sellCopper": 1,
+    "sellPrice": "0g 0s 1c",
+    "quality": "common"
+   },
+   {
+    "item": "[Shiny Red Apple]",
+    "count": 2,
+    "id": 4536,
+    "sellCopper": 1,
+    "sellPrice": "0g 0s 1c",
+    "quality": "common"
+   },
+   {
+    "item": "[Linen Bandage]",
+    "count": 31,
+    "id": 1251,
+    "sellCopper": 10,
+    "sellPrice": "0g 0s 10c",
+    "quality": "common"
+   },
+   {
+    "id": 279981,
+    "count": 2,
+    "item": "[Basic Campfire Kit]",
+    "quality": "common"
+   },
+   {
+    "id": 279968,
+    "count": 5,
+    "item": "[First Aid Kit]",
+    "quality": "common"
+   },
+   {
+    "facts": {
+     "stats": "DPS +2",
+     "ilvl": 8,
+     "requiresLevel": 3,
+     "vsEquipped": "instead of [Laminated Recurve Bow]: DPS -3.8",
+     "sellPrice": "0g 0s 39c",
+     "quality": "poor"
+    },
+    "sellCopper": 39,
+    "item": "[Cracked Shortbow]",
+    "count": 1,
+    "id": 2773,
+    "tooltip": "Cracked Shortbow\nRanged  [Bow]\n3 - 6 Damage  [Speed 2.30]\n(2.0 damage per second)\nDurability 30 / 30\nRequires Level 3",
+    "junk": true,
+    "quality": "poor"
+   },
+   {
+    "item": "[Small Egg]",
+    "count": 2,
+    "id": 6889,
+    "sellCopper": 4,
+    "sellPrice": "0g 0s 4c",
+    "quality": "common"
+   },
+   {
+    "item": "[Small Spider Leg]",
+    "count": 5,
+    "id": 5465,
+    "sellCopper": 3,
+    "sellPrice": "0g 0s 3c",
+    "quality": "common"
+   },
+   {
+    "item": "[Taming Rod]",
+    "id": 15923,
+    "bound": true,
+    "count": 1,
+    "quality": "common"
+   },
+   {
+    "item": "[Recipe: Kaldorei Spider Kabob]",
+    "count": 1,
+    "id": 5482,
+    "sellCopper": 10,
+    "sellPrice": "0g 0s 10c",
+    "quality": "common"
+   },
+   {
+    "item": "[Sharp Arrow]",
+    "facts": {
+     "stats": "DPS +1.2",
+     "ilvl": 15,
+     "requiresLevel": 10,
+     "sellPrice": "cannot be sold",
+     "quality": "common"
+    },
+    "id": 2515,
+    "tooltip": "Sharp Arrow\nProjectile  [Arrow]\nAdds 3.5 damage per second\nRequires Level 10",
+    "count": 1387,
+    "quality": "common"
+   },
+   {
+    "item": "[Amethyst Phial]",
+    "id": 18152,
+    "bound": true,
+    "count": 1,
+    "quality": "common"
+   },
+   {
+    "item": "[Timberling Seed]",
+    "id": 5168,
+    "bound": true,
+    "count": 1,
+    "quality": "common"
+   },
+   {
+    "facts": {
+     "stats": "DPS +1.3",
+     "ilvl": 4,
+     "vsEquipped": "instead of [Thistlewood Dagger]: DPS -0.8 | instead of (empty slot): DPS +1.3",
+     "sellPrice": "0g 0s 2c",
+     "quality": "common"
+    },
+    "item": "[Skinning Knife]",
+    "sellCopper": 2,
+    "id": 7005,
+    "tooltip": "Skinning Knife\nOne-Hand\n1 - 3 Damage  [Speed 1.60]\n(1.2 damage per second)\nDurability 20 / 20",
+    "count": 1,
+    "quality": "common"
+   },
+   {
+    "item": "[Light Leather]",
+    "count": 1,
+    "id": 2318,
+    "sellCopper": 15,
+    "sellPrice": "0g 0s 15c",
+    "quality": "common"
+   }
+  ]
+ },
+ "zoneNPCs": [
+  "Cyndra Kindwhisper <Journeyman Alchemist> [trainer] — Teldrassil 57.6, 60.8 (384 m)",
+  "Malorne Bladeleaf <Herbalist> [trainer] — Teldrassil 57.7, 60.6 (384 m)",
+  "Nyoma <Cooking Supplies> [vendor] — Teldrassil 57.2, 61.3 (392 m)",
+  "Zarrin <Cook> [trainer] — Teldrassil 57.1, 61.3 (394 m)",
+  "Spirit Healer [spirit healer] — Teldrassil 56.2, 63.3 (400 m)",
+  "Keldas <Pet Trainer> [trainer] — Teldrassil 56.8, 59.8 (434 m)",
+  "Kal <Druid Trainer> [trainer] — Teldrassil 56.0, 61.6 (436 m)",
+  "Seriadne <Stable Master> [stablemaster] — Teldrassil 56.6, 59.6 (443 m)",
+  "Jannok Breezesong <Rogue Trainer> [trainer] — Teldrassil 56.4, 60.1 (443 m)",
+  "Dazalar <Hunter Trainer> [trainer] — Teldrassil 56.7, 59.5 (444 m)",
+  "Brannol Eaglemoon <Clothier> [vendor] — Teldrassil 56.1, 60.2 (451 m)",
+  "Sinda <Leather Armor Merchant> [vendor] — Teldrassil 56.3, 59.6 (455 m)",
+  "Shalomon <Weaponsmith> [repair, vendor] — Teldrassil 56.3, 59.5 (457 m)",
+  "Meri Ironweave <Armorer & Shieldcrafter> [repair, vendor] — Teldrassil 56.3, 59.4 (460 m)",
+  "Kyra Windblade <Warrior Trainer> [trainer] — Teldrassil 56.2, 59.2 (466 m)",
+  "Lyreena Duskblade <Adventurer> — Teldrassil 57.6, 56.6 (477 m)",
+  "Innkeeper Keldamyr <Innkeeper> [innkeeper, vendor] — Teldrassil 55.6, 59.8 (478 m)",
+  "Jeena Featherbow <Bowyer> [repair, vendor] — Teldrassil 55.9, 59.2 (478 m)",
+  "Aldia <General Supplies> [vendor] — Teldrassil 55.5, 57.1 (532 m)",
+  "Danlyia <Food & Drink Vendor> [vendor] — Teldrassil 55.4, 57.2 (536 m)",
+  "Laurna Morninglight <Priest Trainer> [trainer] — Teldrassil 55.6, 56.8 (539 m)",
+  "Narret Shadowgrove <Trade Supplies> [vendor] — Teldrassil 55.3, 57.1 (541 m)",
+  "Byancie <First Aid Trainer> [trainer] — Teldrassil 55.3, 56.8 (547 m)",
+  "Rune Broker [vendor] — Teldrassil 58.8, 43.8 (805 m)",
+  "Nessa Shadowsong <Fishing Supplies> [vendor] — Teldrassil 56.3, 92.4 (828 m)",
+  "Vesprystus <Hippogryph Master> [flight master] — Teldrassil 58.4, 94.0 (835 m)",
+  "Daryn Lightwind <Cenarion Lore Keeper> — Teldrassil 55.4, 92.2 (840 m)",
+  "Androl Oakhand <Fisherman> [trainer] — Teldrassil 55.9, 93.5 (865 m)",
+  "Eleyna Duskbreeze <Junior Herbalism Trainer> [trainer] — Teldrassil 59.9, 41.3 (866 m)",
+  "Keina <Bowyer> [repair, vendor] — Teldrassil 59.3, 41.1 (879 m)",
+  "Janna Brightmoon <Clothier> [repair, vendor] — Teldrassil 59.5, 41.0 (879 m)",
+  "Lyrai <General Supplies> [vendor] — Teldrassil 59.5, 40.9 (882 m)",
+  "Fanorran Stilloak <Junior Mining Trainer> [trainer, vendor] — Teldrassil 58.2, 41.4 (884 m)",
+  "Dellylah <Food & Drink Vendor> [vendor] — Teldrassil 59.6, 40.7 (888 m)",
+  "Shanda <Priest Trainer> [trainer] — Teldrassil 59.2, 40.4 (900 m)",
+  "Ayanna Everstride <Hunter Trainer> [trainer] — Teldrassil 58.7, 40.5 (906 m)",
+  "Mardant Strongoak <Druid Trainer> [trainer] — Teldrassil 58.6, 40.3 (911 m)",
+  "Andiss <Armorer & Shieldcrafter> [repair, vendor] — Teldrassil 58.7, 39.8 (924 m)",
+  "Freja Nightwing <Leather Armor Merchant> [repair, vendor] — Teldrassil 59.0, 39.6 (926 m)",
+  "Khardan Proudblade <Weaponsmith> [repair, vendor] — Teldrassil 58.7, 39.7 (929 m)",
+  "Frahun Shadewhisper <Rogue Trainer> [trainer] — Teldrassil 59.6, 38.7 (949 m)",
+  "Terunne Bearshaper <Junior Skinning Trainer> [trainer, vendor] — Teldrassil 59.4, 38.6 (952 m)",
+  "Alyissia <Warrior Trainer> [trainer] — Teldrassil 59.6, 38.4 (955 m)",
+  "Radnaal Maneweaver <Skinner> [trainer] — Teldrassil 42.1, 50.0 (1175 m)",
+  "Nadyia Maneweaver <Journeyman Leatherworker> [trainer, vendor] — Teldrassil 41.9, 49.4 (1191 m)"
+ ],
+ "target": {
+  "debuffs": [
+   "Tame Nightsaber Stalker (414s)"
+  ],
+  "classification": "normal",
+  "reaction": "friendly",
+  "creatureType": "Beast",
+  "level": 7,
+  "name": "Nightsaber Stalker",
+  "tooltip": "Nightsaber Stalker\nEvalhunter's Pet\nLevel 7"
+ },
+ "spells": [
+  "[General] Attack",
+  "[General] Elune's Light (Racial): Instant 3 min cooldown | Increases your critical strike chance with all spells and attacks by 10% for 15 sec.",
+  "[General] Shadowmeld (Racial): Instant 10 sec cooldown | Activate to slip into the shadows, reducing the chance for enemies to detect your presence. Lasts until cancelled or upon moving. Using this ability in combat discourages enemies from attacking you, but increases the cooldown to 2 min.",
+  "[General] Armor Proficiency [passive]: Passive | You are proficient in the use of the following armor types: Cloth Leather",
+  "[General] Dodge (Passive) [passive]: Passive | Gives a chance to dodge enemy melee attacks.",
+  "[General] Languages [passive]: Passive | You are fluent in the following languages: Common Darnassian",
+  "[General] Parry (Passive) [passive]: Passive | Gives a chance to parry enemy melee attacks.",
+  "[General] Quickness (Racial Passive) [passive]: Passive | Dodge chance increased by 1% and movement speed increased by 2%. Night Elf Rogues and Druids are harder to detect in Stealth as if they were 1 level higher.",
+  "[General] Wisp Spirit (Racial Passive) [passive]: Passive | Transform into a wisp upon death, increasing movement speed by 75%.",
+  "[Beast Mastery] Aspect",
+  "[Beast Mastery] Aspect of the Monkey: 20 Mana 100 yd range | Instant | Cooldown remaining: 2 sec | The hunter takes on the aspects of a monkey, increasing chance to dodge by 8%. Only one Aspect can be active at a time.",
+  "[Survival] Raptor Strike (Rank 1): 10 Mana | Next melee 6 sec cooldown | A strong attack that deals melee weapon damage plus 5.",
+  "[Survival] Raptor Strike (Rank 2): 25 Mana | Next melee 6 sec cooldown | A strong attack that deals melee weapon damage plus 11.",
+  "[Survival] Track Beasts: 20 Mana 100 yd range | Instant | The hunter takes on the aspects of a monkey, increasing chance to dodge by 8%. Only one Aspect can be active at a time. | Shows the location of all nearby beasts on the minimap. Only one form of tracking can be active at a time.",
+  "[Survival] Tracking",
+  "[Marksmanship] Arcane Shot (Rank 1): 25 Mana 8-35 yd range | Instant 6 sec cooldown | An instant shot that causes 25 Arcane damage.",
+  "[Marksmanship] Auto Shot: 8-35 yd range | Instant 1.6 sec cooldown | Automatically shoots the target until cancelled.",
+  "[Marksmanship] Concussive Shot: 16 Mana 8-35 yd range | Instant 12 sec cooldown | Dazes the target, slowing movement speed by 50% for 4 sec.",
+  "[Marksmanship] Hunter's Mark (Rank 1): 15 Mana 100 yd range | Instant | Places the Hunter's Mark on the target, increasing the Ranged Attack Power of all attackers against that target by 26. In addition, the target of this ability can always be seen by the hunter whether it stealths or turns invisible. The target also appears on the mini-map. Lasts for 2 min.",
+  "[Marksmanship] Serpent Sting (Rank 1): 15 Mana 8-35 yd range | Instant | Stings the target, causing 15 Nature damage over 15 sec. Only one Sting per Hunter can be active on any one target."
+ ],
+ "nearbyQuests": [
+  {
+   "objective": "Kill Ursal the Mauler and return to Athridas Bearmantle in Dolanaar.",
+   "id": 486,
+   "distance": "514 m",
+   "title": "Ursal the Mauler",
+   "giver": "Athridas Bearmantle",
+   "level": 12,
+   "where": "Teldrassil 56.0, 57.3",
+   "minLevel": 4
+  },
+  {
+   "objective": "Acquire 6 Bloodfeather Belts and bring them to Sentinel Arynia Cloudsbreak in the Oracle Glade.",
+   "id": 937,
+   "distance": "1600 m",
+   "title": "The Enchanted Glade",
+   "giver": "Sentinel Arynia Cloudsbreak",
+   "level": 11,
+   "where": "Teldrassil 38.3, 34.4",
+   "minLevel": 6
+  },
+  {
+   "objective": "Escort Mist to Sentinel Arynia Cloudsbreak at the moon well near the Oracle Tree.",
+   "id": 938,
+   "distance": "1899 m",
+   "title": "Mist",
+   "giver": "Mist",
+   "level": 12,
+   "where": "Teldrassil 31.5, 31.6",
+   "minLevel": 7
+  }
+ ],
+ "reputations": [
+  "Darnassus: Friendly (4335/6000)",
+  "Gnomeregan Exiles: Friendly (137/6000)",
+  "Ironforge: Friendly (137/6000)",
+  "Stormwind: Friendly (137/6000)"
+ ],
+ "stats": {
+  "intellect": "25",
+  "spellDamage": 0,
+  "agility": "41 (+1)",
+  "rangedDamage": "35-45, speed 2.36",
+  "dodge": 19.84,
+  "armor": 244,
+  "block": 0,
+  "spirit": "27",
+  "rangedCrit": 5.34,
+  "rangedAttackPower": 84,
+  "healing": 0,
+  "strength": "22 (+1)",
+  "parry": 4.76,
+  "meleeDamage": "10-13, speed 1.70",
+  "spellCrit": 5,
+  "manaRegen": "6.8/s (in combat 0.0/s)",
+  "meleeCrit": 5.3,
+  "stamina": "29",
+  "spellHit": 0,
+  "hit": 0,
+  "attackPower": 65
+ },
+ "skills": [
+  "Beast Mastery 1/1",
+  "Marksmanship 1/1",
+  "Survival 1/1",
+  "Leatherworking 3/75",
+  "Leatherworking 3/75",
+  "Skinning 6/75",
+  "Skinning 6/75",
+  "Cooking 5/75",
+  "Cooking 5/75",
+  "First Aid 44/75",
+  "First Aid 44/75",
+  "Bows 50/55",
+  "Daggers 49/55",
+  "Defense 49/55",
+  "Unarmed 1/55",
+  "Cloth 1/1",
+  "Leather 1/1",
+  "Language: Common 300/300",
+  "Language: Darnassian 300/300"
+ ],
+ "recentEvents": [
+  "398s ago [loot] You receive item: [Taming Rod]",
+  "398s ago [questAccepted] Taming the Beast",
+  "399s ago [questDone] Taming the Beast",
+  "399s ago [xp] You gain 850 experience.",
+  "485s ago [combat] Left combat",
+  "486s ago [info] Tame a Nightsaber Stalker (Complete)",
+  "506s ago [combat] Entered combat",
+  "509s ago [error] Out of range. (x2)",
+  "537s ago [combat] Left combat",
+  "551s ago [combat] Entered combat",
+  "589s ago [money] You loot 1 Copper",
+  "592s ago [money] You loot 3 Copper",
+  "594s ago [combat] Left combat",
+  "594s ago [error] There is nothing to attack.",
+  "595s ago [xp] Timberling dies, you gain 42 experience.",
+  "602s ago [error] Spell is not ready yet. (x2)",
+  "611s ago [error] Target too close",
+  "615s ago [xp] Timberling dies, you gain 42 experience.",
+  "621s ago [combat] Entered combat",
+  "643s ago [money] You loot 2 Copper",
+  "647s ago [combat] Left combat",
+  "651s ago [error] Spell is not ready yet.",
+  "652s ago [combat] Entered combat"
+ ],
+ "addons": [
+  {
+   "enabled": true,
+   "name": "DBM-Core",
+   "loaded": true,
+   "version": "12.1.20",
+   "title": "<DBM Core> Main Core"
+  },
+  {
+   "enabled": true,
+   "name": "DBM-GUI",
+   "loadOnDemand": true,
+   "version": "12.1.20",
+   "title": "<DBM Core> Options GUI"
+  },
+  {
+   "enabled": true,
+   "name": "DBM-StatusBarTimers",
+   "loaded": true,
+   "version": "12.1.20",
+   "title": "<DBM Core> Status Bar Timers"
+  },
+  {
+   "enabled": true,
+   "name": "DBM-VPVEM",
+   "loaded": true,
+   "version": "a8e9f0e",
+   "title": "<DBM Media> Voicepack VEM"
+  },
+  {
+   "enabled": true,
+   "name": "DBM-PvP",
+   "loadOnDemand": true,
+   "version": "r194",
+   "title": "<DBM Mod> PvP"
+  },
+  {
+   "enabled": true,
+   "name": "Auctionator",
+   "loaded": true,
+   "version": "343",
+   "title": "Auctionator"
+  },
+  {
+   "enabled": true,
+   "name": "Baganator",
+   "loaded": true,
+   "version": "844",
+   "title": "Baganator"
+  },
+  {
+   "enabled": true,
+   "name": "Details",
+   "loaded": true,
+   "version": "#Details.20261107.15404.172",
+   "title": "Details! Damage Meter"
+  },
+  {
+   "enabled": true,
+   "name": "Details_Compare2",
+   "loaded": true,
+   "title": "Details!: Compare 2.0"
+  },
+  {
+   "enabled": true,
+   "name": "Details_EncounterDetails",
+   "loaded": true,
+   "title": "Details!: Encounter Breakdown (plugin)"
+  },
+  {
+   "enabled": true,
+   "name": "Details_RaidCheck",
+   "loaded": true,
+   "title": "Details!: Raid Check (plugin)"
+  },
+  {
+   "enabled": true,
+   "name": "Details_DataStorage",
+   "loadOnDemand": true,
+   "title": "Details!: Storage"
+  },
+  {
+   "enabled": true,
+   "name": "Details_Streamer",
+   "loaded": true,
+   "title": "Details!: Streamer (plugin)"
+  },
+  {
+   "enabled": true,
+   "name": "Details_TinyThreat",
+   "loaded": true,
+   "title": "Details!: Tiny Threat (plugin)"
+  },
+  {
+   "enabled": true,
+   "name": "Details_Vanguard",
+   "loaded": true,
+   "title": "Details!: Vanguard (plugin)"
+  },
+  {
+   "enabled": true,
+   "name": "FeedPetForever",
+   "loaded": true,
+   "version": "1.0.2",
+   "title": "Feed Pet: Forever"
+  },
+  {
+   "enabled": true,
+   "name": "ForeverAI",
+   "loaded": true,
+   "version": "0.6.0",
+   "title": "ForeverAI"
+  },
+  {
+   "enabled": true,
+   "name": "ForeverMapNotes",
+   "loaded": true,
+   "version": "1.9.0",
+   "title": "ForeverMapNotes"
+  },
+  {
+   "enabled": true,
+   "name": "GearQuestForever",
+   "loaded": true,
+   "version": "1.1.0",
+   "title": "GearQuest Forever"
+  },
+  {
+   "enabled": true,
+   "name": "GearQuestForever_DRUID",
+   "loadOnDemand": true,
+   "version": "1.1.0",
+   "title": "GearQuest Forever: Druid"
+  },
+  {
+   "enabled": true,
+   "name": "GearQuestForever_HUNTER",
+   "loadOnDemand": true,
+   "loaded": true,
+   "version": "1.1.0",
+   "title": "GearQuest Forever: Hunter"
+  },
+  {
+   "enabled": true,
+   "name": "GearQuestForever_MAGE",
+   "loadOnDemand": true,
+   "version": "1.1.0",
+   "title": "GearQuest Forever: Mage"
+  },
+  {
+   "enabled": true,
+   "name": "GearQuestForever_PALADIN",
+   "loadOnDemand": true,
+   "version": "1.1.0",
+   "title": "GearQuest Forever: Paladin"
+  },
+  {
+   "enabled": true,
+   "name": "GearQuestForever_PRIEST",
+   "loadOnDemand": true,
+   "version": "1.1.0",
+   "title": "GearQuest Forever: Priest"
+  },
+  {
+   "enabled": true,
+   "name": "GearQuestForever_ROGUE",
+   "loadOnDemand": true,
+   "version": "1.1.0",
+   "title": "GearQuest Forever: Rogue"
+  },
+  {
+   "enabled": true,
+   "name": "GearQuestForever_SHAMAN",
+   "loadOnDemand": true,
+   "version": "1.1.0",
+   "title": "GearQuest Forever: Shaman"
+  },
+  {
+   "enabled": true,
+   "name": "GearQuestForever_WARLOCK",
+   "loadOnDemand": true,
+   "version": "1.1.0",
+   "title": "GearQuest Forever: Warlock"
+  },
+  {
+   "enabled": true,
+   "name": "GearQuestForever_WARRIOR",
+   "loadOnDemand": true,
+   "version": "1.1.0",
+   "title": "GearQuest Forever: Warrior"
+  },
+  {
+   "enabled": true,
+   "name": "Leatrix_Maps",
+   "loaded": true,
+   "version": "1.60.28",
+   "title": "Leatrix Maps"
+  },
+  {
+   "enabled": true,
+   "name": "Leatrix_Plus",
+   "loaded": true,
+   "version": "1.60.29",
+   "title": "Leatrix Plus"
+  },
+  {
+   "enabled": true,
+   "name": "Plater",
+   "loaded": true,
+   "version": "Plater-v663-Forever",
+   "title": "Plater"
+  },
+  {
+   "enabled": true,
+   "name": "Questie",
+   "loaded": true,
+   "version": "12.6.4",
+   "title": "Questie v12.6.4"
+  },
+  {
+   "enabled": true,
+   "name": "QuestieDB",
+   "loaded": true,
+   "version": "1.0.12",
+   "title": "QuestieDB"
+  },
+  {
+   "enabled": true,
+   "name": "QuestieTrace",
+   "loaded": true,
+   "version": "1.9.1",
+   "title": "QuestieTrace"
+  },
+  {
+   "enabled": true,
+   "name": "Syndicator",
+   "loaded": true,
+   "version": "290",
+   "title": "Syndicator"
+  },
+  {
+   "enabled": true,
+   "name": "Tamed",
+   "loaded": true,
+   "version": "2.0.1",
+   "title": "Tamed"
+  },
+  {
+   "enabled": true,
+   "name": "TomTom",
+   "loaded": true,
+   "version": "v4.4.1-release",
+   "title": "TomTom"
+  },
+  {
+   "enabled": true,
+   "name": "tullaRange",
+   "loaded": true,
+   "version": "12.2.1",
+   "title": "tullaRange"
+  },
+  {
+   "enabled": true,
+   "name": "tullaRange_Config",
+   "loadOnDemand": true,
+   "title": "tullaRange Config"
+  },
+  {
+   "enabled": true,
+   "name": "WhatsTraining",
+   "loaded": true,
+   "version": "11.3.0",
+   "title": "What's Training?"
+  }
+ ],
+ "windows": {
+  "open": [
+   "PlayerSpellsFrame"
+  ]
+ },
+ "tooltip": {
+  "ageSeconds": 5,
+  "lines": "Nightsaber Stalker\nEvalhunter's Pet\nLevel 7",
+  "unit": "pet"
+ },
+ "pet": {
+  "reaction": "friendly",
+  "classification": "normal",
+  "name": "Nightsaber Stalker",
+  "debuffs": [
+   "Tame Nightsaber Stalker (414s)"
+  ],
+  "creatureType": "Beast",
+  "tooltip": "Nightsaber Stalker\nEvalhunter's Pet\nLevel 7",
+  "actions": [
+   "Attack",
+   "Follow [active]",
+   "Move To",
+   "Assist",
+   "Defensive",
+   "Passive [active]"
+  ],
+  "level": 7
+ },
+ "auras": {
+  "debuffs": [],
+  "buffs": [
+   "Aspect of the Monkey"
+  ]
+ },
+ "nearbyMobs": [
+  "Strigid Screecher, level 7-8, not hostile — nearest 64.2, 69.2 (24 m, 8 spawn points within 400 m) [quest target: Taming the Beast]",
+  "Lasher Sproutling, level 6-7, ? — nearest 63.0, 67.7 (54 m, 94 spawn points within 400 m)",
+  "Webwood Venomfang, level 7-8, hostile — nearest 65.2, 69.1 (55 m, 5 spawn points within 400 m)",
+  "Nightsaber Stalker, level 7-8, hostile — nearest 63.4, 70.2 (61 m, 7 spawn points within 400 m)",
+  "Timberling, level 5-6, hostile — nearest 62.2, 68.6 (88 m, 24 spawn points within 400 m)",
+  "Gnarlpine Gardener, level 5-6, hostile — nearest 65.3, 65.6 (106 m, 12 spawn points within 400 m)",
+  "Gnarlpine Warrior, level 6-7, hostile — nearest 65.7, 64.9 (134 m, 17 spawn points within 400 m)",
+  "Strigid Owl, level 5-6, not hostile — nearest 64.0, 64.1 (136 m, 9 spawn points within 400 m)",
+  "Gnarlpine Ursa, level 5-6, hostile — nearest 65.4, 64.1 (149 m, 10 spawn points within 400 m)",
+  "Denalan, level 11, not hostile — nearest 60.9, 68.5 (149 m, 1 spawn point within 400 m)",
+  "Webwood Lurker, level 5-6, hostile — nearest 67.0, 66.3 (154 m, 15 spawn points within 400 m)",
+  "Wrathvine, level 8, rare, ? — nearest 61.1, 71.2 (161 m, 21 spawn points within 400 m)",
+  "Nightsaber, level 5-6, hostile — nearest 62.2, 61.7 (229 m, 10 spawn points within 400 m)",
+  "Gaerolas Talvethren, level 7, not hostile — nearest 66.3, 58.5 (326 m, 1 spawn point within 400 m)",
+  "Uruson, level 7, rare, hostile — nearest 67.9, 59.4 (335 m, 1 spawn point within 400 m)",
+  "Sentinel Shaya, level 7, not hostile — nearest 57.2, 63.5 (354 m, 1 spawn point within 400 m)",
+  "Duskstalker, level 9, rare, hostile — nearest 58.1, 76.7 (375 m, 1 spawn point within 400 m)",
+  "Gnarlpine Shaman, level 7-8, hostile — nearest 56.9, 75.0 (392 m, 2 spawn points within 400 m)",
+  "Elder Bladeleaf, level 60, not hostile — nearest 57.3, 60.8 (397 m, 1 spawn point within 400 m)"
+ ],
+ "player": {
+  "mapID": 1438,
+  "zone": "Teldrassil",
+  "subzone": "",
+  "class": "Hunter",
+  "race": "Night Elf",
+  "faction": "Alliance",
+  "coords": "64.1, 68.5",
+  "hearthstone": "Shadowglen",
+  "level": 11,
+  "xpPct": 11,
+  "map": "Teldrassil",
+  "realZone": "Teldrassil",
+  "money": "0g 11s 43c",
+  "spec": "Hunter",
+  "xp": 968,
+  "powerType": "MANA",
+  "xpMax": 8800,
+  "powerMax": 330,
+  "name": "Evalhunter",
+  "sex": "male",
+  "healthMax": 226,
+  "rested": 46
+ },
+ "nearby": [
+  {
+   "class": "Hunter",
+   "race": "Night Elf",
+   "name": "Playerone",
+   "seen": "55s ago (nameplate)",
+   "level": 10,
+   "targeting": "Dazalar"
+  },
+  {
+   "class": "Druid",
+   "race": "Night Elf",
+   "name": "Playertwo",
+   "seen": "140s ago (nameplate)",
+   "level": 13
+  },
+  {
+   "class": "Rogue",
+   "race": "Night Elf",
+   "name": "Playerthree",
+   "seen": "210s ago (nameplate)",
+   "level": 8,
+   "targeting": "Timberling"
+  }
+ ],
+ "gearTotals": {
+  "total": "Agility +1, Armor +162, Strength +1",
+  "weaponDps": "[Thistlewood Dagger] 2.1; [Laminated Recurve Bow] 5.8",
+  "bySource": [
+   "Agility: [Tribal Pants] +1",
+   "Strength: [Tribal Pants] +1"
+  ]
+ },
+ "professions": {
+  "Leatherworking": {
+   "unlearned": 586,
+   "readAgo": 3376,
+   "recipes": [
+    {
+     "i": 2318,
+     "c": 0,
+     "r": [
+      {
+       "i": 2934,
+       "h": 0,
+       "q": 3,
+       "n": "Ruined Leather Scraps"
+      }
+     ],
+     "d": "optimal",
+     "g": 40,
+     "n": "Light Leather"
+    },
+    {
+     "i": 7276,
+     "c": 0,
+     "r": [
+      {
+       "i": 2318,
+       "h": 1,
+       "q": 2,
+       "n": "Light Leather"
+      },
+      {
+       "i": 2320,
+       "h": 0,
+       "q": 1,
+       "n": "Coarse Thread"
+      }
+     ],
+     "d": "optimal",
+     "g": 70,
+     "n": "Handstitched Leather Cloak"
+    },
+    {
+     "i": 5957,
+     "c": 0,
+     "r": [
+      {
+       "i": 2318,
+       "h": 1,
+       "q": 3,
+       "n": "Light Leather"
+      },
+      {
+       "i": 2320,
+       "h": 0,
+       "q": 1,
+       "n": "Coarse Thread"
+      }
+     ],
+     "d": "optimal",
+     "g": 70,
+     "n": "Handstitched Leather Vest"
+    },
+    {
+     "i": 7277,
+     "c": 0,
+     "r": [
+      {
+       "i": 2318,
+       "h": 1,
+       "q": 2,
+       "n": "Light Leather"
+      },
+      {
+       "i": 2320,
+       "h": 0,
+       "q": 3,
+       "n": "Coarse Thread"
+      }
+     ],
+     "d": "optimal",
+     "g": 70,
+     "n": "Handstitched Leather Bracers"
+    },
+    {
+     "i": 2302,
+     "c": 0,
+     "r": [
+      {
+       "i": 2318,
+       "h": 1,
+       "q": 2,
+       "n": "Light Leather"
+      },
+      {
+       "i": 2320,
+       "h": 0,
+       "q": 1,
+       "n": "Coarse Thread"
+      }
+     ],
+     "d": "optimal",
+     "g": 70,
+     "n": "Handstitched Leather Boots"
+    },
+    {
+     "i": 2304,
+     "c": 1,
+     "r": [
+      {
+       "i": 2318,
+       "h": 1,
+       "q": 1,
+       "n": "Light Leather"
+      }
+     ],
+     "d": "optimal",
+     "g": 60,
+     "n": "Light Armor Kit"
+    }
+   ],
+   "maxRank": 75,
+   "rank": 3
+  }
+ },
+ "game": {
+  "toc": 16001,
+  "locale": "enUS",
+  "buildDate": "Nov  6 2026",
+  "version": "1.60.1",
+  "hardcore": false,
+  "serverTime": "2026-11-10 19:35 UTC",
+  "realm": "Test Realm PvP",
+  "localTime": "2026-11-10 20:35:31",
+  "build": "1.60.1.70862"
+ },
+ "quests": [
+  "Quest log: 8/40",
+  {
+   "tracked": true,
+   "id": 98391,
+   "rewards": "85 XP",
+   "turnIn": "Sister Aquinne (Darnassus 28.9, 45.8)",
+   "title": "The Sisterhood of Elune",
+   "questGiver": "Laurna Morninglight (Teldrassil 55.6, 56.8)",
+   "status": "READY TO TURN IN",
+   "level": 10,
+   "description": "Blessings to you, hunter. The Sisterhood of Elune has stood as a pillar of kaldorei society for thousands of years.\r\n\r\nBefore the Great Sundering, before the War of the Ancients, through the Long Vigil, we have guided and healed our people through the darkness. Such is our charge, and such is the demand of the peerless Mother Moon.\r\n\r\nWe now require your aid in a matter of great importance. Sister Aquinne awaits your arrival in Darnassus.",
+   "objectiveText": "Speak to Sister Aquinne in Darnassus."
+  },
+  {
+   "tracked": true,
+   "id": 922,
+   "rewards": "320 XP",
+   "turnIn": "Rellian Greenspyre (Darnassus 38.2, 21.6)",
+   "questGiver": "Denalan (Teldrassil 60.9, 68.5)",
+   "title": "Rellian Greenspyre",
+   "objectiveText": "Bring a Timberling Seed to Rellian Greenspyre in Darnassus.",
+   "status": "READY TO TURN IN",
+   "level": 7,
+   "description": "Evalhunter, can you take one of the seeds you brought me to my friend, Rellian Greenspyre?  He is a druid in Darnassus, and when last we spoke he revealed his interest in my work with the Timberlings.  He had some ideas himself, and he will appreciate a specimen seed to work with.\n\nThank you, Evalhunter.  You have been a great help to me.  I hope that, some day, you will see the fruit of my labors.\n\nYou will usually find Rellian walking the pathways of the Cenarion Enclave in Darnassus.",
+   "objectives": "Bring a Timberling Seed to Rellian Greenspyre in Darnassus. [DONE]"
+  },
+  {
+   "tracked": true,
+   "id": 99046,
+   "rewards": "80 XP",
+   "turnIn": "Sentinel Eralya Leafshadow (Teldrassil 37.5, 36.8)",
+   "title": "The Lost Runner",
+   "questGiver": "Sentinel Kyra Starsong (Teldrassil 56.0, 59.5)",
+   "status": "READY TO TURN IN",
+   "level": 9,
+   "description": "The Council of the Forest sent a small group of sentinels to the Oracle Tree some time ago. The tree sends messages to our elders, and it falls to us to deliver them to Darnassus safely.\r\n\r\nI received word that our most recent runner has not yet arrived. The Oracle's messages vary in frequency, but it has been abnormally long.\r\n\r\nPlease head towards the Oracle Glade along the road to the west and check on her. It would have been Eralya Leafshadow's turn, and she is still in training. Elune guide you.",
+   "objectiveText": "Search for Sentinel Eralya Leafshadow on the road leading to the Oracle Glade."
+  },
+  {
+   "description": "All was not well with Teldrassil, however. Staghelm's carefully made plans for the new World Tree had borne out as he had hoped, but there was one small problem, a problem to which many of the troubles on Teldrassil may be attributed.\n\nHowever, I will not get into that yet. You must visit the last moonwell, to the northwest in the Oracle Glade. Under the boughs of the Oracle Tree lies the first and most powerful of our wells. Retrieve a phial of its water and return to me.",
+   "id": 7383,
+   "rewards": "650 XP",
+   "turnIn": "Corithras Moonrage (Teldrassil 56.1, 61.7)",
+   "whereToGet": [
+    "Filled Amethyst Phial: from object Oracle Glade Moonwell — Teldrassil 38.4, 34.1 (1602 m, 1 spawn point in your zone)"
+   ],
+   "title": "Crown of the Earth",
+   "questGiver": "Corithras Moonrage (Teldrassil 56.1, 61.7)",
+   "status": "in progress",
+   "level": 11,
+   "objectiveText": "Fill the Amethyst Phial and bring it back to Corithras Moonrage in Dolanaar.",
+   "objectives": "0/1 Filled Amethyst Phial [TO DO]"
+  },
+  {
+   "type": "Elite",
+   "description": "Lord Melenas did not act alone; he was at the behest of another. The one you seek is Xethorr the Wicked. It seems he has twisted the spiders that call Teldrassil home, intending their venom for some foul plan.\r\n\r\nHe has taken residence deep in the forest, in the area to the northwest of here known as the Cleft. Take caution, and bring allies, for Xethorr is not an opponent to be trifled with.\r\n\r\nDispatch his brood, and bring me anything that may tell us more of the satyr's work here.",
+   "id": 98403,
+   "rewards": "900 XP, [Webwood Slicer]",
+   "turnIn": "Tallonkai Swiftroot (Teldrassil 55.6, 57.0); Jeena Featherbow (Teldrassil 55.9, 59.2)",
+   "whereToGet": [
+    "Befouled Webwood: kill Befouled Webwood (level 10-11) — Teldrassil 51.5, 56.4 (697 m, 56 spawn points in your zone)",
+    "Mature Fel Moss: dropped by Xethorr the Wicked (level 12) — Teldrassil 60.1, 42.4 (832 m, 11 spawn points in your zone)"
+   ],
+   "title": "Twisted Hatred",
+   "questGiver": "Tallonkai Swiftroot (Teldrassil 55.6, 57.0)",
+   "status": "in progress",
+   "level": 12,
+   "objectiveText": "Kill 8 Befouled Webwoods and bring Xethorr the Wicked's Mature Fel Moss to Tallonkai Swiftroot in Dolanaar.",
+   "objectives": "0/8 Befouled Webwood slain [TO DO]; 0/1 Mature Fel Moss [TO DO]"
+  },
+  {
+   "description": "You've become a leatherworker. Good for you, hunter. I reckon I know someone that can teach you how to make yourself a tent that will keep you cool on hot days, and dry on rainy days.\r\n\r\nWith a good tent over your head, you'll ensure that you get all the rest you need to stay sharp on your travels.",
+   "id": 97946,
+   "rewards": "270 XP",
+   "turnIn": "Nadyia Maneweaver (Teldrassil 41.9, 49.4)",
+   "whereToGet": [
+    "Nadyia Maneweaver: kill Nadyia Maneweaver (level 30) — Teldrassil 41.9, 49.4 (1191 m, 1 spawn point in your zone)"
+   ],
+   "title": "Camping 101: Leatherworking",
+   "questGiver": "Lyreena Duskblade (Teldrassil 57.6, 56.6)",
+   "status": "in progress",
+   "level": 6,
+   "objectiveText": "Speak with Nadyia Maneweaver on the road to Darnassus from Dolanaar to learn to craft a camping item for your profession once you have shown proficiency in your skill.",
+   "objectives": "Raise your leatherworking skill to 20 [TO DO]"
+  },
+  {
+   "tracked": true,
+   "id": 97949,
+   "rewards": "270 XP",
+   "turnIn": "Radnaal Maneweaver (Teldrassil 42.1, 50.0)",
+   "whereToGet": [
+    "Radnaal Maneweaver: kill Radnaal Maneweaver (level 19) — Teldrassil 42.1, 50.0 (1175 m, 1 spawn point in your zone)"
+   ],
+   "questGiver": "Lyreena Duskblade (Teldrassil 57.6, 56.6)",
+   "title": "Camping 101: Skinning",
+   "objectiveText": "Speak with Radnaal Maneweaver on the road to Darnassus from Dolanaar to learn to craft a camping item for your profession once you have shown proficiency in your skill.",
+   "status": "in progress",
+   "level": 6,
+   "description": "Being able to skillfully harvest the skins and hides of fallen beasts is one of the more valuable skills an adventurer can possess.\r\n\r\nI reckon I know someone that can teach you how to craft a Camp Chair for your camp. Sometimes it's important to just take a load off, and you can use some of those hides you've gathered to make a comfy chair to sit in. A bit of relaxation can help ensure that you are at your peak condition and can strike where it counts the next time you find yourself in a dust-up.",
+   "objectives": "Raise your skinning skill to 20 [TO DO]"
+  },
+  {
+   "tracked": true,
+   "id": 6102,
+   "rewards": "850 XP",
+   "turnIn": "Dazalar (Teldrassil 56.7, 59.5)",
+   "whereToGet": [
+    "Strigid Screecher: kill Strigid Screecher (level 7-8) — Teldrassil 64.2, 69.2 (24 m, 36 spawn points in your zone)"
+   ],
+   "questGiver": "Dazalar (Teldrassil 56.7, 59.5)",
+   "title": "Taming the Beast",
+   "objectiveText": "Use the Taming Rod to tame a Strigid Screecher. Practice your skills, then return the Taming Rod to Dazalar in Dolanaar.",
+   "status": "in progress",
+   "level": 10,
+   "description": "You have tamed two creatures that inhabit the land, now you must tame one that soars the skies. Use the taming rod to tame a strigid screecher, found west of here. Practice your skills with this mighty owl at your side.\n\nWhen you return, I will bestow you with the skills you will need to tame an animal of your choosing to be your companion; this creature will face the challenges you face, and gain experience alongside you. I will also show you how to call it and dismiss it as you wish.",
+   "objectives": "Tame a Strigid Screecher [TO DO]"
+  }
+ ],
+ "equipment": [
+  {
+   "item": "(empty)",
+   "slot": "Head"
+  },
+  {
+   "item": "(empty)",
+   "slot": "Neck"
+  },
+  {
+   "item": "(empty)",
+   "slot": "Shoulder"
+  },
+  {
+   "stats": "NONE — this item has no stats (read from the game)",
+   "item": "[Rugged Trapper's Shirt]",
+   "slot": "Shirt",
+   "ilvl": 1,
+   "tooltip": "Rugged Trapper's Shirt\nShirt",
+   "sellPrice": "0g 0s 1c",
+   "quality": "common"
+  },
+  {
+   "durability": "43/45",
+   "stats": "NONE — this item has no stats (read from the game)",
+   "item": "[Woodland Tunic]",
+   "slot": "Chest",
+   "ilvl": 5,
+   "tooltip": "Woodland Tunic\nSoulbound\nChest  [Leather]\n33 Armor\nDurability 43 / 45",
+   "sellPrice": "0g 0s 13c",
+   "quality": "common"
+  },
+  {
+   "durability": "16/16",
+   "stats": "NONE — this item has no stats (read from the game)",
+   "item": "[Ragged Leather Belt]",
+   "slot": "Waist",
+   "ilvl": 5,
+   "tooltip": "Ragged Leather Belt\nWaist  [Leather]\n18 Armor\nDurability 16 / 16",
+   "sellPrice": "0g 0s 4c",
+   "quality": "poor"
+  },
+  {
+   "durability": "45/45",
+   "stats": "Agility +1, Strength +1",
+   "ilvl": 12,
+   "slot": "Legs",
+   "tooltip": "Tribal Pants\nSoulbound\nLegs  [Leather]\n54 Armor\n+1 Strength\n+1 Agility\nDurability 45 / 45\nRequires Level 7",
+   "sellPrice": "0g 1s 99c",
+   "item": "[Tribal Pants]",
+   "requiresLevel": 7,
+   "quality": "uncommon"
+  },
+  {
+   "durability": "25/25",
+   "stats": "NONE — this item has no stats (read from the game)",
+   "ilvl": 10,
+   "slot": "Feet",
+   "tooltip": "Patchwork Shoes\nFeet  [Cloth]\n12 Armor\nDurability 25 / 25\nRequires Level 5",
+   "sellPrice": "0g 0s 29c",
+   "item": "[Patchwork Shoes]",
+   "requiresLevel": 5,
+   "quality": "poor"
+  },
+  {
+   "durability": "18/18",
+   "stats": "NONE — this item has no stats (read from the game)",
+   "item": "[Feral Bracers]",
+   "slot": "Wrist",
+   "ilvl": 7,
+   "tooltip": "Feral Bracers\nSoulbound\nWrist  [Leather]\n18 Armor\nDurability 18 / 18",
+   "sellPrice": "0g 0s 13c",
+   "quality": "common"
+  },
+  {
+   "durability": "16/16",
+   "stats": "NONE — this item has no stats (read from the game)",
+   "item": "[Worn Leather Gloves]",
+   "slot": "Hands",
+   "ilvl": 6,
+   "tooltip": "Worn Leather Gloves\nHands  [Leather]\n22 Armor\nDurability 16 / 16",
+   "sellPrice": "0g 0s 6c",
+   "quality": "poor"
+  },
+  {
+   "item": "(empty)",
+   "slot": "Finger1"
+  },
+  {
+   "item": "(empty)",
+   "slot": "Finger2"
+  },
+  {
+   "item": "(empty)",
+   "slot": "Trinket1"
+  },
+  {
+   "item": "(empty)",
+   "slot": "Trinket2"
+  },
+  {
+   "stats": "NONE — this item has no stats (read from the game)",
+   "item": "[Flimsy Chain Cloak]",
+   "slot": "Back",
+   "ilvl": 5,
+   "tooltip": "Flimsy Chain Cloak\nBack\n5 Armor",
+   "sellPrice": "0g 0s 7c",
+   "quality": "poor"
+  },
+  {
+   "durability": "20/20",
+   "stats": "DPS +2.1",
+   "item": "[Thistlewood Dagger]",
+   "slot": "MainHand",
+   "ilvl": 5,
+   "tooltip": "Thistlewood Dagger\nSoulbound\nOne-Hand  [Dagger]\n2 - 5 Damage  [Speed 1.70]\n(2.1 damage per second)\nDurability 20 / 20",
+   "sellPrice": "0g 0s 25c",
+   "quality": "common"
+  },
+  {
+   "item": "(empty)",
+   "slot": "OffHand"
+  },
+  {
+   "durability": "40/40",
+   "stats": "DPS +5.8",
+   "ilvl": 16,
+   "slot": "Ranged",
+   "tooltip": "Laminated Recurve Bow\nRanged  [Bow]\n10 - 20 Damage  [Speed 2.60]\n(5.8 damage per second)\nDurability 40 / 40\nRequires Level 11",
+   "sellPrice": "0g 3s 50c",
+   "item": "[Laminated Recurve Bow]",
+   "requiresLevel": 11,
+   "quality": "common"
+  },
+  {
+   "item": "(empty)",
+   "slot": "Tabard"
+  }
+ ]
+}

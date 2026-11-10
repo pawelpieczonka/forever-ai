@@ -112,13 +112,16 @@ TOOLS.append({
         "description": "Mark a point on the player's map (waypoint with arrow). Use when the question is about a place: "
                        "quest turn-in NPC, mobs, herbs, dungeon entrance, trainer. Coordinates 0-100 as in the game "
                        "(from the quests/zoneNPCs/nearbyMobs data or the wiki). zone = English zone name (e.g. "
-                       "'Teldrassil'); omit for the player's current zone. Can be called several times (up to 8 points).",
+                       "'Teldrassil'); omit for the player's current zone. Can be called several times (up to 8 points). "
+                       "The marks of one answer replace the marks of your earlier answers; add=true keeps those and "
+                       "adds this point (an extra stop on a route that still holds).",
         "parameters": {
             "type": "object",
             "properties": {
                 "title": {"type": "string", "description": "Short name of the point, e.g. 'Conservator Ilthalaine'"},
                 "x": {"type": "number"}, "y": {"type": "number"},
                 "zone": {"type": "string"},
+                "add": {"type": "boolean", "description": "true: keep the marks of earlier answers and add this one"},
             },
             "required": ["title", "x", "y"],
         },

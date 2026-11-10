@@ -350,7 +350,7 @@ function UI.UpdateAnswer(data)
     if metaText ~= "" then bubble("meta", metaText) end
     ns.RecordEntry({ k = "a", t = data.text or "", links = data.links, meta = metaText ~= "" and metaText or nil })
     for _, a in ipairs(data.actions or {}) do UI.ActionCard(a) end
-    if data.marks and #data.marks > 0 then UI.MarksCard(data.marks) end
+    if data.marks and #data.marks > 0 then UI.MarksCard(data.marks, data.marksReplace) end
     if type(data.auction) == "table" and #data.auction > 0 then UI.AuctionCard(data.auction) end
     currentAnswer = nil
   else
@@ -480,7 +480,9 @@ function UI.ActionCard(action)
   relayout()
 end
 
-function UI.MarksCard(marks)
+-- replace == false: the answer adds stops to the marks of earlier answers; otherwise its marks replace them
+function UI.MarksCard(marks, replace)
+  if replace ~= false then ns.Map.Clear() end
   local placed, how = ns.Map.Apply(marks)
   if #placed == 0 then return end
   local lines = {}

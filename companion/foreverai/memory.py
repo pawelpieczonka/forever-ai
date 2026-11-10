@@ -125,7 +125,8 @@ class ConversationStore:
     def history(self, conv: str) -> list[dict]:
         return list(self._load(conv)["turns"])
 
-    def append(self, conv: str, char: str, question: str, answer: str) -> None:
+    def append(self, conv: str, char: str, question: str, answer: str, did: list[str] | None = None) -> None:
+        """``did``: what the answer did besides its text (map marks, proposals, memory), for the following turns."""
         with self._lock:
             data = self._load(conv)
             if not data.get("title"):
@@ -133,7 +134,7 @@ class ConversationStore:
                 data["created"] = datetime.now().strftime("%Y-%m-%d %H:%M")
             data["char"] = char
             data["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-            data["turns"].append({"q": question, "a": answer})
+            data["turns"].append({"q": question, "a": answer, **({"did": list(did)} if did else {})})
             del data["turns"][:-MAX_TURNS]
             _atomic_write(self.folder / f"{self._safe(conv)}.json", data)
 

@@ -210,3 +210,30 @@ def test_every_global_the_addon_reads_is_emulated(sim):
             (read if op == "GETGLOBAL" else written).add(name)
     missing = sorted(n for n in read - written - ABSENT if sim.lua("return _G[...] == nil", n) is True)
     assert missing == [], "add these to addonsim/lua/world.lua or wow.lua: " + ", ".join(missing)
+
+
+TOMTOM = r"""
+TomTom = { points = {}, n = 0 }
+function TomTom:AddWaypoint(map, x, y, opts) self.n = self.n + 1 self.points[self.n] = opts.title return self.n end
+function TomTom:RemoveWaypoint(uid) self.points[uid] = nil end
+"""
+ON_THE_MAP = r"""
+local out = {}
+for _, title in pairs(TomTom.points) do out[#out + 1] = title end
+table.sort(out)
+return table.concat(out, " | ")
+"""
+
+
+def test_new_marks_replace_the_earlier_ones_unless_added(sim):
+    sim.slash("/fai")
+    sim.lua(TOMTOM)
+    mark = 'ForeverAI.UI.MarksCard({ { title = "%s", x = 56.7, y = 59.5 } }, %s)'
+    sim.lua(mark % ("Dazalar", "true"))
+    sim.lua(mark % ("Byancie", "true"))
+    assert sim.lua(ON_THE_MAP) == b"ForeverAI: Byancie"
+    sim.lua(mark % ("Lyreena", "false"))  # an extra stop: the answer said to keep the earlier marks
+    assert sim.lua(ON_THE_MAP) == b"ForeverAI: Byancie | ForeverAI: Lyreena"
+    sim.lua(mark % ("Dazalar", "nil"))  # an app that does not say: replace
+    assert sim.lua(ON_THE_MAP) == b"ForeverAI: Dazalar"
+    assert sim.errors == []
