@@ -157,3 +157,62 @@ def test_settings_tab_sends_no_ai_settings_and_shows_the_ai_in_use(tmp_path):
     assert abs(width - (child_w - 10)) < 0.01 and narrow > wide > 0
     assert sim.errors == []
     sim.close()
+
+
+# every data check box's label: how far its right end lies from the scrolled content's right edge (negative: cut off),
+# the number of columns, and whether two boxes overlap
+FIT = r"""
+local grid
+local f = EnumerateFrames()
+while f and not grid do
+  if f:GetObjectType() == "CheckButton" then
+    for _, r in ipairs({ f:GetRegions() }) do
+      if r:GetObjectType() == "FontString" and r:GetText() == "Professions" then grid = f:GetParent() end
+    end
+  end
+  f = EnumerateFrames(f)
+end
+local right, room, lefts, boxes = grid:GetParent():GetRight(), math.huge, {}, {}
+for _, c in ipairs({ grid:GetChildren() }) do
+  if c:GetObjectType() == "CheckButton" then
+    for _, r in ipairs({ c:GetRegions() }) do
+      if r:GetObjectType() == "FontString" and r:GetText() then
+        room = math.min(room, right - (r:GetLeft() + r:GetStringWidth()))
+        boxes[#boxes + 1] = { c:GetLeft(), r:GetLeft() + r:GetStringWidth(), c:GetTop() }
+      end
+    end
+    lefts[math.floor(c:GetLeft() + 0.5)] = true
+  end
+end
+local cols, overlap = 0, false
+for _ in pairs(lefts) do cols = cols + 1 end
+for i, a in ipairs(boxes) do
+  for j, b in ipairs(boxes) do
+    if i ~= j and math.abs(a[3] - b[3]) < 1 and a[1] < b[1] and a[2] > b[1] then overlap = true end
+  end
+end
+return room, cols, overlap
+"""
+
+
+def test_data_check_boxes_fit_the_window(tmp_path):
+    """The longest labels (Nearby players, Professions, Open windows) are never cut off: three columns in the default
+    window, fewer when it is narrow or the font is big."""
+    install_game(tmp_path / "game", pool=40)
+    sim = Sim(tmp_path / "game", clock=datetime(2026, 11, 10, 12, 0)).start()
+    sim.slash("/fai")
+    sim.click("Settings")
+    seen = {}
+    for w, font in ((470, 13), (470, 15), (380, 12), (380, 13), (380, 15), (1000, 15), (300, 15)):
+        sim.click(str(font))
+        sim.lua("ForeverAIFrame:SetSize(...)", w, 600)
+        sim.step(2)
+        room, cols, overlap = sim.lua(FIT)
+        assert room >= 0 and not overlap, (w, font, room)
+        boxes, grid_h, lowest, below = sim.lua(GRID)
+        assert grid_h == -(-13 // cols) * 24 and lowest <= grid_h and below is True, (w, font, cols)
+        seen[(w, font)] = cols
+    assert seen[(470, 13)] == seen[(470, 15)] == seen[(1000, 15)] == 3  # the default window keeps three columns
+    assert seen[(380, 15)] == 2 and seen[(300, 15)] <= 2
+    assert sim.errors == []
+    sim.close()

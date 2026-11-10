@@ -117,6 +117,7 @@ local function Check(parent, text, get, set)
   cb:SetSize(22, 22)
   local l = label(cb, text, F.btn)
   l:SetPoint("LEFT", cb, "RIGHT", 2, 0)
+  cb.label = l
   cb:SetScript("OnShow", function(self) self:SetChecked(get()) end)
   cb:SetScript("OnClick", function(self) set(self:GetChecked() and true or false) end)
   return cb
@@ -719,16 +720,28 @@ local function buildSettings(p)
     { "skills", "Skills" }, { "professions", "Professions" }, { "progress", "Progress" }, { "reputations", "Reputation" },
     { "nearby", "Nearby players" }, { "windows", "Open windows" }, { "auras", "Auras" }, { "addons", "Add-ons" },
     { "chat", "Chat (private)" } }
-  local gridH = math.ceil(#opts / 3) * 24 -- three per row; the grid grows with the list
-  data:SetSize(420, gridH)
+  local checks = {}
   for i, o in ipairs(opts) do
-    local cb = Check(data, o[2], function()
+    checks[i] = Check(data, o[2], function()
       if o[1] == "chat" then return ns.db.sections.chat == true end
       return ns.db.sections[o[1]] ~= false
     end, function(v) ns.db.sections[o[1]] = v end)
-    cb:SetPoint("TOPLEFT", ((i - 1) % 3) * 140, -math.floor((i - 1) / 3) * 24)
   end
-  row(data, gridH)
+  -- three per row in the default window; fewer when it is narrow or the font big, so no label is cut off
+  row(data, math.ceil(#opts / 3) * 24)
+  local grid = rows[#rows]
+  local function layGrid(width)
+    local need = 0
+    for _, cb in ipairs(checks) do need = math.max(need, 34 + cb.label:GetStringWidth()) end
+    local cols = width > 0 and math.max(1, math.min(3, math.floor(width / need))) or 3
+    local colW = width > 0 and math.floor(width / cols) or 140
+    for i, cb in ipairs(checks) do
+      cb:ClearAllPoints()
+      cb:SetPoint("TOPLEFT", data, "TOPLEFT", ((i - 1) % cols) * colW, -math.floor((i - 1) / cols) * 24)
+    end
+    grid[2] = math.ceil(#checks / cols) * 24
+    data:SetSize(math.max(width, 10), grid[2])
+  end
 
   head("Appearance")
   local look = CreateFrame("Frame", nil, c)
@@ -764,6 +777,7 @@ local function buildSettings(p)
 
   function S.Layout()
     local width = c:GetWidth()
+    layGrid(width)
     local y = 0
     for _, r in ipairs(rows) do
       local f, h = r[1], r[2]

@@ -133,6 +133,7 @@ class Sim:
         self.placeholders: set[str] = set()
         self.reloads = 0
         self.cvars: dict[str, str] = {}
+        self._character: dict = {}  # world.lua's player as the last UI left it (level, XP, money, place)
         self._canvas: Canvas | None = None
         self._wall0 = time.perf_counter()
         self._lua = None
@@ -267,6 +268,9 @@ class Sim:
         self._lua.execute(b"math.randomseed(...)", self.seed + self.reloads)
         self._wow = self._lua.execute((LUA_DIR / "wow.lua").read_bytes(), self._host())
         self._lua.execute((LUA_DIR / "world.lua").read_bytes(), self._wow)
+        if reload:  # the character lives on the server: a /reload keeps what happened to it
+            for k, v in self._character.items():
+                self._wow.player[k] = v
         # what the game does not have
         self._lua.execute(b"os, io, require, package, module, dofile, loadfile, debug, python = nil")
         self._wow.now = self.now
@@ -308,6 +312,7 @@ class Sim:
         self._wow.fire(b"PLAYER_LOGOUT")
         self._wow.saveVariables()
         self.cvars = {_s(k): _s(v) for k, v in self._wow.cvars.items()}
+        self._character = dict(self._wow.player.items())
         self._collect()
 
     def close(self) -> None:

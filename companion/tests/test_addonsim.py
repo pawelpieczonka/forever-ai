@@ -89,6 +89,28 @@ def test_reload_keeps_saved_variables(sim):
     assert sim.errors == []
 
 
+def test_reload_keeps_the_character(sim):
+    """A /reload loads the UI again but the character is the server's: its level, XP and money stay, so the add-on's
+    progress session goes on without a level-up or a money change that did not happen."""
+    p = sim._wow.player
+    sim.run(61)
+    p.level, p.xp, p.xpMax, p.money = 25, 400, 20200, 200000
+    sim._wow.fire(b"PLAYER_LEVEL_UP", 25)
+    sim._wow.fire(b"PLAYER_XP_UPDATE", b"player")
+    sim.run(2)
+    sim.reload()
+    assert sim.lua("return UnitLevel('player'), UnitXP('player'), GetMoney()") == (25, 400, 200000)
+    sim.run(61)
+    sim._wow.player.xp = 900
+    sim._wow.fire(b"PLAYER_XP_UPDATE", b"player")
+    sim.run(1)
+    cur = sim.to_py(sim.lua("return ForeverAICharDB.progress.cur"))
+    assert cur["reloads"] == 1 and cur["lvl0"] == 24 and cur["lvl"] == 25 and cur["levels"] == 1
+    assert cur["gain"] == (18700 - 11850) + 900 and cur["money"] == 200000
+    assert len(sim.to_py(sim.lua("return ForeverAICharDB.progress.levels"))) == 1
+    assert sim.errors == []
+
+
 def test_question_without_the_app(sim):
     """The add-on paints the question into its data block and takes a screenshot; nothing answers."""
     sim.ask("Is anyone there?")
