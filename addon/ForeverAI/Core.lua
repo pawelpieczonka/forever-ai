@@ -1,7 +1,7 @@
 -- ForeverAI: core (namespace, saved variables, events, conversations, requests)
 local ADDON, ns = ...
 ForeverAI = ns
-ns.version = "0.6.0"
+ns.version = "0.7.0"
 
 BINDING_HEADER_FOREVERAI = "ForeverAI"
 BINDING_NAME_FOREVERAI_TOGGLE = "Show/hide ForeverAI"
@@ -9,7 +9,8 @@ BINDING_NAME_FOREVERAI_ASK_TOOLTIP = "Ask about the object under the cursor"
 
 ns.defaults = {
   sections = { bags = true, spells = true, skills = true, reputations = true, nearby = true, windows = true,
-               addons = true, auras = true, chat = false, talents = true, quests = true },
+               addons = true, auras = true, chat = false, talents = true, quests = true, progress = true,
+               professions = true },
   maxSnapshotKB = 200,
   window = { point = "CENTER", x = 260, y = 40, w = 470, h = 600 },
   button = { show = true, point = "TOPRIGHT", x = -24, y = -250 },
@@ -296,6 +297,10 @@ SlashCmdList.FOREVERAI = function(msg)
   elseif msg == "button" then
     ns.db.button.show = not ns.db.button.show
     ns.Button.Refresh()
+  elseif msg == "progress" then
+    if ns.Progress then ns.Progress.Debug() end
+  elseif msg == "professions" then
+    if ns.Professions then ns.Professions.Debug() end
   elseif msg == "debug" then
     local t = ns.Transport and ns.Transport.timings or {}
     ns.print("session", ns.session, "inbox", ns.Transport and ns.Transport.nextInbox, "/", ns.Transport and ns.Transport.poolSize,

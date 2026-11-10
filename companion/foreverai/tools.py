@@ -249,10 +249,16 @@ TOOLS.append({
                        "with the Pawn add-on, the upgrade in percent. Use it for every question about buying on the AH "
                        "(upgrades, best item for a budget, cheapest materials, prices). Give filters, not only a name: "
                        "e.g. 'best one-handed sword up to 100 gold' = weapon_type 1h_sword, slot one-hand, "
-                       "max_price_gold 100, upgrades_only true.",
+                       "max_price_gold 100, upgrades_only true. For the prices of KNOWN items (a profession's reagents "
+                       "and crafted items, a shopping list) give items instead: exact names or item ids, up to 40 in "
+                       "one call; each comes back with its price or why it has none.",
         "parameters": {
             "type": "object",
             "properties": {
+                "items": {"type": "array", "items": {"type": "string"},  # one plain type: every provider takes it
+                          "description": "Exact item names (e.g. 'Linen Cloth') or item ids (e.g. '2589'; ids from the "
+                                         "professions or bags data are the surest), up to 40. Other filters are "
+                                         "ignored with items."},
                 "query": {"type": "string", "description": "English words that must be in the item name (optional)"},
                 "slot": {"type": "string", "enum": list(AH_SLOTS)},
                 "weapon_type": {"type": "string", "enum": list(AH_WEAPONS)},
@@ -272,9 +278,55 @@ TOOLS.append({
 })
 
 
+AH_EXACT_MAX = 40
+
+
+def _exact_item(x: Any) -> dict | None:
+    """'Linen Cloth', '[Linen Cloth]', 2589, '2589', 'Linen Cloth (item 2589)' or {"id"/"name"} -> {"id"} or {"name"}."""
+    if isinstance(x, dict):
+        x = x.get("id") or x.get("name")
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, (int, float)):
+        return {"id": int(x)} if int(x) > 0 else None
+    if not isinstance(x, str):
+        return None
+    text = x.strip()
+    m = re.search(r"\bitem[: ]+(\d+)", text, re.I)
+    if m:
+        return {"id": int(m.group(1))}
+    text = text.strip("[] ")
+    if text.isdigit():
+        return {"id": int(text)} if int(text) > 0 else None
+    return {"name": text[:80]} if text else None
+
+
 def auction_request(args: dict) -> tuple[dict | None, str | None]:
     """Model arguments -> the game's auction_search request (numeric item classes, equip slots, copper).
     Returns (request, error)."""
+    items = args.get("items")
+    if items not in (None, "", []):
+        if isinstance(items, (str, int)):
+            items = [items]
+        if not isinstance(items, list):
+            return None, "Rejected: items must be a list of item names or ids."
+        if len(items) > AH_EXACT_MAX:
+            return None, f"Rejected: at most {AH_EXACT_MAX} items per call; split the list."
+        exact, seen = [], set()
+        for x in items:
+            it = _exact_item(x)
+            key = json.dumps(it, sort_keys=True).lower() if it else None
+            if it and key not in seen:
+                seen.add(key)
+                exact.append(it)
+        if not exact:
+            return None, "Rejected: items must be item names (e.g. 'Linen Cloth') or item ids."
+        try:
+            age = max(1, min(30, int(args.get("max_age_days") or 30)))
+        except (TypeError, ValueError):
+            age = 30
+        return {"items": exact, "maxAgeDays": age}, None
+
     def gold(name):
         v = args.get(name)
         if v in (None, ""):
@@ -347,6 +399,26 @@ def format_auction(res: dict | None) -> str:
     head = [f"Auction house prices from {res.get('source', 'the auction add-on')}"
             + (f" (realm {res['realm']})" if res.get("realm") else "")
             + (f"; last scan: {res['lastScan']}" if res.get("lastScan") else "") + "."]
+    if res.get("exact"):
+        head.append(f"Prices of the requested items: the lowest buyout of the last scan that saw each item (prices "
+                    f"seen in the last {res.get('maxAgeDays', 30)} days); listings may have sold or changed since.")
+        lines = []
+        for it in items:
+            seen = it.get("seen")
+            lines.append(f"- [{it.get('name')}] (item {it.get('id')}) — {it.get('price', '?')}"
+                         + (f" | seen {seen}" if seen else "")
+                         + (f", {it['available']} available" if it.get("available") else ""))
+        for m in res.get("missing") or []:
+            ident = f"[{m.get('name')}]" if m.get("name") else "?"
+            if m.get("id"):
+                ident += f" (item {m['id']})"
+            lines.append(f"- {ident}: {m.get('why') or 'no price'}")
+        if not lines:
+            lines.append("No prices found.")
+        if res.get("ahOpen"):
+            lines.append("The auction house window is open: the game offers to search the items you recommend in "
+                         "Auctionator.")
+        return "\n".join(head + lines)
     head.append(f"{res.get('dbItems', '?')} items in the price data, {res.get('matched', len(items))} match the filters, "
                 f"showing {len(items)} (sorted by {res.get('sort', 'upgrade')}). A price is the lowest buyout of the last "
                 "scan that saw the item; listings may have sold or changed since.")

@@ -63,6 +63,7 @@ function M:IsProtected() return false end
 function M:NumLines() return 0 end
 function M:GetName() return self.name end
 function M:RegisterEvent() return true end
+function M:SetPoint(...) self.pt = { ... } end
 
 -- the game
 local timers = {}
@@ -135,7 +136,34 @@ out("CONTROLS", table.concat(labels, ","))
 local types = {}
 for _, m in ipairs(sent) do types[#types + 1] = m.type end
 out("SENT", table.concat(types, ","))
-out("SECTIONS", tostring(ns.db.sections.bags) .. "," .. tostring(ns.db.sections.chat))
+out("SECTIONS", tostring(ns.db.sections.bags) .. "," .. tostring(ns.db.sections.chat) .. "," ..
+  tostring(ns.db.sections.progress) .. "," .. tostring(ns.db.sections.professions))
+-- the data grid grows with its check boxes: the last row fits and the next heading comes below it
+local boxes, grid = {}, nil
+for _, w in ipairs(descendants(panel, {})) do
+  if w.kind == "CheckButton" and w.parent and w.kids[1] and w.kids[1].text == "Professions" then grid = w.parent end
+end
+local lowest = 0
+for _, k in ipairs(grid.kids) do
+  if k.kind == "CheckButton" then boxes[#boxes + 1] = k.kids[1].text lowest = math.max(lowest, -k.pt[3] + 22) end
+end
+local appearance = find("FontString", "^Appearance$")
+out("GRID", #boxes .. "," .. grid.h .. "," .. lowest .. "," .. tostring(-appearance.pt[5] >= -grid.pt[5] + grid.h))
+-- the progress box: off stops the section, on again restores it
+for _, w in ipairs(descendants(panel, {})) do
+  if w.kind == "CheckButton" and w.kids[1] and w.kids[1].text == "Progress" then
+    w.checked = false w.scripts.OnClick(w, "LeftButton")
+    out("PROGRESS_OFF", tostring(ns.db.sections.progress))
+    w.checked = true w.scripts.OnClick(w, "LeftButton")
+  end
+end
+-- /fai progress and /fai professions print what was collected; they are not questions
+local hits, sentBefore = {}, #sent
+ns.Progress = { Debug = function() hits[#hits + 1] = "progress" end }
+ns.Professions = { Debug = function() hits[#hits + 1] = "professions" end }
+SlashCmdList.FOREVERAI("progress")
+SlashCmdList.FOREVERAI("  professions ")
+out("SLASH", table.concat(hits, ",") .. "," .. (#sent - sentBefore))
 
 -- the app answers the status request
 ns.OnMessage({ kind = "status", final = true, msgId = sent[1] and sent[1].msgId,
@@ -183,7 +211,12 @@ def test_settings_tab_sends_no_ai_settings_and_shows_the_ai_in_use(tmp_path):
                  "max"):
         assert gone not in controls
     assert lines["SENT"] == "status"  # Refresh asks the app for the AI in use; nothing else goes out
-    assert lines["SECTIONS"] == "true,false"  # the data check boxes were clicked back
+    assert lines["SECTIONS"] == "true,false,true,true"  # the data check boxes were clicked back
+    assert "[x]Progress" in controls and "[x]Professions" in controls
+    boxes, grid_h, lowest, below = lines["GRID"].split(",")
+    assert boxes == "13" and int(grid_h) == 5 * 24 and int(lowest) <= int(grid_h) and below == "true"
+    assert lines["PROGRESS_OFF"] == "false"
+    assert lines["SLASH"] == "progress,professions,0"
     assert lines["AFTER"] == "In use: |cffe6e9ecClaude Code · haiku 5 5 · thinking high|r  ·  web search: auto"
     assert "haiku 5 5" in lines["PILL"] and lines["PENDING"] == "nil"
     assert lines["ASKED"] == "question"

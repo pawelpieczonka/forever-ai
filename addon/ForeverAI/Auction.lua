@@ -251,6 +251,88 @@ local function describe(job)
     upgradeMethod = method, sort = req.sort or "upgrade", ahOpen = AH.IsOpen() }
 end
 
+------------------------------------------------------------------------ exact items (a shopping list, reagents, crafted items)
+local EXACT_MAX = 40
+
+-- an item name -> its id, from what the game already knows (no server request)
+local function idByName(name)
+  local link = ns.Collect and ns.Collect.knownLinks and ns.Collect.knownLinks[name]
+  local id = link and tonumber(link:match("item:(%d+)"))
+  if id then return id end
+  if ns.Professions and ns.Professions.ItemId then
+    id = ns.Professions.ItemId(name)
+    if id then return id end
+  end
+  return C_Item.GetItemInfoInstant and (safe(C_Item.GetItemInfoInstant, name)) or nil
+end
+
+-- step 1 (in slices): every requested item's lowest price; names the game could not tell are matched against the
+-- names of the priced items it has in its cache
+local function exactScan(job)
+  local req, today = job.req, scanDay()
+  local maxAge = tonumber(req.maxAgeDays) or 30
+  local wanted, byName = {}, {}
+  job.asked = {}
+  for i, it in ipairs(req.items) do
+    if i > EXACT_MAX then break end
+    local name = type(it) == "table" and type(it.name) == "string" and it.name or nil
+    local e = { ask = name or tostring(it.id), id = type(it) == "table" and tonumber(it.id) or nil }
+    if not e.id and name then e.id = idByName(name) end
+    job.asked[#job.asked + 1] = e
+    if e.id then
+      wanted[e.id] = wanted[e.id] or {}
+      table.insert(wanted[e.id], e)
+    elseif name then
+      byName[name:lower()] = e
+    end
+  end
+  local unnamed, n = next(byName) ~= nil, 0
+  for key, entry in pairs(job.db) do
+    n = n + 1
+    if n % 200 == 0 and debugprofilestop() - job.slice > BUDGET_MS then coroutine.yield() end
+    local id = itemIdOf(key)
+    if id and type(entry) == "table" then
+      if unnamed and not wanted[id] then
+        local name = safe(C_Item.GetItemInfo, id) -- only items in the client's cache have a name here
+        local e = name and byName[name:lower()]
+        if e then
+          e.id, wanted[id], byName[name:lower()] = id, { e }, nil
+          unnamed = next(byName) ~= nil
+        end
+      end
+      local price = wanted[id] and tonumber(entry.m)
+      if price and price > 0 then
+        local age, avail = freshness(entry, today)
+        if age and age <= maxAge then
+          for _, e in ipairs(wanted[id]) do
+            if not e.copper or price < e.copper then e.copper, e.age, e.available = price, age, avail end
+          end
+        end
+      end
+    end
+  end
+  job.dbItems, job.maxAge = n, maxAge
+end
+
+local function exactResult(job)
+  local items, missing = {}, {}
+  for _, e in ipairs(job.asked) do
+    local name = e.id and safe(C_Item.GetItemInfo, e.id)
+    if not e.id then
+      missing[#missing + 1] = { name = e.ask, why = "unknown item name (not in the game's item cache): give the item id" }
+    elseif not e.copper then
+      missing[#missing + 1] = { id = e.id, name = name or e.ask,
+        why = "no auction price seen in the last " .. job.maxAge .. " days" }
+    else
+      items[#items + 1] = { id = e.id, name = name or e.ask, price = money(e.copper), copper = e.copper,
+        seen = e.age == 0 and "today" or (e.age == 1 and "yesterday" or (e.age .. " days ago")), available = e.available }
+    end
+  end
+  return { source = "Auctionator", realm = job.realm, lastScan = lastScan(), dbItems = job.dbItems, exact = true,
+    maxAgeDays = job.maxAge, matched = #items, items = items, missing = #missing > 0 and missing or nil,
+    sort = "the requested order", ahOpen = AH.IsOpen() }
+end
+
 local runner = CreateFrame("Frame")
 runner:Hide()
 local jobs = {}
@@ -286,11 +368,33 @@ runner:SetScript("OnUpdate", function()
   end
 end)
 
--- req: classIDs, subclassIDs, equipLocs, query, maxCopper, minCopper, maxAgeDays, usableOnly, upgradesOnly, sort, limit
+-- req: classIDs, subclassIDs, equipLocs, query, maxCopper, minCopper, maxAgeDays, usableOnly, upgradesOnly, sort, limit;
+-- or items = { { id = 2589 }, { name = "Wool Cloth" }, ... } for the prices of exactly these items
 function AH.Search(req, reply)
   local db, err, realm = priceTable()
   if not db then reply({ error = err }) return end
   local job = { req = req or {}, db = db, realm = realm, reply = reply, slice = debugprofilestop() }
+  if type(job.req.items) == "table" and #job.req.items > 0 then
+    -- exact items: their prices, then their names (loaded from the server once, like a search's candidates)
+    job.co = coroutine.create(function()
+      exactScan(job)
+      job.candidates = {}
+      for _, e in ipairs(job.asked) do
+        if e.id and not safe(C_Item.GetItemInfo, e.id) and C_Item.RequestLoadItemDataByID then
+          pcall(C_Item.RequestLoadItemDataByID, e.id)
+          job.candidates[#job.candidates + 1] = { id = e.id }
+        end
+      end
+      if #job.candidates > 0 then
+        job.waitUntil = GetTime() + LOAD_WAIT_S
+        coroutine.yield()
+      end
+      return exactResult(job)
+    end)
+    jobs[#jobs + 1] = job
+    runner:Show()
+    return
+  end
   job.co = coroutine.create(function()
     collect(job)
     -- the candidates the client knows nothing about yet are requested, then step 2 waits for them (once)

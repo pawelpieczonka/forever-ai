@@ -1452,13 +1452,17 @@ for _, ev in ipairs({ "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_PARTY", "CHAT_M
 end
 
 ------------------------------------------------------------------------ snapshot
-local ORDER = { "game", "player", "stats", "gearTotals", "equipment", "talents", "quests", "nearbyQuests", "zoneNPCs",
-  "nearbyMobs", "around", "recentEvents", "actionBars", "target", "mouseover", "pet", "tooltip", "group", "nearby",
-  "auras", "windows", "bags", "bank", "spells", "skills", "reputations", "addons", "addonChanges", "chat" }
+local ORDER = { "game", "player", "progress", "stats", "gearTotals", "equipment", "talents", "quests", "nearbyQuests",
+  "zoneNPCs", "nearbyMobs", "around", "recentEvents", "actionBars", "target", "mouseover", "pet", "tooltip", "group",
+  "nearby", "auras", "windows", "bags", "bank", "spells", "skills", "professions", "reputations", "addons",
+  "addonChanges", "chat" }
 local OPTIONAL = { bags = true, bank = "bags", spells = true, actionBars = "spells", around = "nearby", skills = true, reputations = true, nearby = true,
-  windows = true, addons = true, auras = true, chat = true, talents = true, quests = true, nearbyQuests = "quests" }
+  windows = true, addons = true, auras = true, chat = true, talents = true, quests = true, nearbyQuests = "quests",
+  progress = true, professions = true }
 -- dropped first when the packet is too big
-local DROP_ORDER = { "chat", "reputations", "skills", "spells", "bank", "addons", "auras", "bags", "nearby" }
+local DROP_ORDER = { "chat", "professions", "reputations", "skills", "spells", "bank", "addons", "auras", "bags",
+  "progress", "nearby" }
+C.ORDER, C.OPTIONAL, C.DROP_ORDER = ORDER, OPTIONAL, DROP_ORDER
 
 local function enabledSections()
   local sections = ns.db.sections

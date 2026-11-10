@@ -715,10 +715,12 @@ local function buildSettings(p)
 
   head("Data sent to the AI")
   local data = CreateFrame("Frame", nil, c)
-  data:SetSize(420, 4 * 24)
   local opts = { { "bags", "Bags & bank" }, { "quests", "Quests" }, { "talents", "Talents" }, { "spells", "Spells" },
-    { "skills", "Skills" }, { "reputations", "Reputation" }, { "nearby", "Nearby players" }, { "windows", "Open windows" },
-    { "auras", "Auras" }, { "addons", "Add-ons" }, { "chat", "Chat (private)" } }
+    { "skills", "Skills" }, { "professions", "Professions" }, { "progress", "Progress" }, { "reputations", "Reputation" },
+    { "nearby", "Nearby players" }, { "windows", "Open windows" }, { "auras", "Auras" }, { "addons", "Add-ons" },
+    { "chat", "Chat (private)" } }
+  local gridH = math.ceil(#opts / 3) * 24 -- three per row; the grid grows with the list
+  data:SetSize(420, gridH)
   for i, o in ipairs(opts) do
     local cb = Check(data, o[2], function()
       if o[1] == "chat" then return ns.db.sections.chat == true end
@@ -726,7 +728,7 @@ local function buildSettings(p)
     end, function(v) ns.db.sections[o[1]] = v end)
     cb:SetPoint("TOPLEFT", ((i - 1) % 3) * 140, -math.floor((i - 1) / 3) * 24)
   end
-  row(data, 4 * 24)
+  row(data, gridH)
 
   head("Appearance")
   local look = CreateFrame("Frame", nil, c)
