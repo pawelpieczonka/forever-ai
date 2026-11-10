@@ -21,7 +21,7 @@ from .kb.store import KB
 from .memory import ConversationStore, MemoryStore
 from .gemini import Gemini
 from .openrouter import OpenRouter
-from .prompt import build_messages, entity_names, prompt_hash
+from .prompt import HISTORY_TURNS, build_messages, entity_names, prompt_hash
 from .tools import (TOOLS, auction_request, format_addon_options, format_auction, remember_options, run_fetch,
                     run_kb_search, validate_abandon, validate_mark, validate_proposal, validate_vendor)
 from .turnlog import TurnLog
@@ -49,9 +49,10 @@ EFFORT_NAMES = {"low": "low", "medium": "medium", "high": "high", "xhigh": "very
 PROVIDER_NAMES = {"openrouter": "OpenRouter", "gemini": "Google Gemini", "claude_code": "Claude Code"}
 SCREEN_NOTE = ("The player attached the current screen as an image (top-left corner blacked out). Use it for what "
                "the game data does not contain.")
-HISTORY_TURNS = 6  # earlier turns of the conversation that go with a question
-MAX_SESSION_TURNS = 8  # then a fresh Claude session (with the last turns inline) keeps the context small
-MAX_SESSION_CHARS = 350_000  # ~90k tokens of questions with game data: a fresh session before the context fills up
+# A Claude session keeps every question with its game data (~30,000 characters each): after this many turns or
+# characters a fresh session takes over, with the last turns inline. Eight turns were a third of an evening's play.
+MAX_SESSION_TURNS = 14
+MAX_SESSION_CHARS = 450_000  # ~115k tokens
 
 
 def model_name(model_id: str) -> str:

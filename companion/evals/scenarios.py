@@ -183,6 +183,22 @@ SCENARIOS = [
                                  "route told the player to kill it.", [
         Turn("jak zrobic tego questa z sowa?", [c.says(r"Taming Rod"), c.never_says(r"\bzabij", r"\bzabić"), c.max_words(90), PL,
                                                *QUIET])]),
+    Scenario("long_conversation", "\"ile razy mam sie o to samo pytac\": what was agreed ten questions ago was gone "
+                                  "(six turns of history).", [
+        Turn("to kiedy robimy tego elite?", [c.says(r"21|Bartek"), c.max_words(60), PL, *QUIET])],
+        history=[{"q": "kumpel Bartek gra magiem i dolaczy o 21, wtedy zrobimy elite z twisted hatred, ok?",
+                  "a": "Ok: Xethorr the Wicked z [Twisted Hatred] zostaje na 21:00, gdy dołączy Bartek. Do tego czasu "
+                       "robimy resztę."}]
+        + [{"q": q, "a": a} for q, a in [
+            ("co teraz?", "Oswój [Strigid Screecher] 24 m stąd: zaznacz go i użyj [Taming Rod] (**F11**)."),
+            ("bije mnie to normalne?", "Tak, bije cię przez całe oswajanie. Stój w miejscu do końca paska."),
+            ("ok mam go", "Dobrze. Oddaj [Taming the Beast] u **Dazalara** w Dolanaar, 444 m stąd."),
+            ("co wybrac?", "Weź [Hunting Gloves]: +1 Agility i 9 Armor więcej niż twoje rękawice."),
+            ("sprzedaj smieci", "Proponuję sprzedać [Cracked Shortbow] za 39c."),
+            ("ile mi brakuje do 12 lvl?", "Brakuje ci **7 832 XP**; przy obecnym tempie to około 3,5 h gry."),
+            ("[Light Armor Kit] po co to?", "Dodaje 8 Armor do klaty, nóg, rąk albo butów. Możesz też robić je dla skilla."),
+            ("gdzie kupie coarse thread?", "U **Narret Shadowgrove** (Trade Supplies) w Dolanaar, 541 m stąd."),
+            ("ok", "Powodzenia!")]]),
     Scenario("talents_from_the_build", "The build is in memory and the talent window is open.", [
         Turn("co tu wybrac?", [c.says(r"Endurance Training"), c.max_words(80), *QUIET], memory=[BUILD])]),
 ]

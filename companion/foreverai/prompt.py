@@ -141,6 +141,13 @@ SECTION_ORDER = ["taggedInQuestion", "game", "player", "progress", "stats", "gea
                  "addons", "addonSettings", "addonChanges", "chat"]
 
 
+# Earlier turns that go with a question: with six, a conversation of an evening lost what was agreed at its start.
+# The newest ones go in full, of the older ones the first OLD_ANSWER_CHARS characters of each answer.
+HISTORY_TURNS = 12
+FULL_TURNS = 4
+OLD_ANSWER_CHARS = 400
+
+
 def prompt_hash() -> str:
     """Identifies the system prompt an answer was written with (in the turn records)."""
     return hashlib.sha1(SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:8]
@@ -293,11 +300,15 @@ def build_messages(question: str, snapshot: dict, history: list[dict], kb_hits: 
     system = SYSTEM_PROMPT.format(today=now.strftime("%Y-%m-%d"),
                               kb_date=kb_date or "not downloaded yet", hotfix_date=hotfix_date or "unknown")
     msgs = [{"role": "system", "content": system}]
-    for turn in history[-6:]:  # service.HISTORY_TURNS
+    recent = history[-HISTORY_TURNS:]
+    for n, turn in enumerate(recent):
         msgs.append({"role": "user", "content": turn["q"]})
+        answer = turn["a"]
+        if n < len(recent) - FULL_TURNS and len(answer) > OLD_ANSWER_CHARS:
+            answer = answer[:OLD_ANSWER_CHARS].rstrip() + " […]"  # what was said is enough; the details are stale
         # the text alone does not say what the answer did (map marks, proposals, memory)
         did = f"\n[Done in this answer: {'; '.join(turn['did'])}]" if turn.get("did") else ""
-        msgs.append({"role": "assistant", "content": turn["a"] + did})
+        msgs.append({"role": "assistant", "content": answer + did})
     kb_text = ""
     if kb_hits:
         kb_text = "\n\n# Knowledge base excerpts (matched to names in the game)\n" + "\n\n".join(
