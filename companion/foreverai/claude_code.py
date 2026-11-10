@@ -28,6 +28,9 @@ CLAUDE_MODELS = [
 ]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 DEFAULT_MODEL = "claude-haiku-5-5"  # fast; "high" thinking keeps answers careful
+# Measured on the scenarios (evals/, 26 answers each, 2026-11-10): Haiku high 122 of 123 checks, median 8.9 s; Haiku
+# medium 120 of 123, 7.0 s, and two Polish questions answered in English. Sonnet: high 119 (6.5 s), medium 121 (6.2 s).
+# So "high" stays the default; with Sonnet the level makes no difference a player would notice.
 DEFAULT_EFFORT = "high"
 MCP_TOOLS = ["mcp__foreverai__search_knowledge_base", "mcp__foreverai__propose_addon_change",
              "mcp__foreverai__save_memory", "mcp__foreverai__delete_memory", "mcp__foreverai__fetch_url",
