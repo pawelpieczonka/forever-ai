@@ -122,6 +122,9 @@ class ScreenshotWatcher(threading.Thread):
 
     def run(self) -> None:
         self.cleanup_old_frames()  # nothing that existed before start is answered
+        # every image format now, while the app's files are the ones it started from: Pillow imports a format's code on
+        # first use, and the packaged app reads that code from files a new build or version unpacked over it replaces
+        Image.init()
         pending: dict[str, float] = {}
         while not self._stop.is_set():
             for p in self._scan():
@@ -131,7 +134,14 @@ class ScreenshotWatcher(threading.Thread):
                 if not path.exists():
                     pending.pop(name)
                     continue
-                res = self._try_decode(path)
+                try:
+                    res = self._try_decode(path)
+                except Exception as e:  # the watcher must go on: without it no question from the game is read
+                    pending.pop(name)
+                    self._seen[name] = time.time()
+                    log.exception("Cannot read the screenshot %s (%s). Restart ForeverAI if the game gets no answer.",
+                                  name, e)
+                    continue
                 if res is None and time.time() - first < 10:
                     continue
                 pending.pop(name)

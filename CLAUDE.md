@@ -25,7 +25,7 @@ Anything that goes into the apps: `companion/**` (code, `requirements.txt`, `con
 ### Before you finish
 
 1. Run the tests: `companion/.venv/bin/python -m pytest -q` (Linux) or `companion\.venv\Scripts\python.exe -m pytest -q` (Windows), in `companion`. They include a Lua 5.1 test of the add-on's auction code when `lua5.1` is installed; `luac5.1 -p addon/ForeverAI/*.lua` checks the add-on's syntax.
-2. If you changed what goes into the apps, build your platform and smoke-test it. Linux: `release/linux/ForeverAI-Linux/ForeverAI-Linux --help` must print the usage. Windows (a windowed .exe prints nothing): check that `ForeverAI-Windows.exe` exists. On both: `_internal/seed/kb.sqlite` and `_internal/addon/ForeverAI/ForeverAI.toc` must be present, and the `## Version:` in that `.toc` must match the source.
+2. If you changed what goes into the apps, build your platform and smoke-test it. `build_linux.sh` refuses to build while the app in `release/linux` is running (replacing its files breaks it): ask the user to close it. Linux: `release/linux/ForeverAI-Linux/ForeverAI-Linux --help` must print the usage. Windows (a windowed .exe prints nothing): check that `ForeverAI-Windows.exe` exists. On both: `_internal/seed/kb.sqlite` and `_internal/addon/ForeverAI/ForeverAI.toc` must be present, and the `## Version:` in that `.toc` must match the source.
 3. Push and check that the workflow's test, Linux and Windows jobs pass.
 4. Mention in your summary which builds were checked and how (local build, CI run).
 

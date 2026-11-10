@@ -8,7 +8,9 @@ runs as its own grounded ``generateContent`` request.
 from __future__ import annotations
 
 import json
-from typing import Any, Iterator
+import queue
+import threading
+from typing import Any, Generator, Iterator
 
 import httpx
 
@@ -20,6 +22,12 @@ DEFAULT_MODEL = "gemini-flash-latest"  # Google's alias for the newest Flash mod
 FALLBACK_MODEL = "gemini-flash-lite-latest"
 # statuses after which another model may still answer
 UNAVAILABLE_STATUSES = (404, 429, 500, 503, 504)
+# An overloaded model returns 503 to a native request, but on the OpenAI-compatible endpoint it often never answers.
+# When an answer has not started after CHECK_AFTER_S, a tiny native request (probe) tells such a model from a busy one.
+# Measured 2026-11-10 with a 30k-token question and a screenshot: Flash models start in 3-9 s (rarely ~20 s), Flash-Lite
+# in 1-3 s; a model that serves answers the probe in about a second.
+CHECK_AFTER_S = 10.0
+PROBE_TIMEOUT_S = 8.0
 FAVORITE_MODELS = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
                    "gemini-flash-lite-latest", "gemini-4-argon"]
 KEY_URL = "https://aistudio.google.com/apikey"
@@ -67,10 +75,12 @@ def is_chat_model(model_id: str) -> bool:
 
 
 class Gemini:
-    # the read timeout is also the wait for the first byte: a model Google cannot serve sometimes never answers instead
-    # of returning 503, and the player waits that long before the fallback model is tried
-    def __init__(self, api_key: str, transport: httpx.BaseTransport | None = None, timeout: float = 45.0):
+    # the read timeout is also the longest wait for the first byte, for a model that answered the probe
+    def __init__(self, api_key: str, transport: httpx.BaseTransport | None = None, timeout: float = 45.0,
+                 check_after: float = CHECK_AFTER_S, probe_timeout: float = PROBE_TIMEOUT_S):
         self.api_key = api_key
+        self.check_after = check_after
+        self.probe_timeout = probe_timeout
         self._client = httpx.Client(
             base_url=BASE_URL,
             headers={"x-goog-api-key": api_key},
@@ -134,6 +144,48 @@ class Gemini:
         ("done", finish_reason), like OpenRouter.chat_stream; ("unavailable", str) is an error after which another
         model may still answer (overloaded, out of quota, missing or not answering)."""
         body = self.build_body(model, messages, tools, search_mode, max_tokens)
+        # the request runs in its own thread, so that a slow start can be checked while it waits
+        events: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        threading.Thread(target=_pump, args=(self._stream(model, body), events, stop), daemon=True,
+                         name="gemini-chat").start()
+        check = threading.Timer(self.check_after, lambda: events.put((_PROBED, self.probe(model))))
+        check.daemon = True
+        check.start()
+        started = False
+        try:
+            while (item := events.get()) is not None:
+                if isinstance(item, Exception):
+                    raise item
+                kind, val = item
+                if kind == _PROBED:
+                    if val and not started:  # still no answer, and the model cannot answer now: do not wait for it
+                        yield "unavailable", val
+                        return
+                    continue
+                if not started:
+                    started = True
+                    check.cancel()
+                if kind != _STARTED:
+                    yield kind, val
+        finally:
+            check.cancel()
+            stop.set()  # the request ends with its next line or its timeout
+
+    def probe(self, model: str) -> str | None:
+        """Why ``model`` cannot answer now (overloaded, out of quota, missing, no reply to a tiny request), or None
+        when it can (or the check itself failed). A native request: there an overloaded model returns 503 at once."""
+        body = {"contents": [{"role": "user", "parts": [{"text": "Reply with OK."}]}],
+                "generationConfig": {"maxOutputTokens": 1}}
+        try:
+            r = self._client.post(f"/models/{model}:generateContent", json=body, timeout=self.probe_timeout)
+        except httpx.TimeoutException:
+            return f"{model} is not answering (no reply to a short test request within {self.probe_timeout:.0f} s)."
+        except httpx.HTTPError:
+            return None
+        return friendly_error(r.status_code, _error_text(r)) if r.status_code in UNAVAILABLE_STATUSES else None
+
+    def _stream(self, model: str, body: dict) -> Generator[tuple[str, Any], None, None]:
         calls: dict[int, dict] = {}
         finish = None
         try:
@@ -143,6 +195,7 @@ class Gemini:
                     r.read()
                     yield _error_kind(r.status_code), friendly_error(r.status_code, _error_text(r))
                     return
+                yield _STARTED, None  # (the headers come with the first chunk, once the model has thought)
                 for line in r.iter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -231,6 +284,23 @@ def drop_signatures(messages: list[dict]) -> None:
         for tc in m.get("tool_calls") or []:
             if tc.get("extra_content"):
                 tc["extra_content"] = {"google": {"thought_signature": SKIP_SIGNATURE}}
+
+
+_STARTED, _PROBED = "_started", "_probed"  # chat_stream's own events, never yielded
+
+
+def _pump(events: Generator, out: queue.Queue, stop: threading.Event) -> None:
+    """Pass what a generator yields (or raises) to ``out``, then None; it stops early once ``stop`` is set."""
+    try:
+        for item in events:
+            if stop.is_set():
+                break
+            out.put(item)
+    except Exception as e:
+        out.put(e)
+    finally:
+        events.close()
+        out.put(None)
 
 
 def _error_kind(status: int) -> str:

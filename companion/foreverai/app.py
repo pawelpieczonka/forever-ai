@@ -37,7 +37,29 @@ def setup_logging() -> Path:
         sh = logging.StreamHandler()
         sh.setFormatter(fmt)
         log.addHandler(sh)
+    threading.excepthook = _log_thread_error
     return path
+
+
+def _log_thread_error(args: threading.ExceptHookArgs) -> None:
+    """A thread that ends with an error goes to the log and the window: the windowed app has no console for Python's
+    own report."""
+    if args.exc_type is SystemExit:
+        return
+    name = args.thread.name if args.thread else "a thread"
+    log.error("%s stopped after an error (%s: %s); restart ForeverAI", name, args.exc_type.__name__, args.exc_value,
+              exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+
+def _exe_id() -> tuple[int, int, int] | None:
+    """Identity of the packaged app's executable (None from source); a replaced file can get the old inode back."""
+    if not getattr(sys, "frozen", False):
+        return None
+    try:
+        st = os.stat(sys.executable)
+    except OSError:
+        return (0, 0, 0)
+    return st.st_ino, st.st_size, st.st_mtime_ns
 
 
 class Companion:
@@ -62,6 +84,16 @@ class Companion:
         self._stop = threading.Event()
         self.service.on_event = self.set_status
         self.service.screen_for = self.watcher.screen_for
+        self._exe = _exe_id()
+        self._replaced = False
+
+    def files_replaced(self) -> bool:
+        """The packaged app's files were replaced while it runs (a new build, or a new version unpacked over it). It
+        reads its code from them, so the parts that load later fail until it restarts."""
+        if not self._replaced and self._exe is not None and _exe_id() != self._exe:
+            self._replaced = True
+            log.warning("ForeverAI's files were replaced while it runs (new build or version): restart ForeverAI")
+        return self._replaced
 
     def set_status(self, text: str) -> None:
         self.status_text = text
