@@ -14,6 +14,7 @@ local MAX = 5
 local SCAN_S = 0.5
 local MAX_MARKERS = 8
 local SAY_AGAIN_S = 15 -- a creature that was out of sight this long is announced again
+local LOGIN_S = 30 -- this long after a loading screen an empty quest log may just not be filled yet
 -- the picture of the marker per tracked creature (the art of the raid icons: only the picture, drawn by the add-on)
 local PICTURES = { 8, 7, 1, 2, 4 }
 local safe, clean = ns.safe, ns.clean
@@ -39,6 +40,8 @@ local function cvar(name)
   if C_CVar and C_CVar.GetCVar then value = safe(C_CVar.GetCVar, name) elseif GetCVar then value = safe(GetCVar, name) end
   return value
 end
+
+local function inFight() return InCombatLockdown and InCombatLockdown() and true or false end
 
 -- How much the game lets the add-on see. A game set to show nameplates only for the target and for units in a fight
 -- (the default of this client) shows nothing of a creature that just stands there: "blind". Then "none in sight"
@@ -141,6 +144,8 @@ local function logQuests()
   return out
 end
 
+local sets = setmetatable({}, { __mode = "k" }) -- per tracked creature: the names that count, lower case
+
 -- Fill in mob.also and mob.what, and mob.quest when only the creature was named. Until the quest database answers
 -- (it is built after login) mob.also stays nil and this is asked again.
 local function expand(mob)
@@ -154,6 +159,7 @@ local function expand(mob)
         if #names > 0 then
           mob.quest = q.title
           mob.also = {}
+          sets[mob] = nil
           for _, n in ipairs(names) do
             if n:lower() ~= mob.name:lower() then mob.also[#mob.also + 1] = n end
           end
@@ -176,8 +182,12 @@ end
 
 -- the names that count for a tracked creature, lower case
 local function counting(mob)
-  local set = { [mob.name:lower()] = true }
-  for _, n in ipairs(mob.also or {}) do set[n:lower()] = true end
+  local set = sets[mob]
+  if not set then
+    set = { [mob.name:lower()] = true }
+    for _, n in ipairs(mob.also or {}) do set[n:lower()] = true end
+    sets[mob] = set
+  end
   return set
 end
 
@@ -195,6 +205,8 @@ function T.Describe(name)
 end
 
 ------------------------------------------------------------------------ scanning
+local lastMode -- which nameplates the game showed at the last scan, and whether a fight was on: the strip says it
+
 function T.Scan()
   local tracked = list()
   if #tracked == 0 then
@@ -202,18 +214,20 @@ function T.Scan()
     return
   end
   local units = visible()
-  local used = 0
+  local used, refresh, now = 0, false, time()
   for i, mob in ipairs(tracked) do
     local key = mob.name:lower()
-    local before = sight[key] or { alive = 0 }
-    local alive, marked, names, counts = 0, false, {}, counting(mob)
+    local s = sight[key]
+    if not s then
+      s = { alive = 0, names = {} }
+      sight[key] = s
+    end
+    local was, alive, marked, counts = s.alive, 0, false, counting(mob)
+    wipe(s.names)
     for _, u in ipairs(units) do
       if counts[u.name] and not u.dead then
         alive = alive + 1
-        if counts[u.name] == true then
-          counts[u.name] = 1 -- named once
-          names[#names + 1] = u.shown
-        end
+        if not tContains(s.names, u.shown) then s.names[#s.names + 1] = u.shown end
         local plate = C_NamePlate and C_NamePlate.GetNamePlateForUnit and safe(C_NamePlate.GetNamePlateForUnit, u.unit)
         if plate and used < MAX_MARKERS then
           used = used + 1
@@ -228,34 +242,42 @@ function T.Scan()
         end
       end
     end
-    local now = time()
-    local goneAt, told = before.goneAt, before.told
     if alive > 0 then
-      if before.alive == 0 and (not told or not goneAt or now - goneAt >= SAY_AGAIN_S) then
-        announce(names[1] or mob.name, alive)
-        told = true
+      if was == 0 and (not s.told or not s.goneAt or now - s.goneAt >= SAY_AGAIN_S) then
+        announce(s.names[1] or mob.name, alive)
+        s.told = true
       end
-      goneAt = nil
+      s.goneAt = nil
       local mapID, x, y = playerSpot()
       if x then
-        local info = C_Map.GetMapInfo(mapID)
-        mob.seen = { t = now, mapID = mapID, x = x, y = y, zone = info and info.name or nil }
+        local seen = mob.seen or {}
+        if seen.mapID ~= mapID or not seen.zone then -- the zone's name is asked for once per zone
+          local info = C_Map.GetMapInfo(mapID)
+          seen.zone = info and info.name or nil
+        end
+        seen.t, seen.mapID, seen.x, seen.y = now, mapID, x, y
+        mob.seen = seen
       end
-    elseif before.alive > 0 then
-      goneAt = now
+    elseif was > 0 then
+      s.goneAt = now
     end
-    sight[key] = { alive = alive, names = names, marked = marked, goneAt = goneAt, told = told }
-    if before.alive ~= alive then changed() end
+    s.alive, s.marked = alive, marked
+    if was ~= alive then refresh = true end
   end
   hideMarkers(used + 1)
+  local mode = T.Sight() .. (inFight() and ", in a fight" or "")
+  if mode ~= lastMode then lastMode, refresh = mode, true end
+  if refresh then changed() end
 end
 
 -- a quest objective that names the creature (or what it gives) is done, or its quest is complete or gone: nothing
 -- left to look for
-local function finished(mob)
+local function finished(mob, quests)
   if not mob.quest or not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries) then return false end
+  -- right after a loading screen the game may not have filled the quest log yet: an empty one proves nothing
+  if #quests == 0 and GetTime() - (T.enteredAt or 0) < LOGIN_S then return false end
   local key, what = mob.name:lower(), mob.what and mob.what:lower()
-  for _, q in ipairs(logQuests()) do
+  for _, q in ipairs(quests) do
     if q.title == mob.quest then
       if safe(C_QuestLog.IsComplete, q.questID) then return true end
       for _, ob in ipairs(safe(C_QuestLog.GetQuestObjectives, q.questID) or {}) do
@@ -277,12 +299,10 @@ end
 -- changed in a fight, so both wait for its end.
 local WANTED = { { "nameplateShowEnemies", "1" }, { "nameplateShowAll", "1" }, { "nameplateMaxDistance", "100" } }
 
-local function inFight() return InCombatLockdown and InCombatLockdown() and true or false end
-
 function T.ShowNameplates()
   if not (ns.char and SetCVar) or inFight() then return false end
+  local first = ns.char.trackCVars == nil -- said once per tracking, also in a game that knows none of the settings
   local saved = ns.char.trackCVars or {}
-  local first = next(saved) == nil
   for _, want in ipairs(WANTED) do
     local name, value = want[1], want[2]
     local old = cvar(name)
@@ -300,7 +320,7 @@ end
 
 local function restoreNameplates()
   local saved = ns.char and ns.char.trackCVars
-  if not saved or not next(saved) or inFight() then return end
+  if not saved or inFight() then return end
   for name, old in pairs(saved) do
     if cvar(name) ~= old then pcall(SetCVar, name, old) end
   end
@@ -326,13 +346,13 @@ local function forget(i)
   hideMarkers(1) -- the next scan puts back the ones that still belong
   if #tracked == 0 then restoreNameplates() end
 end
-T.SyncNameplates = syncNameplates
 
 function T.CheckQuests()
   local tracked = list()
   local gone = expandAll() -- the quest database may have come since
+  local quests = logQuests()
   for i = #tracked, 1, -1 do
-    if finished(tracked[i]) then forget(i) gone = true end
+    if finished(tracked[i], quests) then forget(i) gone = true end
   end
   if gone then
     T.Scan()
@@ -340,24 +360,38 @@ function T.CheckQuests()
   end
 end
 
--- track these creatures; ``add`` keeps the ones tracked so far (an extra stop on a route that still holds)
+-- Track these creatures; ``add`` keeps the ones tracked so far (an extra stop on a route that still holds). The next
+-- answer often brings the same route again: a creature that stays tracked keeps what is known about it (where it was
+-- last seen, that it was announced), and the nameplate settings are not touched.
 function T.Set(mobs, add)
   local tracked = list()
+  local old = {}
   if not add then
-    for i = #tracked, 1, -1 do forget(i) end
+    for i = #tracked, 1, -1 do
+      local mob = table.remove(tracked, i)
+      old[mob.name:lower()] = mob
+    end
   end
   for _, m in ipairs(mobs or {}) do
     local name = type(m) == "table" and m.name or m
     if type(name) == "string" and name ~= "" and #tracked < MAX then
-      local known = false
-      for _, t in ipairs(tracked) do if t.name:lower() == name:lower() then known = true end end
+      local key, known = name:lower(), false
+      for _, t in ipairs(tracked) do if t.name:lower() == key then known = true end end
       if not known then
-        tracked[#tracked + 1] = { name = name, quest = type(m) == "table" and m.quest or nil, since = time() }
+        local mob = old[key] or { name = name, since = time() }
+        old[key] = nil
+        local quest = type(m) == "table" and m.quest or nil
+        if quest and mob.quest ~= quest then -- another quest: the creatures that count are looked up again
+          mob.quest, mob.also, mob.what = quest, nil, nil
+          sets[mob] = nil
+        end
+        tracked[#tracked + 1] = mob
       end
     end
   end
+  for key in pairs(old) do sight[key] = nil end
   expandAll()
-  if #tracked > 0 then T.ShowNameplates() end
+  if #tracked > 0 then T.ShowNameplates() else restoreNameplates() end
   T.Scan()
   changed()
 end
@@ -380,14 +414,16 @@ local function ago(t)
 end
 
 -- what the window shows: { name, label (what is looked for: the objective when several creatures give it), alive,
--- blind (nothing seen and the game shows no nameplates of idle units) }
+-- blind (nothing seen and the game shows no nameplates of idle units), waiting (blind until the fight is over: the
+-- nameplates come on then) }
 function T.State()
   local out = {}
-  local blind = T.Sight() ~= "all"
+  local blind, waiting = T.Sight() ~= "all", inFight()
   for _, mob in ipairs(list()) do
     local s = sight[mob.name:lower()] or {}
     local alive = s.alive or 0
-    out[#out + 1] = { name = mob.name, label = label(mob), alive = alive, blind = blind and alive == 0 }
+    out[#out + 1] = { name = mob.name, label = label(mob), alive = alive, blind = blind and alive == 0,
+                      waiting = blind and alive == 0 and waiting }
   end
   return out
 end
@@ -458,6 +494,7 @@ function T.Debug()
 end
 
 ns.On("PLAYER_ENTERING_WORLD", function()
+  T.enteredAt = GetTime()
   if not T.ticker then T.ticker = C_Timer.NewTicker(SCAN_S, function() pcall(T.Scan) end) end
   C_Timer.After(2, function() pcall(syncNameplates) end) -- what was tracked before a /reload is listened for again
 end)
@@ -473,10 +510,17 @@ do -- the quest log changes in bursts: look once they have settled
   local f = CreateFrame("Frame")
   for _, e in ipairs({ "QUEST_LOG_UPDATE", "QUEST_TURNED_IN", "QUEST_REMOVED" }) do pcall(f.RegisterEvent, f, e) end
   f:SetScript("OnEvent", soon)
-  -- a creature the player points at or targets is seen at once, nameplates or not
-  local look = CreateFrame("Frame")
-  for _, e in ipairs({ "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED" }) do pcall(look.RegisterEvent, look, e) end
-  look:SetScript("OnEvent", function() pcall(T.Scan) end)
+  -- a creature the player points at or targets is seen at once, nameplates or not; so is a nameplate that comes into
+  -- range, and a marker does not stay on a nameplate the game has given to another unit
+  local look, looking = CreateFrame("Frame"), false
+  for _, e in ipairs({ "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED" }) do
+    pcall(look.RegisterEvent, look, e)
+  end
+  look:SetScript("OnEvent", function() -- nameplates come and go in bursts: one look per frame
+    if looking or #list() == 0 then return end
+    looking = true
+    C_Timer.After(0, function() looking = false pcall(T.Scan) end)
+  end)
   -- anything of ours the game refuses is remembered, so that /fai track can say what it was
   local guard = CreateFrame("Frame")
   for _, e in ipairs({ "ADDON_ACTION_FORBIDDEN", "ADDON_ACTION_BLOCKED" }) do pcall(guard.RegisterEvent, guard, e) end

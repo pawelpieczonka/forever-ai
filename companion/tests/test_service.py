@@ -863,3 +863,20 @@ def test_the_reply_tells_the_game_what_to_track(env):
                 "snapshot": {}})
     d = _wait_final(addons, 3)
     assert d["track"] == [{"name": "Strigid Screecher"}] and len(d["marks"]) == 1
+
+
+def test_a_watch_that_cannot_be_added_is_not_claimed(env):
+    """The reply to mark_on_map says what the game really watches for: not a name that is no name, not a sixth one."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, {})
+    text, err = svc.run_tool(ctx, "mark_on_map", {"title": "Somewhere", "x": 10, "y": 10, "mob": "[]"})
+    assert not err and ctx.track == [] and "watches for" not in text
+    for n in range(5):
+        text, _ = svc.run_tool(ctx, "mark_on_map", {"title": f"Stop {n}", "x": 20 + n, "y": 10, "mob": f"Creature {n}",
+                                                    "add": True})
+        assert f"The game watches for Creature {n}:" in text
+    text, err = svc.run_tool(ctx, "mark_on_map", {"title": "Stop 5", "x": 30, "y": 10, "mob": "Creature 5", "add": True})
+    assert not err and len(ctx.track) == 5 and "The game watches for" not in text
+    assert "Creature 5 is not watched for: the game watches for at most 5 creatures at once" in text
+    text, _ = svc.run_tool(ctx, "mark_on_map", {"title": "Again", "x": 31, "y": 10, "mob": "creature 0", "add": True})
+    assert "The game watches for Creature 0:" in text and len(ctx.track) == 5  # watched already

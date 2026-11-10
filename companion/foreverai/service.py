@@ -165,10 +165,16 @@ class TurnContext:
             out.append("watching for: " + ", ".join(t["name"] for t in self.track))
         return out + self.notes
 
-    def watch(self, name: str, quest: str | None = None) -> None:
+    def watch(self, name: str, quest: str | None = None) -> str | None:
+        """The name the game watches for after this call; None when it does not (no name, or the list is full)."""
         name = str(name or "").strip("[] ")[:60]
-        if name and len(self.track) < MAX_TRACKED and all(t["name"].lower() != name.lower() for t in self.track):
-            self.track.append({"name": name, **({"quest": quest} if quest else {})})
+        for t in self.track:
+            if t["name"].lower() == name.lower():
+                return t["name"]
+        if not name or len(self.track) >= MAX_TRACKED:
+            return None
+        self.track.append({"name": name, **({"quest": quest} if quest else {})})
+        return name
 
     @property
     def replaces_marks(self) -> bool:
@@ -771,9 +777,12 @@ class Service:
                 ctx.mark_adds.append(add)
                 text = text.rstrip(".") + (", added to your earlier marks." if add else
                                            "; the marks of your earlier answers are off the map.")
-                if args.get("mob"):
-                    ctx.watch(args["mob"])
-                    text += f" The game watches for {ctx.track[-1]['name']}: a living one in sight is marked on the screen and announced."
+                mob = str(args.get("mob") or "").strip("[] ")[:60]
+                if mob:
+                    watched = ctx.watch(mob)
+                    text += (f" The game watches for {watched}: a living one in sight is marked on the screen and announced."
+                             if watched else f" {mob} is not watched for: the game watches for at most {MAX_TRACKED} "
+                                             "creatures at once.")
             return text, mark is None
         if name == "plan_route":
             from .route import plan_route

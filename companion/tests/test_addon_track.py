@@ -321,3 +321,67 @@ def test_the_quest_database_may_come_later(sim):
     sim._wow.fire(b"QUEST_LOG_UPDATE")
     sim.run(2)
     assert text(sim.lua(SECTION)).startswith("Bloodfeather Rogue (also counts for Bloodfeather Belt: Bloodfeather Harpy,")
+
+
+def test_the_same_creature_tracked_again_stays_as_it_was(sim):
+    """The next answer often brings the same route: nothing about a creature that stays tracked starts over."""
+    sim._wow.player.x, sim._wow.player.y = 0.40, 0.40
+    sim.lua(TRACK)
+    sim.lua('TEST_show({ { name = "Strigid Screecher" } })')
+    sim.run(1)
+    sim.lua("TEST_cvars = 0 local set = SetCVar SetCVar = function(...) TEST_cvars = TEST_cvars + 1 return set(...) end")
+    sim.lua(TRACK)
+    sim.run(1)
+    assert sim.lua("return TEST_sounds") == 1  # not announced again
+    assert sim.lua("return TEST_cvars") == 0  # the nameplate settings are not put back and set again
+    sim.lua("TEST_show({})")
+    sim.run(1)
+    sim.lua(TRACK)
+    assert "last seen alive moments ago near Darkshore 40.0, 40.0" in text(sim.lua(SECTION))
+    sim.lua('ForeverAI.Track.Set({ { name = "Befouled Webwood" } })')  # another creature: the old one is gone
+    assert text(sim.lua(SECTION)) == "Befouled Webwood: none in sight now; not seen since it is tracked"
+
+
+def test_the_strip_says_why_nothing_can_be_seen(sim):
+    sim.slash("/fai")
+    sim.lua(ANSWER)
+    sim.run(3)
+    assert shown(sim).count("the nameplates of all enemies are shown while a creature is tracked") == 1  # said once
+    sim.lua('SetCVar("nameplateShowEnemies", "0")')  # the player's own key for hiding nameplates
+    sim.run(1)
+    assert "Tracking Strigid Screecher · nameplates off" in shown(sim)
+    sim.lua("InCombatLockdown = function() return true end")
+    sim._wow.fire(b"PLAYER_REGEN_DISABLED")
+    sim.run(1)
+    assert "Tracking Strigid Screecher · after the fight" in shown(sim)  # they come back on when the fight is over
+    sim.lua("InCombatLockdown = function() return false end")
+    sim._wow.fire(b"PLAYER_REGEN_ENABLED")
+    sim.run(1)
+    assert "Tracking Strigid Screecher · none in sight" in shown(sim)
+
+
+def test_an_empty_quest_log_right_after_login_ends_nothing(sim):
+    sim.lua(TRACK)
+    sim.reload()
+    sim.lua(FAKES)
+    sim.lua("C_QuestLog.GetNumQuestLogEntries = function() return 0 end")  # the game has not filled it yet
+    sim._wow.fire(b"QUEST_LOG_UPDATE")
+    sim.run(3)
+    assert text(sim.lua(SECTION)).startswith("Strigid Screecher:")
+    sim.run(60)  # long after login an empty log is an empty log: the quest is gone
+    sim._wow.fire(b"QUEST_LOG_UPDATE")
+    sim.run(3)
+    assert text(sim.lua(SECTION)) == "nothing"
+
+
+def test_a_nameplate_that_comes_or_goes_is_looked_at_at_once(sim):
+    sim.lua(TRACK)
+    sim.run(1)
+    sim.lua('TEST_show({ { name = "Strigid Screecher" } })')
+    sim._wow.fire(b"NAME_PLATE_UNIT_ADDED")
+    sim.run(0.1)  # in the next frame, well before the scan that runs twice a second
+    assert text(sim.lua("return TEST_marked()")) == "nameplate1"
+    sim.lua('TEST_show({ { name = "Strigid Owl" } })')  # the game gives the same nameplate to another unit
+    sim._wow.fire(b"NAME_PLATE_UNIT_REMOVED")
+    sim.run(0.1)
+    assert text(sim.lua("return TEST_marked()")) == ""
