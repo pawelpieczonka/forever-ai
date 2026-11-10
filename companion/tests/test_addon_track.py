@@ -256,12 +256,17 @@ def test_probe_tells_what_the_game_shows_of_an_object_next_to_the_player(sim):
       C_VignetteInfo = { GetVignettes = function() return { "v1" } end,
                          GetVignetteInfo = function(id) return { name = "Battered Chest", type = 0 } end }
     """)
+    sim.lua('SetCVar("SoftTargetInteractArc", "0") SetCVar("SoftTargetInteractRange", "10")')
     sim.slash("/fai probe")
-    sim.run(3)
+    sim.run(2)
+    assert text(sim.lua('return GetCVar("SoftTargetInteract") .. GetCVar("SoftTargetInteractArc")')) == "32"  # all around
+    sim.run(8)
     lines = text(sim.lua("return table.concat(ForeverAI.char.lastProbe, ' || ')"))
     assert "softinteract with the game's own setting (SoftTargetInteract 0): nothing" in lines
-    assert "softinteract with SoftTargetInteract 3: Silverleaf (GameObject, id 1617)" in lines
+    assert "soft target for 8 s: Silverleaf (GameObject, id 1617)" in lines
     assert "vignettes (1): Battered Chest" in lines
-    assert text(sim.lua('return GetCVar("SoftTargetInteract")')) == "0"  # the player's setting is back
+    # the player's settings are back
+    assert text(sim.lua('return GetCVar("SoftTargetInteract") .. " " .. GetCVar("SoftTargetInteractArc") .. " " '
+                        '.. GetCVar("SoftTargetInteractRange")')) == "0 0 10"
     assert "probe" in text(sim.lua("return ForeverAI.Collect.Snapshot().game.probe and 'probe' or 'none'"))
     assert sim.errors == []

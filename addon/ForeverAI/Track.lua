@@ -427,16 +427,34 @@ function T.Probe()
   end
   say("minimap tracking on: " .. (#tracking > 0 and table.concat(tracking, ", ") or "none or not readable"))
   if ns.char then ns.char.lastProbe = out end
-  -- the same look with the soft target turned on for a moment (the player's setting comes back)
-  if own ~= nil and own ~= "3" and not inFight() and SetCVar then
-    pcall(SetCVar, "SoftTargetInteract", "3")
-    C_Timer.After(2, function()
-      say("softinteract with SoftTargetInteract 3: " .. unitLine("softinteract"))
-      pcall(SetCVar, "SoftTargetInteract", own)
-    end)
-  else
-    say("softinteract with SoftTargetInteract 3: " .. (own == "3" and "that is the game's own setting" or "not tried"))
+  -- The same look with the soft target turned on, all around the player and as far as the game allows, for eight
+  -- seconds: everything it picks in that time is listed. The player's settings come back afterwards.
+  if own == nil or inFight() or not SetCVar then
+    say("soft target for 8 s: not tried (" .. (own == nil and "this game has no such setting" or "in a fight") .. ")")
+    return
   end
+  local wide = { { "SoftTargetInteract", "3" }, { "SoftTargetInteractArc", "2" }, { "SoftTargetInteractRange", "60" } }
+  local before = {}
+  for _, w in ipairs(wide) do
+    before[w[1]] = cvar(w[1])
+    if before[w[1]] ~= nil then pcall(SetCVar, w[1], w[2]) end
+  end
+  say("soft target turned on all around (range now " .. tostring(cvar("SoftTargetInteractRange")) .. "): walk past the thing for 8 s…")
+  local seen, order, ticks = {}, {}, 0
+  local ticker
+  ticker = C_Timer.NewTicker(0.5, function()
+    ticks = ticks + 1
+    local line = unitLine("softinteract")
+    if line ~= "nothing" and not seen[line] then
+      seen[line] = true
+      order[#order + 1] = line
+    end
+    if ticks >= 16 then
+      ticker:Cancel()
+      say("soft target for 8 s: " .. (#order > 0 and table.concat(order, "; ") or "nothing"))
+      for name, old in pairs(before) do pcall(SetCVar, name, old) end
+    end
+  end)
 end
 
 ns.On("PLAYER_ENTERING_WORLD", function()
