@@ -48,11 +48,17 @@ The workflow's `version` job checks all of this on every pull request. For the k
 A pull request that changes anything visible in the desktop app shows a screenshot from before and after the change in its description. That covers the window, its dialogs and the icons in `assets/`, but not the add-on's in-game UI. Take both from source: "before" on `main` (in a worktree, e.g. `git worktree add ../forever-ai-main origin/main`) and "after" on the branch. Run each with a fresh data folder and a stand-in game folder:
 
 ```bash
-py="$PWD/companion/.venv/bin/python"   # once, in this checkout
-g="$(mktemp -d)" && touch "$g/Wow.exe" && (cd companion && FOREVERAI_DATA="$(mktemp -d)" "$py" -m foreverai --game-dir "$g")
+py=/path/to/system-tk-venv/bin/python kb="$PWD/seed/kb.sqlite"   # once, in this checkout
+g="$(mktemp -d)" && touch "$g/Wow.exe" && d="$(mktemp -d)" && cp "$kb" "$d/" && echo '{"shortcut_offered": true}' > "$d/settings.json" && (cd companion && FOREVERAI_DATA="$d" "$py" -m foreverai --game-dir "$g")
 ```
 
-On Windows the same steps with `companion\.venv\Scripts\python.exe` and `$env:FOREVERAI_DATA`. The stand-in game folder (any folder with a `Wow.exe`) stops the app from replacing the add-on in the real game with the one from `main`. The fresh data folder keeps the user's settings, conversations and characters out of the pictures, which matters because the repository is public. Only one ForeverAI runs at a time, so ask the user to close theirs first. Answer the first-run questions the same way both times, and capture the same view at the same window size.
+On Windows, use the same steps with `$env:FOREVERAI_DATA`.
+
+- **Python with the distribution's Tk.** Use the same kind of Python as the Linux build. A standalone Python's Tk (uv, python-build-standalone) draws bitmap fonts, so its screenshots do not show what players see and hide layout that only breaks with real fonts. `companion/.venv` may be such a Python. In that case make a venv from `/usr/bin/python3` and run `pip install -r companion/requirements.txt -c companion/constraints.txt` in it.
+- **Stand-in game folder.** Any folder with a `Wow.exe` works. It stops the app from replacing the add-on in the real game with the one from `main`.
+- **Fresh data folder.** It keeps the user's settings, conversations and characters out of the pictures, which matters because the repository is public. The same `kb.sqlite` and the skipped desktop-shortcut question make both windows start in the same state.
+- **One instance.** Only one ForeverAI runs at a time, so ask the user to close theirs first.
+- **Capturing.** Wait until the window has settled, then capture the same view at the window's default size. On Linux, `import -window ForeverAI before.png` (ImageMagick) captures just the window, also under Wayland, because Tk runs on XWayland.
 
 Pull request images go on the `screenshots` branch, which is never merged, so they stay out of `main` and the apps. Put them under `pr-<number>/` as `before.png` and `after.png` (one pair per changed view); the first time, create the branch with `git worktree add --orphan -b screenshots <dir>`. Show each pair side by side:
 
