@@ -837,7 +837,7 @@ def test_creatures_of_a_route_and_of_a_mark_are_tracked(env):
     ctx = _ctx(svc, addons, snapshot)
     text, err = svc.run_tool(ctx, "mark_on_map", {"title": "Strigid Screecher", "x": 64.2, "y": 69.2,
                                                   "mob": "Strigid Screecher"})
-    assert not err and ctx.track == [{"name": "Strigid Screecher"}] and "a living one in sight gets a raid icon" in text
+    assert not err and ctx.track == [{"name": "Strigid Screecher"}] and "a living one in sight is marked on the screen and announced" in text
     svc.run_tool(ctx, "mark_on_map", {"title": "Dazalar", "x": 56.7, "y": 59.5})
     assert ctx.track == [{"name": "Strigid Screecher"}]
     # marks the model sets after a route replace the route's marks, and with them what the route tracked

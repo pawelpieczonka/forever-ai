@@ -123,8 +123,9 @@ TOOLS.append({
                 "zone": {"type": "string"},
                 "add": {"type": "boolean", "description": "true: keep the marks of earlier answers and add this one"},
                 "mob": {"type": "string", "description": "When the mark is where a creature is to be found: its exact "
-                                                          "name. The game then watches for it: a living one in sight gets "
-                                                          "a raid icon, and the tracked section tells you whether one is there"},
+                                                          "name. The game then watches for it: a living one in sight is "
+                                                          "marked on the screen and announced with a sound, and the "
+                                                          "tracked section tells you whether one is there"},
             },
             "required": ["title", "x", "y"],
         },

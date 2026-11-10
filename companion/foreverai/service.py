@@ -55,7 +55,7 @@ SCREEN_NOTE = ("The player attached the current screen as an image (top-left cor
 MAX_SESSION_TURNS = 14
 MAX_SESSION_CHARS = 350_000  # ~90k tokens of questions and tool results; answers and thinking come on top
 MAX_MARKS = 12  # marks one answer can set: a route through a full quest log (route.EXACT_MAX)
-MAX_TRACKED = 5  # creatures the add-on watches for at once (one raid icon each)
+MAX_TRACKED = 5  # creatures the add-on watches for at once
 
 
 def model_name(model_id: str) -> str:
@@ -773,7 +773,7 @@ class Service:
                                            "; the marks of your earlier answers are off the map.")
                 if args.get("mob"):
                     ctx.watch(args["mob"])
-                    text += f" The game watches for {ctx.track[-1]['name']}: a living one in sight gets a raid icon."
+                    text += f" The game watches for {ctx.track[-1]['name']}: a living one in sight is marked on the screen and announced."
             return text, mark is None
         if name == "plan_route":
             from .route import plan_route

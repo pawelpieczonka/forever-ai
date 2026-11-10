@@ -497,7 +497,7 @@ function UI.MarksCard(marks, replace, track)
   local names = {}
   for _, t in ipairs(type(track) == "table" and track or {}) do names[#names + 1] = esc(type(t) == "table" and t.name or t) end
   if #names > 0 then
-    lines[#lines + 1] = "|cff9aa3adWatching for " .. table.concat(names, ", ") .. ": a living one in sight gets a raid icon.|r"
+    lines[#lines + 1] = "|cff9aa3adWatching for " .. table.concat(names, ", ") .. ": a living one in sight is marked on the screen and announced.|r"
   end
   -- ending the marks or the watch is on the strip above the text field: this card scrolls away
   card("|cff7fd6ffMarked on the map|r |cff6a7380(" .. how .. ")|r\n" .. table.concat(lines, "\n"), { 0.3, 0.6, 0.9, 0.7 }, {
@@ -916,7 +916,8 @@ end
 function UI.UpdateStrip()
   if not strip then return end
   local items = {}
-  for _, t in ipairs(ns.Track and ns.Track.State() or {}) do
+  local offer = ns.Track and ns.Track.Offer and ns.Track.Offer() -- on the first chip only
+  for n, t in ipairs(ns.Track and ns.Track.State() or {}) do
     local seen = t.alive > 0
     items[#items + 1] = {
       color = seen and { 0.36, 1, 0.62, 1 } or { 0.85, 0.64, 0.26, 1 },
@@ -925,9 +926,12 @@ function UI.UpdateStrip()
       tip = "Stop tracking " .. t.name,
       close = function() ns.Track.Stop(t.name) end,
       -- the game shows nameplates only in a fight: the add-on then sees a creature only when it is targeted or pointed at
-      act = t.blind and { "Show them", "Your game shows nameplates only for your target and in a fight, so a creature "
-        .. "standing next to you is not seen. This turns on the nameplates of all enemies while something is tracked; "
-        .. "your own setting comes back when tracking ends. Without it, point at the creature or target it.",
+      act = (n == 1 and offer == "show") and { "Show them", "Your game shows nameplates only for your target and in a "
+        .. "fight, so a creature standing next to you is not seen. This turns on the nameplates of all enemies, from as "
+        .. "far as the game allows, while something is tracked; your own settings come back when tracking ends. "
+        .. "Without it, point at the creature or target it.", function() ns.Track.ShowNameplates() end }
+        or (n == 1 and offer == "far") and { "See farther", "Lets nameplates show from as far as the game allows while "
+        .. "something is tracked, so a creature is seen sooner. Your own setting comes back when tracking ends.",
         function() ns.Track.ShowNameplates() end } or nil,
     }
   end

@@ -1,6 +1,7 @@
-"""Tracking a creature: the add-on watches the units the game shows nameplates for, puts a raid icon on a living one
-with the tracked name, remembers where it last saw one, and tells the model whether one is in sight. In the add-on
-simulator with a few nameplates made up for the test."""
+"""Tracking a creature: the add-on watches the units the game shows it (nameplates, the target, the mouseover), puts
+its own marker over the nameplate of a living one with the tracked name, says so with a sound and a line in the chat,
+remembers where it last saw one, and tells the model whether one is in sight. In the add-on simulator with a few
+nameplates made up for the test."""
 
 import pytest
 
@@ -8,16 +9,16 @@ from addonsim import Sim, install_game
 
 pytest.importorskip("lupa")
 
-# nameplates and raid icons of the game, driven by the test: TEST_show({ {name=, dead=} ... }) sets what is in sight
+# nameplates of the game, driven by the test: TEST_show({ {name=, dead=} ... }) sets what is in sight.
+# SetRaidTarget is here only to prove that it is never called: the real game blocks it for add-ons with a popup.
 FAKES = r"""
-local units, icons = {}, {}
+local units, plates = {}, {}
 function TEST_show(list)
   units = {}
   for i, u in ipairs(list) do units["nameplate" .. i] = { name = u.name, dead = u.dead, guid = "Creature-0-1-2-3-" .. i .. "-" .. (u.id or i) } end
 end
-function TEST_icons()
-  local out = {}
-  for unit, icon in pairs(icons) do if units[unit] then out[#out + 1] = unit .. "=" .. icon end end
+function TEST_marked()
+  local out = ForeverAI.Track.Marked()
   table.sort(out)
   return table.concat(out, ",")
 end
@@ -27,13 +28,19 @@ C_NamePlate.GetNamePlates = function()
   table.sort(out, function(a, b) return a.namePlateUnitToken < b.namePlateUnitToken end)
   return out
 end
+C_NamePlate.GetNamePlateForUnit = function(u)
+  if not units[u] then return nil end
+  plates[u] = plates[u] or CreateFrame("Frame", nil, UIParent)
+  return plates[u]
+end
 local name, dead, isPlayer, guid = UnitName, UnitIsDead, UnitIsPlayer, UnitGUID
 UnitName = function(u) if units[u] then return units[u].name end return name(u) end
 UnitIsDead = function(u) if units[u] then return units[u].dead or false end return dead and dead(u) end
 UnitIsPlayer = function(u) if units[u] then return false end return isPlayer and isPlayer(u) end
 UnitGUID = function(u) if units[u] then return units[u].guid end return guid and guid(u) end
-GetRaidTargetIndex = function(u) return icons[u] end
-SetRaidTarget = function(u, icon) icons[u] = (icon ~= 0) and icon or nil end
+TEST_sounds = 0
+PlaySound = function() TEST_sounds = TEST_sounds + 1 return true end
+SetRaidTarget = function() TEST_raid_icon_set = true end
 """
 SECTION = "local s = ForeverAI.Track.Section() return s and table.concat(s, ' | ') or 'nothing'"
 TRACK = 'ForeverAI.Track.Set({ { name = "Strigid Screecher", quest = "Taming the Beast" } })'
@@ -52,33 +59,47 @@ def text(value) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else value
 
 
-def test_a_living_tracked_creature_in_sight_gets_a_raid_icon(sim):
+def shown(sim) -> str:
+    return " | ".join(sim.texts())
+
+
+def test_a_living_tracked_creature_in_sight_is_marked_and_announced(sim):
+    sim.slash("/fai")
     sim._wow.player.x, sim._wow.player.y = 0.40, 0.40
     sim.lua(TRACK)
     assert text(sim.lua(SECTION)) == "Strigid Screecher: none in sight now; not seen since it is tracked"
     sim.lua('TEST_show({ { name = "Strigid Owl" }, { name = "Strigid Screecher", dead = true }, { name = "Strigid Screecher" } })')
     sim.run(1)
-    assert text(sim.lua("return TEST_icons()")) == "nameplate3=8"  # the skull, on the living one only
-    assert text(sim.lua(SECTION)) == "Strigid Screecher: 1 alive in sight now, marked with the skull raid icon"
+    assert text(sim.lua("return TEST_marked()")) == "nameplate3"  # the living one only
+    assert text(sim.lua(SECTION)) == "Strigid Screecher: 1 alive in sight now, highlighted on the screen"
+    assert sim.lua("return TEST_sounds") == 1
     assert sim.lua("return ForeverAI.Collect.Snapshot().tracked ~= nil") is True  # goes with every question
+    sim.run(5)
+    assert sim.lua("return TEST_sounds") == 1  # said once, not twice a second
 
     sim.lua('TEST_show({ { name = "Strigid Owl" } })')  # it left, or somebody killed it
     sim._wow.player.x = 0.45
     sim.run(1)
+    assert text(sim.lua("return TEST_marked()")) == ""
     assert text(sim.lua(SECTION)) == ("Strigid Screecher: none in sight now; last seen alive moments ago near "
                                       "Darkshore 40.0, 40.0 (299 m from here)")
+    sim.run(20)
+    sim.lua('TEST_show({ { name = "Strigid Screecher" } })')  # another one, a while later: said again
+    sim.run(1)
+    assert sim.lua("return TEST_sounds") == 2
+    assert sim.lua("return TEST_raid_icon_set") is None  # the game blocks that call for add-ons
     assert sim.errors == []
 
 
-def test_stopping_takes_the_icon_off(sim):
+def test_stopping_takes_the_marker_off(sim):
     sim.lua(TRACK)
     sim.lua('TEST_show({ { name = "Strigid Screecher" } })')
     sim.run(1)
-    assert text(sim.lua("return TEST_icons()")) == "nameplate1=8"
+    assert text(sim.lua("return TEST_marked()")) == "nameplate1"
     sim.lua("ForeverAI.Track.Stop()")
-    assert text(sim.lua("return TEST_icons()")) == "" and text(sim.lua(SECTION)) == "nothing"
+    assert text(sim.lua("return TEST_marked()")) == "" and text(sim.lua(SECTION)) == "nothing"
     sim.run(2)
-    assert text(sim.lua("return TEST_icons()")) == ""  # and it is not put back
+    assert text(sim.lua("return TEST_marked()")) == ""  # and it is not put back
 
 
 def test_tracking_ends_when_the_objective_is_done(sim):
@@ -99,15 +120,15 @@ def test_tracking_ends_when_the_objective_is_done(sim):
     assert text(sim.lua(SECTION)) == "nothing"
 
 
-def test_tracking_survives_a_reload_and_two_creatures_get_two_icons(sim):
+def test_tracking_survives_a_reload_and_every_living_one_is_marked(sim):
     sim.lua('ForeverAI.Track.Set({ { name = "Strigid Screecher" }, { name = "Befouled Webwood" } })')
     sim.reload()
     sim.lua(FAKES)
     sim.lua('TEST_show({ { name = "Befouled Webwood" }, { name = "Strigid Screecher" }, { name = "Befouled Webwood" } })')
     sim.run(1)
-    assert text(sim.lua("return TEST_icons()")) == "nameplate1=7,nameplate2=8"  # the second creature gets the cross
-    assert text(sim.lua(SECTION)) == ("Strigid Screecher: 1 alive in sight now, marked with the skull raid icon | "
-                                      "Befouled Webwood: 2 alive in sight now, marked with the cross raid icon")
+    assert text(sim.lua("return TEST_marked()")) == "nameplate1,nameplate2,nameplate3"
+    assert text(sim.lua(SECTION)) == ("Strigid Screecher: 1 alive in sight now, highlighted on the screen | "
+                                      "Befouled Webwood: 2 alive in sight now, highlighted on the screen")
     assert sim.errors == []
 
 
@@ -116,26 +137,23 @@ ANSWER = """ForeverAI.UI.UpdateAnswer({ final = true, msgId = 1, text = "Go ther
   track = { { name = "Strigid Screecher", quest = "Taming the Beast" } } })"""
 
 
-def shown(sim) -> str:
-    return " | ".join(sim.texts())
-
-
 def test_strip_shows_what_goes_on_and_ends_it(sim, tmp_path):
     sim.slash("/fai")
+    sim.lua('SetCVar("nameplateMaxDistance", "100")')  # nothing left to widen: no button on the chip
     assert "Tracking Strigid" not in shown(sim) and "Route ·" not in shown(sim)
     sim.lua(ANSWER)
     sim.run(1)
     assert "Tracking Strigid Screecher · none in sight" in shown(sim) and "Route · 2 stops" in shown(sim)
-    assert "Watching for Strigid Screecher: a living one in sight gets a raid icon." in shown(sim)
+    assert "Watching for Strigid Screecher: a living one in sight is marked on the screen and announced." in shown(sim)
     sim.lua('TEST_show({ { name = "Strigid Screecher" }, { name = "Strigid Screecher" } })')
     sim.run(1)
-    assert "Tracking Strigid Screecher · 2 in sight" in shown(sim)
+    assert "Tracking Strigid Screecher · 2 in sight" in shown(sim) and "Strigid Screecher is in sight (2)" in shown(sim)
     sim.screenshot(tmp_path / "strip.png")
 
     sim.click("x", nth=2)  # the first x closes the window; the chips follow
     sim.run(1)
     assert "Tracking Strigid" not in shown(sim) and "Route · 2 stops" in shown(sim)
-    assert text(sim.lua("return TEST_icons()")) == ""
+    assert text(sim.lua("return TEST_marked()")) == ""
     sim.click("x", nth=2)
     sim.run(1)
     assert "Route ·" not in shown(sim) and sim.lua("return ForeverAI.Map.Count()") == 0
@@ -185,28 +203,44 @@ def test_the_target_and_the_mouseover_are_seen_without_nameplates(sim):
     sim.lua(TRACK)
     sim.lua('TEST_unit("mouseover", { name = "Strigid Screecher" })')
     sim._wow.fire(b"UPDATE_MOUSEOVER_UNIT")
-    assert text(sim.lua(SECTION)) == "Strigid Screecher: 1 alive in sight now, marked with the skull raid icon"
-    assert sim.lua('return GetRaidTargetIndex("mouseover")') == 8
+    assert text(sim.lua(SECTION)) == "Strigid Screecher: 1 alive in sight now"  # no nameplate to put a marker on
+    assert sim.lua("return TEST_sounds") == 1
     sim.lua('TEST_unit("mouseover", false) TEST_unit("target", { name = "Strigid Screecher", dead = true })')
     sim.run(1)
     assert text(sim.lua(SECTION)).startswith("Strigid Screecher: not seen, but the game shows nameplates only")
     assert "last seen alive moments ago" in text(sim.lua(SECTION))
 
 
-def test_the_strip_offers_to_show_nameplates_and_puts_the_setting_back(sim):
+def test_the_strip_offers_to_show_nameplates_and_puts_the_settings_back(sim):
     sim.slash("/fai")
-    sim.lua('SetCVar("nameplateShowEnemies", "1") SetCVar("nameplateShowAll", "0")')
+    sim.lua('SetCVar("nameplateShowEnemies", "1") SetCVar("nameplateShowAll", "0") SetCVar("nameplateMaxDistance", "41")')
     sim.lua(ANSWER)
     sim.run(1)
     assert "Tracking Strigid Screecher · nameplates off" in shown(sim) and "Show them" in shown(sim)
     sim.click("Show them")
     sim.run(1)
-    assert text(sim.lua('return GetCVar("nameplateShowAll")')) == "1"
-    assert "Tracking Strigid Screecher · none in sight" in shown(sim) and "Show them" not in shown(sim)
+    # every enemy's nameplate, and from as far as the game allows (it caps the number itself)
+    assert text(sim.lua('return GetCVar("nameplateShowAll") .. " " .. GetCVar("nameplateMaxDistance")')) == "1 100"
+    assert "Tracking Strigid Screecher · none in sight" in shown(sim)
+    assert "Show them" not in shown(sim) and "See farther" not in shown(sim)
     sim.lua('TEST_show({ { name = "Strigid Screecher" } })')
     sim.run(1)
     assert "Tracking Strigid Screecher · 1 in sight" in shown(sim)
-    sim.slash("/fai stop")  # tracking over: the player's own setting is back
+    sim.slash("/fai stop")  # tracking over: the player's own settings are back
     sim.run(1)
-    assert text(sim.lua('return GetCVar("nameplateShowAll")')) == "0"
+    assert text(sim.lua('return GetCVar("nameplateShowAll") .. " " .. GetCVar("nameplateMaxDistance")')) == "0 41"
     assert sim.errors == []
+
+
+def test_with_nameplates_on_the_strip_offers_a_wider_range(sim):
+    sim.slash("/fai")
+    sim.lua('SetCVar("nameplateShowEnemies", "1") SetCVar("nameplateShowAll", "1") SetCVar("nameplateMaxDistance", "20")')
+    sim.lua(ANSWER)
+    sim.run(1)
+    assert "Tracking Strigid Screecher · none in sight" in shown(sim) and "See farther" in shown(sim)
+    sim.click("See farther")
+    sim.run(1)
+    assert text(sim.lua('return GetCVar("nameplateMaxDistance")')) == "100" and "See farther" not in shown(sim)
+    sim.slash("/fai stop")
+    sim.run(1)
+    assert text(sim.lua('return GetCVar("nameplateMaxDistance")')) == "20"

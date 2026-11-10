@@ -213,9 +213,9 @@ SCENARIOS = [
             ("gdzie kupie coarse thread?", "U **Narret Shadowgrove** (Trade Supplies) w Dolanaar, 541 m stąd."),
             ("ok", "Powodzenia!")]]),
     Scenario("tracked_creature_in_sight", "A point on the map does not find a creature; the game marks a living one in sight.", [
-        Turn("gdzie ta sowa? nie widze jej", [c.says(r"czaszk|ikon|skull"), c.max_words(150), PL, *QUIET],
+        Turn("gdzie ta sowa? nie widze jej", [c.says(r"znacznik|oznacz|pod[śs]wietl|marker"), c.max_words(150), PL, *QUIET],
              patch={"target": None, "windows": None, "marks": ["1. Strigid Screecher — Teldrassil 64.2, 69.2 (24 m)"],
-                    "tracked": ["Strigid Screecher: 1 alive in sight now, marked with the skull raid icon"],
+                    "tracked": ["Strigid Screecher: 1 alive in sight now, highlighted on the screen"],
                     "around": ["Strigid Screecher, level 8, neutral, Beast", "Strigid Owl, level 5, neutral, Beast"]})]),
     Scenario("cannot_see_without_nameplates", "The player's game showed nameplates only in a fight: a creature stood "
                                               "next to them, the add-on saw nothing and the answer said none was near.", [
