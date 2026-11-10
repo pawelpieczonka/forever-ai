@@ -7,7 +7,7 @@ local WHITE = "Interface\\Buttons\\WHITE8x8"
 local P = {
   bg = { 0.045, 0.052, 0.066, 0.97 }, bar = { 0.07, 0.08, 0.1, 1 }, edge = { 0.2, 0.24, 0.28, 1 },
   accent = { 0.27, 0.86, 0.62, 1 }, user = { 0.12, 0.25, 0.4, 0.96 }, ai = { 0.1, 0.112, 0.138, 0.96 },
-  card = { 0.22, 0.155, 0.05, 0.95 }, cardEdge = { 0.95, 0.72, 0.3, 0.75 }, claude = { 0.85, 0.47, 0.34, 0.85 },
+  card = { 0.22, 0.155, 0.05, 0.95 }, cardEdge = { 0.95, 0.72, 0.3, 0.75 },
   err = { 0.3, 0.07, 0.07, 0.95 }, errEdge = { 0.9, 0.3, 0.3, 0.6 },
   btn = { 0.13, 0.15, 0.18, 1 }, btnHover = { 0.19, 0.22, 0.26, 1 },
   primary = { 0.13, 0.48, 0.35, 1 }, primaryHover = { 0.17, 0.6, 0.44, 1 },
@@ -511,23 +511,6 @@ function UI.AuctionCard(items)
   relayout()
 end
 
-function UI.SuggestClaude(claude)
-  if not chat then return end
-  local text = "|cffe58b6aClaude Code detected|r" .. (claude and claude.subscription and (" |cff9aa3ad(plan " .. esc(claude.subscription) .. ")|r") or "") ..
-    "\nUse your Claude subscription instead of an API key (no per-token cost)."
-  card(text, P.claude, {
-    { "Use Claude Code", 140, function(self)
-      self:Done("Switching…")
-      ns.SendSetting("set_provider", "claude_code", "Switching to Claude Code…")
-    end, "primary" },
-    { "Keep current", 110, function(self)
-      self:Done("Keeping the current AI provider.")
-      ns.SendSetting("dismiss_claude", true)
-    end },
-  })
-  relayout()
-end
-
 ------------------------------------------------------------------------ header / footer
 function UI.UpdateHeader()
   if not main then return end
@@ -675,85 +658,30 @@ function UI.RefreshMemory()
 end
 
 ------------------------------------------------------------------------ settings panel
+-- The AI (provider, model, thinking level, web search, keys) is chosen in the ForeverAI app window: a change made
+-- here had to go to the app as a screenshot and its reply used up an inbox. The game shows what the app reported.
 local S = {}
-local PROVIDERS = { openrouter = "OpenRouter", gemini = "Google Gemini", claude_code = "Claude Code" }
 
-local function hasKey(s, provider)
-  if provider == "gemini" then return (s.gemini or {}).hasKey == true end
-  return s.keyMask ~= nil and s.keyMask ~= "(none)"
-end
-
--- a provider with a key (or Claude Code) is switched to; one without a key first shows where to enter it
-local function pickProvider(provider)
-  local s = ns.db.status or {}
-  if provider == "claude_code" or hasKey(s, provider) then
-    S.view = nil
-    ns.SendSetting("set_provider", provider, "Switching to " .. PROVIDERS[provider] .. "…")
-  else
-    S.view = provider
-    UI.Notice("Enter your " .. PROVIDERS[provider] .. " key below.", "warn")
+local function aiLine(s)
+  if s.provider == "claude_code" then
+    local c = s.claude or {}
+    return "Claude Code · " .. esc((tostring(c.model or "?"):gsub("^claude%-", ""):gsub("%-", " "))) ..
+      " · thinking " .. esc(ns.EffortName(c.effort))
+  elseif s.provider == "gemini" then
+    return "Google Gemini · " .. esc(tostring((s.gemini or {}).model or "?"))
+  elseif s.provider then
+    return "OpenRouter · " .. esc(tostring(s.model or "?"))
   end
-  UI.RefreshSettings()
+  return "|cffffc060not known yet (click Refresh)|r"
 end
 
 function UI.RefreshSettings()
   if not S.built then return end
   local s = ns.db.status or {}
-  local claude, gem = s.claude or {}, s.gemini or {}
-  if S.view and (S.view == s.provider or hasKey(s, S.view)) then S.view = nil end
-  local view = S.view or s.provider or "openrouter" -- the provider shown: the active one, or one waiting for its key
-  local pending = S.view ~= nil
-  local isClaude, isGemini = view == "claude_code", view == "gemini"
-  S.provOR:SetActive(view == "openrouter")
-  S.provGM:SetActive(isGemini)
-  S.provCC:SetActive(isClaude)
-  S.provCC:SetUsable(claude.loggedIn == true or isClaude)
-  if isGemini then
-    S.provInfo:SetText(gem.hasKey and ("Google Gemini API · key " .. esc(gem.keyMask or "?"))
-      or "Google Gemini: paste an API key from aistudio.google.com/apikey below.")
-  elseif claude.detected then
-    S.provInfo:SetText(string.format("Claude Code %s — %s%s", esc(claude.version or ""), claude.loggedIn and "signed in" or "|cffffaa44not signed in (claude auth login)|r",
-      claude.subscription and (", plan " .. esc(claude.subscription)) or ""))
-  else
-    S.provInfo:SetText("Claude Code not found.")
-  end
-  -- models
-  local models, current = {}, nil
-  if isClaude then
-    for _, m in ipairs(claude.models or {}) do models[#models + 1] = { id = m.id, label = m.name } end
-    current = claude.model
-  elseif isGemini then
-    for _, m in ipairs(gem.models or {}) do models[#models + 1] = { id = m.id, label = m.name or m.id } end
-    current = gem.model
-  else
-    for _, m in ipairs(s.models or {}) do
-      local price = (m["in"] and m.out) and string.format("  $%.2f/%.2f", m["in"], m.out) or ""
-      models[#models + 1] = { id = m.id, label = m.id:gsub("^[^/]+/", "") .. price }
-    end
-    current = s.model
-  end
-  for i, b in ipairs(S.models) do
-    local m = models[i]
-    if m then
-      b:SetText(m.label)
-      b.modelId = m.id
-      b:SetActive(m.id == current)
-      b:Show()
-    else
-      b:Hide()
-    end
-  end
-  for _, b in ipairs(S.search) do b:SetActive(b.mode == s.searchMode) end
-  for _, b in ipairs(S.effort) do b:SetActive(isClaude and b.effort == claude.effort) end
-  if isGemini then
-    S.keyInfo:SetText("current key: " .. esc(gem.keyMask or "(none)"))
-  else
-    S.keyInfo:SetText("current key: " .. esc(s.keyMask or "?") .. (s.balance and string.format("   ·   balance $%.2f", s.balance) or ""))
-  end
-  S.kin.hint:SetText(isGemini and "AIza…" or "sk-or-…")
-  S.cin.hint:SetText(isGemini and "e.g. gemini-3.8-flash" or "e.g. openai/gpt-6-luna")
+  local search = ({ auto = "auto", always = "always", never = "off" })[s.searchMode or ""]
+  S.aiInfo:SetText("In use: |cffe6e9ec" .. aiLine(s) .. "|r" .. (search and ("  ·  web search: " .. search) or ""))
   for _, b in ipairs(S.fonts) do b:SetActive(b.size == ns.db.fontSize) end
-  S.Layout(view, #models, pending)
+  S.Layout()
 end
 
 local function buildSettings(p)
@@ -762,103 +690,28 @@ local function buildSettings(p)
   sc:SetPoint("BOTTOMRIGHT", -8, 6)
   local c = sc.child
   S.scroll = sc
+  sc:HookScript("OnSizeChanged", function() if S.built and p:IsShown() then S.Layout() end end) -- lines rewrap
   local rows = {}
   local function head(text)
     local h = label(c, text, F.head)
     rows[#rows + 1] = { h, 20 }
     return h
   end
-  local function row(frame, h, cond)
-    rows[#rows + 1] = { frame, h, cond }
+  local function row(frame, h)
+    rows[#rows + 1] = { frame, h }
     return frame
   end
 
-  head("AI provider")
-  local prov = CreateFrame("Frame", nil, c)
-  prov:SetSize(400, 24)
-  S.provOR = Btn(prov, "OpenRouter", 100, 22, function() pickProvider("openrouter") end)
-  S.provOR:SetPoint("LEFT")
-  S.provGM = Btn(prov, "Gemini", 80, 22, function() pickProvider("gemini") end)
-  S.provGM:SetPoint("LEFT", S.provOR, "RIGHT", 6, 0)
-  S.provCC = Btn(prov, "Claude Code (subscription)", 190, 22, function() pickProvider("claude_code") end)
-  S.provCC:SetPoint("LEFT", S.provGM, "RIGHT", 6, 0)
-  row(prov, 26)
-  S.provInfo = label(c, "", F.small)
-  row(S.provInfo, 18)
-
-  S.modelHead = head("Model")
-  local grid = CreateFrame("Frame", nil, c)
-  grid:SetSize(400, 4 * 26)
-  S.models = {}
-  for i = 1, 8 do
-    local b = Btn(grid, "", 200, 22, function(self)
-      if self.modelId then ns.SendSetting("set_model", self.modelId, "Changing model…") end
-    end)
-    b:SetPoint("TOPLEFT", ((i - 1) % 2) * 206, -math.floor((i - 1) / 2) * 26)
-    S.models[i] = b
-  end
-  S.grid = row(grid, 4 * 26)
-
-  S.effortHead = head("Thinking level")
-  local eff = CreateFrame("Frame", nil, c)
-  eff:SetSize(400, 24)
-  S.effort = {}
-  for i, e in ipairs({ "low", "medium", "high", "xhigh", "max" }) do
-    local b = Btn(eff, ns.EffortName(e), 74, 22, function() ns.SendSetting("set_effort", e, "Changing thinking level…") end)
-    b:SetPoint("LEFT", (i - 1) * 80, 0)
-    b.effort = e
-    S.effort[i] = b
-  end
-  S.effortRow = row(eff, 28)
-
-  S.customHead = head("Other OpenRouter model (ID)")
-  local custom = CreateFrame("Frame", nil, c)
-  custom:SetSize(400, 26)
-  local cin = Input(custom, 280, "e.g. openai/gpt-6-luna")
-  S.cin = cin
-  cin:SetPoint("LEFT")
-  local cset = Btn(custom, "Set", 80, 24, function()
-    local id = cin.edit:GetText():gsub("%s", "")
-    if id ~= "" then ns.SendSetting("set_model", id, "Changing model…") cin.edit:SetText("") cin.edit:ClearFocus() end
-  end)
-  cset:SetPoint("LEFT", cin, "RIGHT", 6, 0)
-  S.customRow = row(custom, 30)
-
-  S.keyHead = head("OpenRouter key")
-  local keyRow = CreateFrame("Frame", nil, c)
-  keyRow:SetSize(400, 26)
-  local kin = Input(keyRow, 280, "sk-or-…")
-  kin:SetPoint("LEFT")
-  S.kin = kin
-  local kset = Btn(keyRow, "Save", 80, 24, function()
-    local key = kin.edit:GetText():gsub("%s", "")
-    local gemini = (S.view or (ns.db.status or {}).provider) == "gemini"
-    if gemini then
-      if #key < 20 then UI.Notice("Paste the whole Gemini API key.", "warn") return end
-    elseif not key:match("^sk%-or%-") then
-      UI.Notice("The key should start with sk-or-.", "warn")
-      return
-    end
-    kin.edit:SetText("")
-    kin.edit:ClearFocus()
-    ns.SendSetting(gemini and "set_gemini_key" or "set_api_key", key, "Verifying key…")
-  end, "primary")
-  kset:SetPoint("LEFT", kin, "RIGHT", 6, 0)
-  S.keyRow = row(keyRow, 28)
-  S.keyInfo = label(c, "", F.small)
-  S.keyInfoRow = row(S.keyInfo, 18)
-
-  head("Web search")
-  local srch = CreateFrame("Frame", nil, c)
-  srch:SetSize(400, 24)
-  S.search = {}
-  for i, m in ipairs({ { "auto", "Auto" }, { "always", "Always" }, { "never", "Never" } }) do
-    local b = Btn(srch, m[2], 96, 22, function() ns.SendSetting("set_search_mode", m[1], "Changing web search…") end)
-    b:SetPoint("LEFT", (i - 1) * 102, 0)
-    b.mode = m[1]
-    S.search[i] = b
-  end
-  row(srch, 28)
+  head("AI")
+  S.aiInfo = row(label(c, "", F.small), 18)
+  row(label(c, "Provider, model, thinking level, web search and API keys are chosen in the ForeverAI app window " ..
+    "on this computer.", F.small), 18)
+  local aiTools = CreateFrame("Frame", nil, c)
+  aiTools:SetSize(420, 26)
+  local st = Btn(aiTools, "Refresh", 110, 22, function() ns.RequestStatus() end, nil,
+    "Show the AI chosen in the app window now")
+  st:SetPoint("LEFT")
+  row(aiTools, 28)
 
   head("Data sent to the AI")
   local data = CreateFrame("Frame", nil, c)
@@ -899,44 +752,26 @@ local function buildSettings(p)
 
   local tools = CreateFrame("Frame", nil, c)
   tools:SetSize(420, 26)
-  local st = Btn(tools, "Refresh", 110, 22, function() ns.RequestStatus() end)
-  st:SetPoint("LEFT")
   local rp = Btn(tools, "Center window", 120, 22, function()
     main:ClearAllPoints()
     main:SetPoint("CENTER")
     ns.db.window.point, ns.db.window.x, ns.db.window.y = "CENTER", 0, 0
   end)
-  rp:SetPoint("LEFT", st, "RIGHT", 6, 0)
+  rp:SetPoint("LEFT")
   row(tools, 30)
-  local info = label(c, "Stored only on this computer by the ForeverAI app.", F.small)
-  row(info, 30)
 
-  function S.Layout(view, nModels, pending)
-    local isClaude, isGemini = view == "claude_code", view == "gemini"
-    local hidden = {
-      [S.effortHead] = not isClaude, [S.effortRow] = not isClaude,
-      [S.customHead] = isClaude or pending, [S.customRow] = isClaude or pending,
-      [S.keyHead] = isClaude, [S.keyRow] = isClaude, [S.keyInfoRow] = isClaude,
-      [S.modelHead] = pending, [S.grid] = pending,
-    }
-    S.modelHead:SetText(isClaude and "Claude model" or isGemini and "Gemini model"
-      or "OpenRouter model (price per 1M tokens: in / out)")
-    S.customHead:SetText(isGemini and "Other Gemini model (ID)" or "Other OpenRouter model (ID)")
-    S.keyHead:SetText(isGemini and "Google Gemini API key" or "OpenRouter key")
+  function S.Layout()
     local width = c:GetWidth()
     local y = 0
     for _, r in ipairs(rows) do
       local f, h = r[1], r[2]
-      if f == S.grid then h = math.ceil(nModels / 2) * 26 end
-      if hidden[f] then
-        f:Hide()
-      else
-        f:Show()
-        f:ClearAllPoints()
-        f:SetPoint("TOPLEFT", c, "TOPLEFT", 0, -y)
-        if f.SetWidth and f:GetObjectType() == "FontString" then f:SetWidth(width - 10) end
-        y = y + h + 4
+      f:ClearAllPoints()
+      f:SetPoint("TOPLEFT", c, "TOPLEFT", 0, -y)
+      if f:GetObjectType() == "FontString" then
+        f:SetWidth(width - 10)
+        h = math.max(h, f:GetStringHeight()) -- a long line wraps in a narrow window
       end
+      y = y + h + 4
     end
     c:SetHeight(y + 10)
   end

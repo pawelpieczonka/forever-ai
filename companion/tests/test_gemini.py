@@ -198,22 +198,18 @@ def test_gemini_key_provider_and_answer(env, monkeypatch):  # noqa: F811
     svc, addons, tmp = env
     svc.gemini_factory = FakeGemini
     # without a key the provider cannot be chosen; a rejected key changes nothing
-    svc.handle({"type": "set_provider", "value": "gemini", "session": "S", "nextInbox": 1})
-    assert _read_inbox(addons, 1)["kind"] == "error"
-    svc.handle({"type": "set_gemini_key", "value": "bad-key-1234567890123", "session": "S", "nextInbox": 2})
-    assert _read_inbox(addons, 2)["kind"] == "error" and "GEMINI" not in (tmp / ".env").read_text()
-    # the first Gemini key switches to Gemini; the OpenRouter key stays
-    svc.handle({"type": "set_gemini_key", "value": "AIzaSyTEST0000000000000000000xyz", "session": "S", "nextInbox": 3})
-    d = _read_inbox(addons, 3)
-    assert d["kind"] == "status" and d["status"]["provider"] == "gemini"
-    assert d["status"]["gemini"]["hasKey"] and d["status"]["gemini"]["keyMask"] == "AIzaSy…xyz"
-    assert "AIzaSyTEST" not in json.dumps(d)
+    assert svc.set_provider("gemini")[0] is False
+    assert svc.save_key("gemini", "bad-key-1234567890123", use=True)[0] is False
+    assert "GEMINI" not in (tmp / ".env").read_text() and svc.store.settings.provider == "openrouter"
+    # the key dialog saves the Gemini key and uses it; the OpenRouter key stays
+    assert svc.save_key("gemini", "AIzaSyTEST0000000000000000000xyz", use=True) == (True, "Key saved. Using Google Gemini.")
+    assert svc.status()["provider"] == "gemini" and "AIzaSyTEST" not in json.dumps(svc.status())
     env_text = (tmp / ".env").read_text()
     assert "GEMINI_API_KEY=AIzaSyTEST" in env_text and "OPENROUTER_API_KEY=" in env_text
-    svc.handle({"type": "set_model", "value": "gemini-3.8-flash", "session": "S", "nextInbox": 4})
-    assert _read_inbox(addons, 4)["status"]["gemini"]["model"] == "gemini-3.8-flash"
-    svc.handle({"type": "set_model", "value": "openai/gpt-6-luna", "session": "S", "nextInbox": 5})
-    assert _read_inbox(addons, 5)["kind"] == "error"
+    assert svc.set_model("gemini-3.8-flash") == (True, "Gemini model: gemini-3.8-flash")
+    assert svc.status()["gemini"] == {"model": "gemini-3.8-flash"}
+    assert svc.set_model("openai/gpt-6-luna")[0] is False
+    assert [c["id"] for c in svc.model_choices("gemini")][0] == "gemini-3.8-flash"
 
     FakeGemini.seen = []
     _send(svc, {"type": "question", "msgId": 7, "session": "S2", "nextInbox": 8, "conv": "g", "text": "news?",
@@ -230,8 +226,8 @@ def test_gemini_key_provider_and_answer(env, monkeypatch):  # noqa: F811
     assert call["extra_content"] == {"google": {"thought_signature": "S1"}}  # the signature goes back
     assert next(m for m in second if m["role"] == "tool")["content"] == "results for forever news"
     assert {"title": "News", "url": "https://news.example/1", "date": ""} in final["sources"]
-    svc.handle({"type": "set_provider", "value": "openrouter", "session": "S", "nextInbox": 12})
-    assert _read_inbox(addons, 12)["status"]["provider"] == "openrouter"
+    assert svc.set_provider("openrouter") == (True, "AI provider: OpenRouter · openai/gpt-6-luna")
+    assert svc.status()["provider"] == "openrouter"
 
 
 class BusyGemini(FakeGemini):
@@ -275,7 +271,7 @@ def test_gemini_falls_back_when_the_model_does_not_answer(env, monkeypatch):  # 
     assert _final_answer(addons, 5)["model"] == gemini.FALLBACK_MODEL
     assert BusyGemini.models_used[2:] == [gemini.FALLBACK_MODEL]
     # choosing the model again gives it another chance
-    svc.handle({"type": "set_model", "value": "gemini-flash-latest", "session": "S", "nextInbox": 9})
+    assert svc.set_model("gemini-flash-latest")[0]
     _send(svc, {"type": "question", "msgId": 9, "session": "S", "nextInbox": 10, "conv": "g", "text": "and now",
                 "snapshot": {}})
     assert _final_answer(addons, 10)["model"] == gemini.FALLBACK_MODEL

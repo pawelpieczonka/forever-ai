@@ -28,10 +28,12 @@ from .wowformat import bracket_names, md_to_wow
 log = logging.getLogger("foreverai")
 activity = logging.getLogger("foreverai.activity")  # short English lines shown in the app window
 
-_REQUEST_NAMES = {"status": "status refresh", "set_model": "model change", "set_provider": "AI provider change",
-                  "set_effort": "thinking level change", "set_search_mode": "web search setting",
-                  "set_api_key": "OpenRouter key change", "set_gemini_key": "Gemini key change", "memory_add": "memory: add", "memory_delete": "memory: delete",
-                  "memory_clear": "memory: clear", "memory_list": "memory: list", "dismiss_claude": "settings"}
+_REQUEST_NAMES = {"status": "status refresh", "memory_add": "memory: add", "memory_delete": "memory: delete",
+                  "memory_clear": "memory: clear", "memory_list": "memory: list"}
+# AI settings sent by an add-on older than 0.6.0 (still loaded in a game that was not reloaded since the update)
+_MOVED_SETTINGS = ("set_model", "set_provider", "set_effort", "set_search_mode", "set_api_key", "set_gemini_key",
+                   "dismiss_claude")
+SEARCH_MODES = {"auto": "auto", "always": "always", "never": "off"}
 
 FIRST_FLUSH_S = 1.0
 FLUSH_EVERY_S = 1.5
@@ -235,104 +237,102 @@ class Service:
                     old.set()
                 ev = threading.Event()
                 self._cancel[sess] = ev
+            # the AI in use goes with the first reply: the game header follows a change made in the app window
             writer.send({"kind": "answer", "final": False, "msgId": msg.get("msgId"), "text": "",
-                         "phase": "Thinking…", "retryAfter": RETRY_THINKING_S})
+                         "phase": "Thinking…", "retryAfter": RETRY_THINKING_S, "ai": self.ai_status()})
             threading.Thread(target=self._answer_safe, args=(msg, writer, ev), daemon=True).start()
         elif kind == "status":
             writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"), "status": self.status(True)})
-        elif kind == "set_model":
-            self._set_model(msg, writer)
-        elif kind == "set_search_mode":
-            mode = msg.get("value")
-            if mode in ("auto", "always", "never"):
-                self.store.update(search_mode=mode)
-                self.prewarm_later()
-                writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"),
-                             "text": f"Web search: {mode}", "status": self.status()})
-            else:
-                writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"), "text": "Unknown mode."})
-        elif kind == "set_api_key":
-            self._set_key(msg, writer, "openrouter")
-        elif kind == "set_gemini_key":
-            self._set_key(msg, writer, "gemini")
-        elif kind == "set_provider":
-            self._set_provider(msg, writer)
-        elif kind == "set_effort":
-            effort = msg.get("value")
-            if effort in claude_code.EFFORTS:
-                self.store.update(claude_effort=effort)
-                self.prewarm_later()
-                writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"),
-                             "text": f"Thinking level: {EFFORT_NAMES.get(effort, effort)}", "status": self.status()})
-            else:
-                writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"), "text": "Unknown thinking level."})
-        elif kind == "dismiss_claude":
-            self.store.update(claude_suggest_dismissed=True)
-            writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"),
-                         "text": "Keeping " + PROVIDER_NAMES.get(self.store.settings.provider, "the current provider") + ".",
-                         "status": self.status()})
+        elif kind in _MOVED_SETTINGS:
+            writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"),
+                         "text": "AI settings are in the ForeverAI app window now. Type /reload to update the add-on."})
         elif kind == "new_conversation":
             pass
         else:
             log.warning("unknown message type %s", kind)
 
-    # ---------------------------------------------------------------- settings
-    def _set_provider(self, msg: dict, writer: InboxWriter) -> None:
-        value = msg.get("value")
+    # ---------------------------------------------------------------- settings (changed in the app window)
+    def set_provider(self, value: str) -> tuple[bool, str]:
+        """Returns (ok, message for the player)."""
         if value == "claude_code":
             info = claude_code.detect(force=True)
             if not info or not info.get("loggedIn"):
-                writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"),
-                             "text": "Claude Code is not installed or not signed in (sign in: run claude auth login in a terminal)."})
-                return
+                return False, "Claude Code is not installed or not signed in (Keys & sign-in…)."
         elif value in ("openrouter", "gemini"):
             if not config.read_key(value):
-                writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"), "status": self.status(),
-                             "text": f"No {PROVIDER_NAMES[value]} key yet. Enter it below first."})
-                return
+                return False, f"No {PROVIDER_NAMES[value]} key yet. Enter it in Keys & sign-in… first."
         else:
-            writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"), "text": "Unknown provider."})
-            return
+            return False, "Unknown provider."
         self.store.update(provider=value)
         self.prewarm_later()
         s = self.store.settings
         label = {"claude_code": f"Claude Code · {model_name(s.claude_model)} · thinking {EFFORT_NAMES.get(s.claude_effort, s.claude_effort)}",
                  "gemini": f"Google Gemini · {s.gemini_model}"}.get(value, f"OpenRouter · {s.model}")
-        writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"), "text": "AI provider: " + label,
-                     "status": self.status(True)})
+        activity.info("AI provider: %s", label)
+        return True, "AI provider: " + label
 
-    def _set_model(self, msg: dict, writer: InboxWriter) -> None:
-        model = str(msg.get("value") or "").strip()
-        if self.store.settings.provider == "claude_code":
+    def set_model(self, model: str) -> tuple[bool, str]:
+        """A model of the current provider; returns (ok, message for the player)."""
+        model = str(model or "").strip()
+        provider = self.store.settings.provider
+        if not model:
+            return False, "Choose a model or enter its ID."
+        if provider == "claude_code":
             known = {m["id"] for m in claude_code.CLAUDE_MODELS} | {"sonnet", "opus", "haiku", "fable"}
             if model not in known and not model.startswith("claude-"):
-                writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"),
-                             "text": f"{model} is not a Claude model."})
-                return
+                return False, f"{model} is not a Claude model."
             self.store.update(claude_model=model)
             self.prewarm_later()
-            writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"),
-                         "text": f"Claude model: {model_name(model)}", "status": self.status()})
-            return
-        if self.store.settings.provider == "gemini":
+            text = f"Claude model: {model_name(model)}"
+        elif provider == "gemini":
             ids = {m["id"] for m in self.gemini_models()}
             if not gemini.is_chat_model(model) or (ids and model not in ids and not model.endswith("-latest")):
-                writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"),
-                             "text": f"{model} is not a Gemini chat model available to this key."})
-                return
+                return False, f"{model} is not a Gemini chat model available to this key."
             self.store.update(gemini_model=model)
             self._gemini_down.pop(model, None)  # chosen again: it gets another chance
-            writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"), "text": f"Gemini model: {model}",
-                         "status": self.status()})
-            return
-        ids = {m["id"] for m in self.models()}
-        if ids and model not in ids:
-            writer.send({"kind": "error", "final": True, "msgId": msg.get("msgId"),
-                         "text": f"Model {model} does not exist on OpenRouter."})
-            return
-        self.store.update(model=model)
-        writer.send({"kind": "status", "final": True, "msgId": msg.get("msgId"), "text": f"Model: {model}",
-                     "status": self.status()})
+            text = f"Gemini model: {model}"
+        else:
+            ids = {m["id"] for m in self.models()}
+            if ids and model not in ids:
+                return False, f"Model {model} does not exist on OpenRouter."
+            self.store.update(model=model)
+            text = f"Model: {model}"
+        activity.info(text)
+        return True, text
+
+    def set_effort(self, effort: str) -> tuple[bool, str]:
+        if effort not in claude_code.EFFORTS:
+            return False, "Unknown thinking level."
+        self.store.update(claude_effort=effort)
+        self.prewarm_later()
+        text = f"Thinking level: {EFFORT_NAMES.get(effort, effort)}"
+        activity.info(text)
+        return True, text
+
+    def set_search_mode(self, mode: str) -> tuple[bool, str]:
+        if mode not in SEARCH_MODES:
+            return False, "Unknown web search mode."
+        self.store.update(search_mode=mode)
+        self.prewarm_later()
+        text = f"Web search: {SEARCH_MODES[mode]}"
+        activity.info(text)
+        return True, text
+
+    def model_choices(self, provider: str) -> list[dict]:
+        """The models offered in the app window for a provider: {"id", "name", "price"} (price: OpenRouter only).
+        May ask the provider for its model list: call it off the Tk thread."""
+        s = self.store.settings
+        if provider == "claude_code":
+            return [{"id": m["id"], "name": m["name"], "price": None} for m in claude_code.CLAUDE_MODELS]
+        if provider == "gemini":
+            return [dict(m, price=None) for m in self.gemini_status()["models"]]
+        by_id = {m["id"]: m for m in self.models()} if config.read_key("openrouter") else {}
+        out = []
+        for mid in [s.model] + [f for f in s.favorites if f != s.model]:
+            m = by_id.get(mid)
+            price = f"${m['in']:.2f} / ${m['out']:.2f} per 1M tokens" if m and m.get("in") is not None else None
+            out.append({"id": mid, "name": mid, "price": price})
+        return out[:10]
 
     def save_key(self, provider: str, key: str, use: bool = False) -> tuple[bool, str]:
         """Check the key with the provider and save it; ``use`` also switches to that provider.
@@ -357,13 +357,6 @@ class Service:
             self.store.update(provider=provider)
         activity.info("%s key saved%s%s", name, where, " · AI provider: " + name if use else "")
         return True, f"Key saved{where}." + (f" Using {name}." if use else "")
-
-    def _set_key(self, msg: dict, writer: InboxWriter, provider: str) -> None:
-        # a key entered while that provider has no key yet also switches to it
-        use = not config.read_key(provider) and self.store.settings.provider != "claude_code"
-        ok, text = self.save_key(provider, str(msg.get("value") or ""), use=use)
-        writer.send({"kind": "status" if ok else "error", "final": True, "msgId": msg.get("msgId"), "text": text,
-                     "status": self.status(ok)})
 
     # ---------------------------------------------------------------- status
     def _refresh(self, what: str) -> None:
@@ -438,42 +431,27 @@ class Service:
         return self.status()
 
     def status(self, fresh: bool = False) -> dict:
+        """What the add-on shows (the AI in use, balance, memory); the AI settings themselves are in the app window."""
         s = self.store.settings
         bal = self.balance(fresh) if config.read_key("openrouter") else None
-        by_id = {m["id"]: m for m in self.models()}
-        favs = []
-        for mid in [s.model] + [f for f in s.favorites if f != s.model]:
-            m = by_id.get(mid)
-            favs.append({"id": mid, "in": m["in"] if m else None, "out": m["out"] if m else None})
         return {
             "balance": round(bal, 4) if bal is not None else None,
             "balanceAt": datetime.now().strftime("%H:%M"),
             "lowBalance": s.low_balance,
-            "model": s.model,
-            "searchMode": s.search_mode,
             "lastCost": self.last_cost,
             "kbDate": self.kb.meta("kb_date") if self.kb else None,
             "hotfixDate": self.kb.meta("hotfix_date") if self.kb else None,
             "kbPages": self.kb.count_pages() if self.kb else 0,
-            "keyMask": config.mask_key(config.read_api_key()),
-            "models": favs[:10],
             "addonSV": self.addon_sv(),
-            "provider": s.provider,
             "memory": self.memory.get(self._char),
-            "claude": self.claude_status(),
-            "gemini": self.gemini_status(),
-            "suggestClaude": bool(self.claude_status()["loggedIn"]) and s.provider != "claude_code"
-                             and not s.claude_suggest_dismissed,
+            **self.ai_status(),
         }
 
-    def claude_status(self) -> dict:
+    def ai_status(self) -> dict:
+        """The AI in use, as the game header and the minimap button show it."""
         s = self.store.settings
-        info = claude_code.detect_cached()
-        return {"detected": bool(info), "loggedIn": bool(info and info.get("loggedIn")),
-                "subscription": info.get("subscription") if info else None,
-                "version": info.get("version") if info else None,
-                "model": s.claude_model, "effort": s.claude_effort,
-                "models": claude_code.CLAUDE_MODELS, "efforts": claude_code.EFFORTS}
+        return {"provider": s.provider, "model": s.model, "searchMode": s.search_mode,
+                "claude": {"model": s.claude_model, "effort": s.claude_effort}, "gemini": {"model": s.gemini_model}}
 
     def addon_sv(self) -> dict:
         if not hasattr(self, "_addon_sv"):
@@ -538,8 +516,8 @@ class Service:
         key = config.read_key(provider)
         if not key:
             writer.send({"kind": "error", "final": True, "msgId": msg_id, "status": self.status(),
-                         "text": f"No {PROVIDER_NAMES[provider]} key. Enter it in the ForeverAI window (AI provider…) or "
-                                 f"in Settings → {PROVIDER_NAMES[provider]} key."})
+                         "text": f"No {PROVIDER_NAMES[provider]} key. Enter it in the ForeverAI app window "
+                                 "(Keys & sign-in…)."})
             return
         client = (self.gemini_factory if is_gemini else self.client_factory)(key)
         model = s.gemini_model if is_gemini else s.model

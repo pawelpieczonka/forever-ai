@@ -96,45 +96,88 @@ def test_question_flow_writes_final_answer(env):
     assert "empty" in (addons / "ForeverAI_Inbox007" / "data.lua").read_text()
     assert d["kind"] == "answer" and d["session"] == "S1" and d["msgId"] == 42
     assert "|cffffd100Plan|r" in d["text"] and "[Young Nightsaber]" in d["text"]
-    assert d["status"]["balance"] == 6.17 and d["status"]["keyMask"] == "sk-or-…nop"
+    assert d["status"]["balance"] == 6.17 and d["status"]["provider"] == "openrouter"
+    assert "abcdefghijklmnop" not in json.dumps(d) and "keyMask" not in d["status"]
     assert d["cost"] == 0.0012
     sys_prompt = FakeClient.seen_messages[0]["content"]
     assert "is not Classic Era" in sys_prompt and "1.60.1.70862" in FakeClient.seen_messages[1]["content"]
 
 
-def test_set_api_key_validates_and_masks(env):
+def test_save_key_validates(env):
     svc, addons, tmp = env
-    svc.handle({"type": "set_api_key", "value": "bad", "session": "S", "sigPrefix": "k", "nextInbox": 1})
-    d = _read_inbox(addons, 1)
-    assert d["kind"] == "error" and "sk-or-v1-abcdefghijklmnop" in (tmp / ".env").read_text()
-    svc.handle({"type": "set_api_key", "value": "sk-or-v1-NEWKEY0000000999", "session": "S", "sigPrefix": "k",
-                "nextInbox": 2})
-    d = _read_inbox(addons, 2)
-    assert d["kind"] == "status" and d["status"]["keyMask"] == "sk-or-…999"
+    assert svc.save_key("openrouter", "bad")[0] is False
+    assert "sk-or-v1-abcdefghijklmnop" in (tmp / ".env").read_text()
+    assert svc.save_key("openrouter", "sk-or-v1-NEWKEY0000000999") == (True, "Key saved.")
     assert "NEWKEY" in (tmp / ".env").read_text()
-    assert "NEWKEY" not in json.dumps(d)
 
 
-def test_set_model_rejects_unknown(env):
+def test_ai_settings_from_an_old_addon_change_nothing(env):
+    """The AI settings are in the app window. An add-on older than 0.6.0 (a game not reloaded since the update) gets
+    a reply that says so instead of waiting, and nothing changes: no key from the game is saved."""
+    svc, addons, tmp = env
+    before = (tmp / "settings.json").read_text() if (tmp / "settings.json").exists() else None
+    old = [("set_api_key", "sk-or-v1-FROMGAME000000999"), ("set_gemini_key", "AIzaSyFROMGAME0000000000000000"),
+           ("set_provider", "gemini"), ("set_model", "deepseek/deepseek-v4-flash"), ("set_effort", "max"),
+           ("set_search_mode", "never"), ("dismiss_claude", True)]
+    for n, (kind, value) in enumerate(old, 1):
+        svc.handle({"type": kind, "value": value, "msgId": n, "session": "S", "nextInbox": n})
+        d = _read_inbox(addons, n)
+        assert d["kind"] == "error" and d["final"] and d["msgId"] == n and "app window" in d["text"], kind
+    assert "FROMGAME" not in (tmp / ".env").read_text()
+    after = (tmp / "settings.json").read_text() if (tmp / "settings.json").exists() else None
+    assert after == before
+    s = svc.store.settings
+    assert (s.provider, s.model, s.claude_effort, s.search_mode) == ("openrouter", config.DEFAULT_MODEL, "high", "auto")
+
+
+def test_ai_settings_in_the_app(env):
     svc, addons, _ = env
-    svc.handle({"type": "set_model", "value": "nope/model", "session": "S", "sigPrefix": "m", "nextInbox": 1})
-    assert _read_inbox(addons, 1)["kind"] == "error"
-    svc.handle({"type": "set_model", "value": "openai/gpt-6-luna", "session": "S", "sigPrefix": "m", "nextInbox": 2})
-    assert _read_inbox(addons, 2)["status"]["model"] == "openai/gpt-6-luna"
+    assert svc.set_model("nope/model") == (False, "Model nope/model does not exist on OpenRouter.")
+    assert svc.set_model("  ")[0] is False and svc.store.settings.model == config.DEFAULT_MODEL
+    assert svc.set_model(" deepseek/deepseek-v4-flash ") == (True, "Model: deepseek/deepseek-v4-flash")
+    assert svc.store.settings.model == "deepseek/deepseek-v4-flash"
+    assert svc.set_search_mode("sometimes")[0] is False
+    assert svc.set_search_mode("never") == (True, "Web search: off") and svc.store.settings.search_mode == "never"
+    assert svc.set_effort("huge")[0] is False and svc.store.settings.claude_effort == "high"
+    assert svc.set_provider("gemini") == (False, "No Google Gemini key yet. Enter it in Keys & sign-in… first.")
+    assert svc.set_provider("nobody")[0] is False and svc.store.settings.provider == "openrouter"
+    # the model list of the app window: the chosen model first, prices from OpenRouter
+    choices = svc.model_choices("openrouter")
+    assert choices[0] == {"id": "deepseek/deepseek-v4-flash", "name": "deepseek/deepseek-v4-flash",
+                          "price": "$0.09 / $0.18 per 1M tokens"}
+    assert {"id": "openai/gpt-6-luna", "name": "openai/gpt-6-luna", "price": "$0.10 / $0.50 per 1M tokens"} in choices
+    assert len({c["id"] for c in choices}) == len(choices) <= 10
+    assert [c["name"] for c in svc.model_choices("claude_code")][:2] == ["Haiku 5.5", "Sonnet 5.5"]
+    # the game gets the AI in use, not the settings' lists or the key
+    st = svc.status()
+    assert st["provider"] == "openrouter" and st["model"] == "deepseek/deepseek-v4-flash" and st["searchMode"] == "never"
+    assert st["claude"] == {"model": "claude-haiku-5-5", "effort": "high"} and set(st["gemini"]) == {"model"}
+    assert not {"keyMask", "models", "suggestClaude"} & set(st)
+    # ... and the first reply to a question carries it, so the game header follows a change made in the app
+    _send(svc, {"type": "question", "msgId": 5, "session": "S", "nextInbox": 1, "conv": "c", "text": "hi",
+                "snapshot": {}})
+    first = None
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        d = _read_inbox(addons, 1)
+        first = first or (d if d.get("ai") else None)
+        if d.get("final"):
+            break
+        time.sleep(0.01)
+    assert first and first["ai"]["model"] == "deepseek/deepseek-v4-flash" and first["ai"]["searchMode"] == "never"
+    assert d.get("final") and d["status"]["model"] == "deepseek/deepseek-v4-flash"
 
 
 def test_claude_code_provider(env, monkeypatch):
     from foreverai import claude_code
     svc, addons, _ = env
-    # not installed -> switching is refused, no suggestion
-    svc.handle({"type": "set_provider", "value": "claude_code", "session": "S", "nextInbox": 1})
-    assert _read_inbox(addons, 1)["kind"] == "error"
-    assert svc.status()["suggestClaude"] is False
+    # not installed -> switching is refused
+    assert svc.set_provider("claude_code")[0] is False and svc.store.settings.provider == "openrouter"
 
     info = {"path": "claude.exe", "version": "2.1.304", "loggedIn": True, "subscription": "max"}
     monkeypatch.setattr(claude_code, "detect", lambda force=False: info)
     st = svc.status()
-    assert st["suggestClaude"] is True and st["claude"]["model"] == "claude-haiku-5-5" and st["claude"]["effort"] == "high"
+    assert st["claude"]["model"] == "claude-haiku-5-5" and st["claude"]["effort"] == "high"
 
     seen = {"prompts": []}
 
@@ -165,11 +208,10 @@ def test_claude_code_provider(env, monkeypatch):
             yield "final", "# Raids\n**9 December** 2026"
 
     monkeypatch.setattr(claude_code, "ClaudeSession", FakeSession)
-    svc.handle({"type": "set_provider", "value": "claude_code", "session": "S", "nextInbox": 2})
-    d = _read_inbox(addons, 2)
-    assert d["kind"] == "status" and d["status"]["provider"] == "claude_code" and d["status"]["suggestClaude"] is False
-    svc.handle({"type": "set_effort", "value": "xhigh", "session": "S", "nextInbox": 3})
-    assert _read_inbox(addons, 3)["status"]["claude"]["effort"] == "xhigh"
+    assert svc.set_provider("claude_code") == (True, "AI provider: Claude Code · Haiku 5.5 · thinking high")
+    assert svc.set_effort("xhigh") == (True, "Thinking level: very high")
+    assert svc.set_model("gpt-6") == (False, "gpt-6 is not a Claude model.")
+    assert svc.status()["provider"] == "claude_code" and svc.status()["claude"]["effort"] == "xhigh"
 
     svc.handle({"type": "question", "msgId": 77, "session": "S", "nextInbox": 4, "conv": "c", "text": "When do raids open?",
                 "snapshot": {"game": {"build": "1.60.1.70862"}}})

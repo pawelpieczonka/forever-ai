@@ -1,7 +1,7 @@
 -- ForeverAI: core (namespace, saved variables, events, conversations, requests)
 local ADDON, ns = ...
 ForeverAI = ns
-ns.version = "0.5.2"
+ns.version = "0.6.0"
 
 BINDING_HEADER_FOREVERAI = "ForeverAI"
 BINDING_NAME_FOREVERAI_TOGGLE = "Show/hide ForeverAI"
@@ -547,10 +547,9 @@ function ns.OnMessage(data)
     end
     ns.db.status = data.status
     ns.UI.UpdateHeader()
-    if data.status.suggestClaude and not ns.claudeSuggested then
-      ns.claudeSuggested = true
-      ns.UI.SuggestClaude(data.status.claude)
-    end
+  elseif type(data.ai) == "table" then -- the AI in use (chosen in the app window) comes with the first reply
+    for k, v in pairs(data.ai) do ns.db.status[k] = v end
+    ns.UI.UpdateHeader()
   end
   if data.kind == "answer" then
     ns.UI.UpdateAnswer(data)
