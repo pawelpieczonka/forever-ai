@@ -304,8 +304,6 @@ SlashCmdList.FOREVERAI = function(msg)
     ns.print("Tracking stopped and marks cleared.")
   elseif msg == "track" then
     if ns.Track then ns.Track.Debug() end
-  elseif msg == "probe" then
-    if ns.Track then ns.Track.Probe() end
   elseif msg == "progress" then
     if ns.Progress then ns.Progress.Debug() end
   elseif msg == "professions" then

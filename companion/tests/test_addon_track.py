@@ -242,31 +242,3 @@ def test_tracking_listens_by_itself_and_puts_the_players_settings_back(sim):
     sim.run(1)
     assert text(sim.lua('return GetCVar("nameplateShowAll") .. " " .. GetCVar("nameplateMaxDistance")')) == "0 41"
     assert sim.errors == []
-
-
-def test_probe_tells_what_the_game_shows_of_an_object_next_to_the_player(sim):
-    """/fai probe: a look at every way the game might show an add-on a herb, a vein or a chest (it has no nameplate).
-    One of them is the "soft target": the game picks the nearest thing the player can interact with."""
-    sim.lua("""
-      SetCVar("SoftTargetInteract", "0")
-      local exists, name, guid = UnitExists, UnitName, UnitGUID
-      UnitExists = function(u) if u == "softinteract" then return GetCVar("SoftTargetInteract") == "3" end return exists(u) end
-      UnitName = function(u) if u == "softinteract" then return "Silverleaf" end return name(u) end
-      UnitGUID = function(u) if u == "softinteract" then return "GameObject-0-4444-1-2-1617-00006AF3" end return guid and guid(u) end
-      C_VignetteInfo = { GetVignettes = function() return { "v1" } end,
-                         GetVignetteInfo = function(id) return { name = "Battered Chest", type = 0 } end }
-    """)
-    sim.lua('SetCVar("SoftTargetInteractArc", "0") SetCVar("SoftTargetInteractRange", "10")')
-    sim.slash("/fai probe")
-    sim.run(2)
-    assert text(sim.lua('return GetCVar("SoftTargetInteract") .. GetCVar("SoftTargetInteractArc")')) == "32"  # all around
-    sim.run(8)
-    lines = text(sim.lua("return table.concat(ForeverAI.char.lastProbe, ' || ')"))
-    assert "softinteract with the game's own setting (SoftTargetInteract 0): nothing" in lines
-    assert "soft target for 8 s: Silverleaf (GameObject, id 1617)" in lines
-    assert "vignettes (1): Battered Chest" in lines
-    # the player's settings are back
-    assert text(sim.lua('return GetCVar("SoftTargetInteract") .. " " .. GetCVar("SoftTargetInteractArc") .. " " '
-                        '.. GetCVar("SoftTargetInteractRange")')) == "0 0 10"
-    assert "probe" in text(sim.lua("return ForeverAI.Collect.Snapshot().game.probe and 'probe' or 'none'"))
-    assert sim.errors == []

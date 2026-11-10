@@ -240,7 +240,6 @@ function S.game()
   if st then t.serverTime = date("!%Y-%m-%d %H:%M", st) .. " UTC" end
   -- what "around" and "tracked" can know: without nameplates of all enemies the add-on sees only the target
   if ns.Track and ns.Track.SightText then t.nameplates = ns.Track.SightText() end
-  if ns.char and ns.char.lastProbe then t.probe = ns.char.lastProbe end -- /fai probe: what the game shows of objects
   if C_GameRules then
     t.hardcore = safe(C_GameRules.IsHardcoreActive)
     t.selfFound = C_PlayerInfo and C_PlayerInfo.IsSelfFoundActive and safe(C_PlayerInfo.IsSelfFoundActive) or nil
