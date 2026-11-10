@@ -142,6 +142,15 @@ class AppWindow:
         self.ai = AISettings(self.root, self.ask_key)
         self.ai.frame.pack(fill="x", padx=16, pady=(2, 10))
 
+        # packed before the activity log: when the window is shorter than the content asks for, the log shrinks and
+        # the buttons stay visible
+        bottom = tk.Frame(self.root, bg=BG)
+        bottom.pack(side="bottom", fill="x", padx=16, pady=(0, 14))
+        ttk.Button(bottom, text="Open data folder", command=lambda: open_path(config.data_dir())).pack(side="left")
+        ttk.Button(bottom, text="Desktop shortcut", command=self._shortcut).pack(side="left", padx=8)
+        ttk.Button(bottom, text="Quit", command=self.quit).pack(side="right")
+        self.update_dl = ttk.Button(bottom, text="Download update", command=self._download_update)
+
         tk.Label(self.root, text="Activity", bg=BG, fg=DIM, font=(UI, 9), anchor="w").pack(fill="x", padx=16)
         box = tk.Frame(self.root, bg=PANEL)
         box.pack(fill="both", expand=True, padx=16, pady=(2, 8))
@@ -153,13 +162,6 @@ class AppWindow:
         self.log.pack(side="left", fill="both", expand=True, padx=6, pady=6)
         self.log.tag_configure("warn", foreground=WARN)
         self.log.tag_configure("time", foreground=DIM)
-
-        bottom = tk.Frame(self.root, bg=BG)
-        bottom.pack(fill="x", padx=16, pady=(0, 14))
-        ttk.Button(bottom, text="Open data folder", command=lambda: open_path(config.data_dir())).pack(side="left")
-        ttk.Button(bottom, text="Desktop shortcut", command=self._shortcut).pack(side="left", padx=8)
-        ttk.Button(bottom, text="Quit", command=self.quit).pack(side="right")
-        self.update_dl = ttk.Button(bottom, text="Download update", command=self._download_update)
         self._key_dialog = None
         self._key_asked = False
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
