@@ -228,6 +228,14 @@ SCENARIOS = [
                     "marks": ["1. Strigid Screecher — Teldrassil 64.2, 69.2 (24 m)"],
                     "tracked": ["Strigid Screecher: not seen, but the game shows nameplates only for the target and for "
                                 "units in a fight (nameplates of all enemies are off), so one can be near without being seen"]})]),
+    Scenario("any_creature_of_the_objective", "The route named a Bloodfeather Rogue; a Harpy that drops the same belts "
+                                              "stood next to the player and nothing said so.", [
+        Turn("nie widze zadnego rogue, mam czekac na respawn?",
+             [c.says(r"Harpy"), c.max_words(150), PL, *QUIET],
+             patch={"target": None, "windows": None, "marks": ["1. Bloodfeather Rogue — Teldrassil 37.3, 37.8 (40 m)"],
+                    "tracked": ["Bloodfeather Rogue (also counts for Bloodfeather Belt: Bloodfeather Harpy, Bloodfeather "
+                                "Sorceress, Hatescreech, Fury Shelda and 5 more): 1 alive in sight now (Bloodfeather Harpy), "
+                                "highlighted on the screen"]})]),
     Scenario("mark_a_creature", "Asked where a creature is: the mark comes with a watch for it.", [
         Turn("gdzie znajde befouled webwood? oznacz",
              [c.calls("mark_on_map", 1, 1), c.marks(51.5, 56.4), c.did(r"watching for: .*Befouled Webwood"), c.max_words(150), PL])]),

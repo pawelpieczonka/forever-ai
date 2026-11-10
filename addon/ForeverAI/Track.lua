@@ -18,14 +18,16 @@ local SAY_AGAIN_S = 15 -- a creature that was out of sight this long is announce
 local PICTURES = { 8, 7, 1, 2, 4 }
 local safe, clean = ns.safe, ns.clean
 
--- the tracked creatures: { name, quest (title, optional), since, seen = { t, mapID, x, y, zone } }
+-- the tracked creatures: { name, quest (title, optional), since, seen = { t, mapID, x, y, zone },
+--   also = the other creatures that give the same objective of the quest, what = that objective's name }
 local function list()
   if not ns.char then return {} end
   ns.char.tracked = ns.char.tracked or {}
   return ns.char.tracked
 end
 
--- what the last scan found, per name (lower case): { alive = n, marked = bool, goneAt = time it left sight }
+-- what the last scan found, per name (lower case): { alive = n, names = the ones seen, marked = bool,
+--   goneAt = time it left sight }
 local sight = {}
 
 local function changed()
@@ -57,7 +59,7 @@ local function visible()
     local guid = clean(safe(UnitGUID, unit))
     if guid and known[guid] then return end
     if guid then known[guid] = true end
-    out[#out + 1] = { unit = unit, name = name:lower(), dead = clean(safe(UnitIsDead, unit)) and true or false }
+    out[#out + 1] = { unit = unit, name = name:lower(), shown = name, dead = clean(safe(UnitIsDead, unit)) and true or false }
   end
   if C_NamePlate and C_NamePlate.GetNamePlates then
     for _, plate in ipairs(safe(C_NamePlate.GetNamePlates) or {}) do
@@ -119,11 +121,77 @@ function T.Marked()
 end
 
 ------------------------------------------------------------------------ announcing
-local function announce(mob, alive)
-  local text = string.format("%s is in sight%s", mob.name, alive > 1 and (" (" .. alive .. ")") or "")
+local function announce(name, alive)
+  local text = string.format("%s is in sight%s", name, alive > 1 and (" (" .. alive .. ")") or "")
   if PlaySound then pcall(PlaySound, (SOUNDKIT and SOUNDKIT.RAID_WARNING) or 8959, "Master") end
   if UIErrorsFrame and UIErrorsFrame.AddMessage then pcall(UIErrorsFrame.AddMessage, UIErrorsFrame, text, 0.36, 1, 0.62) end
   ns.print("|cff5dff9d" .. text .. "|r")
+end
+
+------------------------------------------------------------------------ creatures that count for the same objective
+-- A quest often takes any of several creatures: every Bloodfeather drops the belts, whichever one the route named.
+-- The quest database knows them all, so one tracked creature stands for all of them.
+local function logQuests()
+  local out = {}
+  if not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries) then return out end
+  for i = 1, (safe(C_QuestLog.GetNumQuestLogEntries) or 0) do
+    local q = safe(C_QuestLog.GetInfo, i)
+    if q and not q.isHeader and q.questID and q.title then out[#out + 1] = q end
+  end
+  return out
+end
+
+-- Fill in mob.also and mob.what, and mob.quest when only the creature was named. Until the quest database answers
+-- (it is built after login) mob.also stays nil and this is asked again.
+local function expand(mob)
+  if mob.also or not (ns.Collect and ns.Collect.SameObjective) then return end
+  local looked = false
+  for _, q in ipairs(logQuests()) do
+    if not mob.quest or q.title == mob.quest then
+      local ok, label, names = pcall(ns.Collect.SameObjective, q.questID, mob.name)
+      if ok and names then
+        looked = true
+        if #names > 0 then
+          mob.quest = q.title
+          mob.also = {}
+          for _, n in ipairs(names) do
+            if n:lower() ~= mob.name:lower() then mob.also[#mob.also + 1] = n end
+          end
+          if #mob.also > 0 and label ~= "kill credit" then mob.what = label end
+          return true
+        end
+      end
+    end
+  end
+  if looked then mob.also = {} end
+end
+
+local function expandAll()
+  local grew = false
+  for _, mob in ipairs(list()) do
+    if expand(mob) then grew = true end
+  end
+  return grew
+end
+
+-- the names that count for a tracked creature, lower case
+local function counting(mob)
+  local set = { [mob.name:lower()] = true }
+  for _, n in ipairs(mob.also or {}) do set[n:lower()] = true end
+  return set
+end
+
+-- what the player is told is tracked: the objective when several creatures give it
+local function label(mob) return mob.what or mob.name end
+
+-- for the card of an answer: "Bloodfeather Rogue (or any other creature that counts for Bloodfeather Belt)"
+function T.Describe(name)
+  for _, mob in ipairs(list()) do
+    if mob.name:lower() == tostring(name):lower() and mob.also and #mob.also > 0 then
+      return string.format("%s (or any other creature that counts for %s)", mob.name, mob.what or "the same objective")
+    end
+  end
+  return name
 end
 
 ------------------------------------------------------------------------ scanning
@@ -138,10 +206,14 @@ function T.Scan()
   for i, mob in ipairs(tracked) do
     local key = mob.name:lower()
     local before = sight[key] or { alive = 0 }
-    local alive, marked = 0, false
+    local alive, marked, names, counts = 0, false, {}, counting(mob)
     for _, u in ipairs(units) do
-      if u.name == key and not u.dead then
+      if counts[u.name] and not u.dead then
         alive = alive + 1
+        if counts[u.name] == true then
+          counts[u.name] = 1 -- named once
+          names[#names + 1] = u.shown
+        end
         local plate = C_NamePlate and C_NamePlate.GetNamePlateForUnit and safe(C_NamePlate.GetNamePlateForUnit, u.unit)
         if plate and used < MAX_MARKERS then
           used = used + 1
@@ -160,7 +232,7 @@ function T.Scan()
     local goneAt, told = before.goneAt, before.told
     if alive > 0 then
       if before.alive == 0 and (not told or not goneAt or now - goneAt >= SAY_AGAIN_S) then
-        announce(mob, alive)
+        announce(names[1] or mob.name, alive)
         told = true
       end
       goneAt = nil
@@ -172,23 +244,26 @@ function T.Scan()
     elseif before.alive > 0 then
       goneAt = now
     end
-    sight[key] = { alive = alive, marked = marked, goneAt = goneAt, told = told }
+    sight[key] = { alive = alive, names = names, marked = marked, goneAt = goneAt, told = told }
     if before.alive ~= alive then changed() end
   end
   hideMarkers(used + 1)
 end
 
--- a quest objective that names the creature is done, or its quest is complete or gone: nothing left to look for
+-- a quest objective that names the creature (or what it gives) is done, or its quest is complete or gone: nothing
+-- left to look for
 local function finished(mob)
   if not mob.quest or not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries) then return false end
-  local key = mob.name:lower()
-  for i = 1, (safe(C_QuestLog.GetNumQuestLogEntries) or 0) do
-    local q = safe(C_QuestLog.GetInfo, i)
-    if q and not q.isHeader and q.title == mob.quest and q.questID then
+  local key, what = mob.name:lower(), mob.what and mob.what:lower()
+  for _, q in ipairs(logQuests()) do
+    if q.title == mob.quest then
       if safe(C_QuestLog.IsComplete, q.questID) then return true end
       for _, ob in ipairs(safe(C_QuestLog.GetQuestObjectives, q.questID) or {}) do
         local text = clean(ob.text)
-        if text and text:lower():find(key, 1, true) then return ob.finished and true or false end
+        text = text and text:lower()
+        if text and (text:find(key, 1, true) or (what and text:find(what, 1, true))) then
+          return ob.finished and true or false
+        end
       end
       return false
     end
@@ -235,6 +310,7 @@ end
 -- the settings follow the list: on while something is tracked, back when nothing is (called again after a fight)
 local function syncNameplates()
   if #list() > 0 then
+    expandAll()
     if T.ShowNameplates() then pcall(T.Scan) changed() end
   else
     restoreNameplates()
@@ -254,7 +330,7 @@ T.SyncNameplates = syncNameplates
 
 function T.CheckQuests()
   local tracked = list()
-  local gone = false
+  local gone = expandAll() -- the quest database may have come since
   for i = #tracked, 1, -1 do
     if finished(tracked[i]) then forget(i) gone = true end
   end
@@ -280,6 +356,7 @@ function T.Set(mobs, add)
       end
     end
   end
+  expandAll()
   if #tracked > 0 then T.ShowNameplates() end
   T.Scan()
   changed()
@@ -302,14 +379,15 @@ local function ago(t)
   return math.floor(s / 3600) .. " h ago"
 end
 
--- what the window shows: { name, alive, blind (nothing seen and the game shows no nameplates of idle units) }
+-- what the window shows: { name, label (what is looked for: the objective when several creatures give it), alive,
+-- blind (nothing seen and the game shows no nameplates of idle units) }
 function T.State()
   local out = {}
   local blind = T.Sight() ~= "all"
   for _, mob in ipairs(list()) do
     local s = sight[mob.name:lower()] or {}
     local alive = s.alive or 0
-    out[#out + 1] = { name = mob.name, alive = alive, blind = blind and alive == 0 }
+    out[#out + 1] = { name = mob.name, label = label(mob), alive = alive, blind = blind and alive == 0 }
   end
   return out
 end
@@ -346,13 +424,22 @@ function T.Section()
       last = string.format("last seen alive %s near %s %.1f, %.1f%s", ago(mob.seen.t), tostring(mob.seen.zone or "?"),
         mob.seen.x, mob.seen.y, d and string.format(" (%d m from here)", d) or "")
     end
+    -- several creatures count for the same objective: the line names them, and which of them are there
+    local head, which = mob.name, ""
+    if mob.also and #mob.also > 0 then
+      local others = {}
+      for n = 1, math.min(6, #mob.also) do others[n] = mob.also[n] end
+      head = string.format("%s (also counts%s: %s%s)", mob.name, mob.what and (" for " .. mob.what) or "",
+        table.concat(others, ", "), #mob.also > 6 and string.format(" and %d more", #mob.also - 6) or "")
+      if s.names and #s.names > 0 then which = " (" .. table.concat(s.names, ", ") .. ")" end
+    end
     if s.alive > 0 then
-      out[i] = string.format("%s: %d alive in sight now%s", mob.name, s.alive, s.marked and ", highlighted on the screen" or "")
+      out[i] = string.format("%s: %d alive in sight now%s%s", head, s.alive, which, s.marked and ", highlighted on the screen" or "")
     elseif blind then
-      out[i] = string.format("%s: not seen, but %s, so one can be near without being seen%s", mob.name, blind,
+      out[i] = string.format("%s: not seen, but %s, so one can be near without being seen%s", head, blind,
         last and ("; " .. last) or "")
     else
-      out[i] = mob.name .. ": none in sight now; " .. (last or "not seen since it is tracked")
+      out[i] = head .. ": none in sight now; " .. (last or "not seen since it is tracked")
     end
   end
   return out

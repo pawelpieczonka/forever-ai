@@ -633,6 +633,28 @@ local function objectiveSources(QDB, qid)
   return list
 end
 
+-- The creatures that give the same objective of a quest as ``name`` does: any Bloodfeather drops the belts, whichever
+-- one a route happens to name. Returns the objective's label and the names of all of them; nil and an empty list when
+-- the quest has no such objective; nothing at all while the quest database is not there.
+function C.SameObjective(questID, name)
+  local list = objectiveSources(questieDB(), questID)
+  if not list then return nil end
+  local key = tostring(name):lower()
+  for _, obj in ipairs(list) do
+    local names, known, has = {}, {}, false
+    for _, s in ipairs(obj.sources) do
+      local low = s.name:lower()
+      if (s.how == "kill" or s.how == "dropped by") and not known[low] then
+        known[low] = true
+        names[#names + 1] = s.name
+        has = has or low == key
+      end
+    end
+    if has then return obj.label, names end
+  end
+  return nil, {}
+end
+
 -- the player's map position and Questie zone (area) id
 local function playerSpot()
   local mapID = C_Map.GetBestMapForUnit("player")

@@ -242,3 +242,82 @@ def test_tracking_listens_by_itself_and_puts_the_players_settings_back(sim):
     sim.run(1)
     assert text(sim.lua('return GetCVar("nameplateShowAll") .. " " .. GetCVar("nameplateMaxDistance")')) == "0 41"
     assert sim.errors == []
+
+
+# The player's real game: the route named Bloodfeather Rogue (the nearest creature that drops the belts of
+# [The Enchanted Glade]), a Bloodfeather Harpy that drops them just as well stood next to the player, and the strip
+# said "none in sight".
+QUESTIE = r"""
+TEST_belts = 0
+local npcs = { [2015] = "Bloodfeather Harpy", [2017] = "Bloodfeather Rogue", [2018] = "Bloodfeather Sorceress" }
+local db = {
+  QueryQuestSingle = function(id, field) if id == 937 and field == "objectives" then return { [3] = { { 5204 } } } end end,
+  QueryItemSingle = function(id, field)
+    if field == "name" then return "Bloodfeather Belt" end
+    if field == "npcDrops" then return { 2017, 2015, 2018 } end
+  end,
+  QueryNPCSingle = function(id, field) if field == "name" then return npcs[id] end end,
+}
+QuestieLoader = { ImportModule = function(_, name) if name == "QuestieDB" then return db end error("no such module") end }
+C_QuestLog.GetNumQuestLogEntries = function() return 1 end
+C_QuestLog.GetInfo = function(i) return { title = "The Enchanted Glade", questID = 937 } end
+C_QuestLog.GetQuestObjectives = function(id)
+  return { { text = TEST_belts .. "/6 Bloodfeather Belt", finished = TEST_belts >= 6 } }
+end
+C_QuestLog.IsComplete = function(id) return false end
+"""
+BELTS = """ForeverAI.UI.UpdateAnswer({ final = true, msgId = 1, text = "Go there.",
+  marks = { { title = "1. Bloodfeather Rogue", x = 37.3, y = 37.8 } },
+  track = { { name = "Bloodfeather Rogue", quest = "The Enchanted Glade" } } })"""
+
+
+def test_every_creature_that_gives_the_objective_counts(sim):
+    sim.slash("/fai")
+    sim.lua(QUESTIE)
+    sim.lua(BELTS)
+    sim.run(1)
+    assert "Tracking Bloodfeather Belt · none in sight" in shown(sim)
+    assert ("Watching for Bloodfeather Rogue (or any other creature that counts for Bloodfeather Belt): a living one in "
+            "sight is marked on the screen and announced.") in shown(sim)
+    assert text(sim.lua(SECTION)) == (
+        "Bloodfeather Rogue (also counts for Bloodfeather Belt: Bloodfeather Harpy, Bloodfeather Sorceress): "
+        "none in sight now; not seen since it is tracked")
+    sim.lua('TEST_show({ { name = "Bloodfeather Harpy" }, { name = "Strigid Owl" }, { name = "Bloodfeather Sorceress" } })')
+    sim.run(1)
+    assert text(sim.lua("return TEST_marked()")) == "nameplate1,nameplate3"
+    assert "Tracking Bloodfeather Belt · 2 in sight" in shown(sim)
+    assert "Bloodfeather Harpy is in sight (2)" in shown(sim)  # the one that is there, by its own name
+    assert text(sim.lua(SECTION)) == (
+        "Bloodfeather Rogue (also counts for Bloodfeather Belt: Bloodfeather Harpy, Bloodfeather Sorceress): "
+        "2 alive in sight now (Bloodfeather Harpy, Bloodfeather Sorceress), highlighted on the screen")
+
+    sim.lua("TEST_belts = 6")  # the belts are collected: nothing left to look for, though the quest is not turned in
+    sim._wow.fire(b"QUEST_LOG_UPDATE")
+    sim.run(2)
+    assert "Tracking Bloodfeather" not in shown(sim) and text(sim.lua(SECTION)) == "nothing"
+    assert sim.errors == []
+
+
+def test_a_creature_marked_without_its_quest_finds_it_in_the_log(sim):
+    """mark_on_map names only the creature: the add-on looks up which quest of the log it is for."""
+    sim.lua(QUESTIE)
+    sim.lua('ForeverAI.Track.Set({ { name = "Bloodfeather Harpy" } })')
+    sim.lua('TEST_show({ { name = "Bloodfeather Rogue" } })')
+    sim.run(1)
+    assert text(sim.lua(SECTION)).endswith("1 alive in sight now (Bloodfeather Rogue), highlighted on the screen")
+    sim.lua("TEST_belts = 6")
+    sim._wow.fire(b"QUEST_LOG_UPDATE")
+    sim.run(2)
+    assert text(sim.lua(SECTION)) == "nothing"
+
+
+def test_the_quest_database_may_come_later(sim):
+    """Questie builds its database after login: until then one name is tracked, and the rest is asked for again."""
+    sim.lua(QUESTIE)
+    sim.lua("TEST_loader = QuestieLoader QuestieLoader = nil")
+    sim.lua('ForeverAI.Track.Set({ { name = "Bloodfeather Rogue", quest = "The Enchanted Glade" } })')
+    assert text(sim.lua(SECTION)) == "Bloodfeather Rogue: none in sight now; not seen since it is tracked"
+    sim.lua("QuestieLoader = TEST_loader")
+    sim._wow.fire(b"QUEST_LOG_UPDATE")
+    sim.run(2)
+    assert text(sim.lua(SECTION)).startswith("Bloodfeather Rogue (also counts for Bloodfeather Belt: Bloodfeather Harpy,")

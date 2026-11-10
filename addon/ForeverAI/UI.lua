@@ -351,11 +351,11 @@ function UI.UpdateAnswer(data)
     ns.RecordEntry({ k = "a", t = data.text or "", links = data.links, meta = metaText ~= "" and metaText or nil })
     for _, a in ipairs(data.actions or {}) do UI.ActionCard(a) end
     local marked = data.marks and #data.marks > 0
-    if marked then UI.MarksCard(data.marks, data.marksReplace, data.track) end
     -- the creatures to watch for belong to the marks: a new set of marks brings its own (or none)
     if ns.Track and (marked or (type(data.track) == "table" and #data.track > 0)) then
       ns.Track.Set(data.track or {}, data.marksReplace == false)
     end
+    if marked then UI.MarksCard(data.marks, data.marksReplace, data.track) end
     if type(data.auction) == "table" and #data.auction > 0 then UI.AuctionCard(data.auction) end
     currentAnswer = nil
   else
@@ -495,7 +495,10 @@ function UI.MarksCard(marks, replace, track)
     lines[#lines + 1] = string.format("• %s  |cff9aa3ad(%s %.1f, %.1f)|r", esc(p.title), esc(p.zone or ""), p.x, p.y)
   end
   local names = {}
-  for _, t in ipairs(type(track) == "table" and track or {}) do names[#names + 1] = esc(type(t) == "table" and t.name or t) end
+  for _, t in ipairs(type(track) == "table" and track or {}) do
+    local name = type(t) == "table" and t.name or t
+    names[#names + 1] = esc(ns.Track and ns.Track.Describe(name) or name)
+  end
   if #names > 0 then
     lines[#lines + 1] = "|cff9aa3adWatching for " .. table.concat(names, ", ") .. ": a living one in sight is marked on the screen and announced.|r"
   end
@@ -912,11 +915,11 @@ function UI.UpdateStrip()
     local seen = t.alive > 0
     items[#items + 1] = {
       color = seen and { 0.36, 1, 0.62, 1 } or { 0.85, 0.64, 0.26, 1 },
-      text = string.format("|cff9aa3adTracking|r %s |cff%s· %s|r", esc(t.name), seen and "5dff9d" or "d9a441",
+      text = string.format("|cff9aa3adTracking|r %s |cff%s· %s|r", esc(t.label), seen and "5dff9d" or "d9a441",
         -- "after the fight": the game lets the nameplates be turned on only out of a fight; until then the add-on
         -- sees a creature only when it is targeted or pointed at
         seen and (t.alive .. " in sight") or (t.blind and "after the fight" or "none in sight")),
-      tip = "Stop tracking " .. t.name,
+      tip = "Stop tracking " .. t.label,
       close = function() ns.Track.Stop(t.name) end,
     }
   end
