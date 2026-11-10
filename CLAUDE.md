@@ -31,13 +31,42 @@ Every pull request that changes what goes into the apps raises the version by on
 - **Y (minor):** a single new feature; Z goes back to 0.
 - **X (major):** a large set of changes that adds entirely new functionality to the add-on; Y and Z go back to 0. This is the user's decision: when a pull request might be major, ask them, and never raise X on your own.
 
-The step belongs to the pull request, not to its commits: with 0.5.2 on `main`, a pull request with a fix is 0.5.3, stays 0.5.3 with a second fix, and becomes 0.6.0 when a later commit adds a feature. When `main` gets a new version before the pull request is merged, merge `main` and take the step from that version. A pull request that changes nothing in the apps (the README, this file, tests, the workflow) keeps the version, since a bump would publish a release with nothing new in it. The workflow's `version` job checks both on every pull request.
+The step belongs to the pull request, not to its commits: with 0.5.2 on `main`, a pull request with a fix is 0.5.3, stays 0.5.3 with a second fix, and becomes 0.6.0 when a later commit adds a feature. When `main` gets a new version before the pull request is merged, merge `main` and take the step from that version. A pull request that changes nothing in the apps (the README, this file, tests, the workflow) keeps the version, since a bump would publish a release with nothing new in it.
+
+A minor or major pull request also brings a freshly downloaded knowledge base, so every release with new features ships current game data. Update a copy of `seed/kb.sqlite` from all sources in a temporary directory (the app's own knowledge base in `companion/data/` stays as it is) and commit it in the pull request:
+
+```bash
+d="$(mktemp -d)" && cp seed/kb.sqlite "$d/" && (cd companion && FOREVERAI_DATA="$d" .venv/bin/python -m foreverai.kb.sync --force) && cp "$d/kb.sqlite" seed/kb.sqlite
+```
+
+On Windows the same steps with `companion\.venv\Scripts\python.exe` and `$env:FOREVERAI_DATA`. Start from the committed file, not an empty one: Blizzard articles that have left the news pages are kept only from the existing knowledge base. `--force` checks every page against its source, downloads what changed and drops wiki pages that left the category.
+
+The workflow's `version` job checks all of this on every pull request. For the knowledge base, the newest sync of each source (`sync_log` in the file) must have no errors and must have finished at most 24 hours before the commit that changed the file.
+
+### Screenshots
+
+A pull request that changes anything visible in the desktop app shows a screenshot from before and after the change in its description. That covers the window, its dialogs and the icons in `assets/`, but not the add-on's in-game UI. Take both from source: "before" on `main` (in a worktree, e.g. `git worktree add ../forever-ai-main origin/main`) and "after" on the branch. Run each with a fresh data folder and a stand-in game folder:
+
+```bash
+py="$PWD/companion/.venv/bin/python"   # once, in this checkout
+g="$(mktemp -d)" && touch "$g/Wow.exe" && (cd companion && FOREVERAI_DATA="$(mktemp -d)" "$py" -m foreverai --game-dir "$g")
+```
+
+On Windows the same steps with `companion\.venv\Scripts\python.exe` and `$env:FOREVERAI_DATA`. The stand-in game folder (any folder with a `Wow.exe`) stops the app from replacing the add-on in the real game with the one from `main`. The fresh data folder keeps the user's settings, conversations and characters out of the pictures, which matters because the repository is public. Only one ForeverAI runs at a time, so ask the user to close theirs first. Answer the first-run questions the same way both times, and capture the same view at the same window size.
+
+Pull request images go on the `screenshots` branch, which is never merged, so they stay out of `main` and the apps. Put them under `pr-<number>/` as `before.png` and `after.png` (one pair per changed view); the first time, create the branch with `git worktree add --orphan -b screenshots <dir>`. Show each pair side by side:
+
+```markdown
+| Before | After |
+|---|---|
+| ![before](https://github.com/pawelpieczonka/forever-ai/blob/screenshots/pr-<number>/before.png?raw=true) | ![after](https://github.com/pawelpieczonka/forever-ai/blob/screenshots/pr-<number>/after.png?raw=true) |
+```
 
 ### Before you finish
 
 1. Run the tests: `companion/.venv/bin/python -m pytest -q` (Linux) or `companion\.venv\Scripts\python.exe -m pytest -q` (Windows), in `companion`. They include a Lua 5.1 test of the add-on's auction code when `lua5.1` is installed; `luac5.1 -p addon/ForeverAI/*.lua` checks the add-on's syntax.
 2. If you changed what goes into the apps, build your platform and smoke-test it. `build_linux.sh` refuses to build while the app in `release/linux` is running (replacing its files breaks it): ask the user to close it. Linux: `release/linux/ForeverAI-Linux/ForeverAI-Linux --help` must print the usage. Windows (a windowed .exe prints nothing): check that `ForeverAI-Windows.exe` exists. On both: `_internal/seed/kb.sqlite` and `_internal/addon/ForeverAI/ForeverAI.toc` must be present, and the `## Version:` in that `.toc` must match the source.
-3. Push and check that the workflow's test, version, Linux and Windows jobs pass.
+3. Push, open the pull request (with the screenshots when the app looks different) and check that the workflow's test, version, Linux and Windows jobs pass.
 4. Mention in your summary which builds were checked and how (local build, CI run).
 
 ## Integrations with other add-ons

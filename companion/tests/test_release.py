@@ -51,6 +51,20 @@ def test_pull_request_app_changes():
     assert apps(changed, "0.5.2", "0.5.3", base.get, bump.get) == changed
 
 
+def test_pull_request_knowledge_base():
+    kb_problem, day = version_check["kb_problem"], 24 * 3600
+    fresh = {"wiki": (1000.0, ""), "blizzard": (2000.0, "")}
+    assert kb_problem(["seed/kb.sqlite"], fresh, 1000.0 + day) is None
+    assert "brings a freshly downloaded seed/kb.sqlite" in kb_problem(["companion/foreverai/web.py"], {}, 0)
+    assert "after its last wiki sync" in kb_problem(["seed/kb.sqlite"], fresh, 1001.0 + day)
+    assert "has no blizzard sync" in kb_problem(["seed/kb.sqlite"], {"wiki": (1000.0, "")}, 1000.0)
+    assert "after its last blizzard sync" in kb_problem(["seed/kb.sqlite"], dict(fresh, wiki=(3000.0, "")),
+                                                         2001.0 + day)
+    failed = dict(fresh, blizzard=(2000.0, "https://x: timed out\nmore"))
+    assert "blizzard sync in seed/kb.sqlite had errors (https://x: timed out)" in kb_problem(["seed/kb.sqlite"],
+                                                                                              failed, 2000.0)
+
+
 def test_version_order():
     assert updates.version_key("v0.10.0") > updates.version_key("0.9.9")
     assert updates.version_key("0.5") == updates.version_key("0.5.0")
