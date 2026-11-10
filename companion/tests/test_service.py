@@ -296,7 +296,7 @@ def test_mcp_server_protocol():
     assert init["result"]["capabilities"] == {"tools": {}}
     names = [t["name"] for t in srv.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]]
     assert names == ["search_knowledge_base", "propose_addon_change", "save_memory", "delete_memory", "fetch_url",
-                     "mark_on_map", "addon_options", "propose_quest_abandon", "propose_vendor_action",
+                     "mark_on_map", "edit_route", "plan_route", "addon_options", "propose_quest_abandon", "propose_vendor_action",
                      "search_auction_house"]
     res = srv.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                       "params": {"name": "addon_options", "arguments": {"addon": "Questie"}}})
@@ -612,3 +612,338 @@ def test_mcp_over_http_in_the_app():
             post({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, token="bad")
     finally:
         br.close()
+
+
+def _wait_final(addons, n, timeout=5):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        d = _read_inbox(addons, n)
+        if d.get("final"):
+            return d
+        time.sleep(0.05)
+    raise AssertionError("no final answer")
+
+
+class MarkingClient(FakeClient):
+    def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+        if not any(m["role"] == "tool" for m in messages):
+            yield "tool_calls", [ToolCall("c1", "mark_on_map", '{"title":"Dazalar","x":56.7,"y":59.5}'),
+                                 ToolCall("c2", "save_memory", '{"text":"Plays Beast Mastery"}')]
+            return
+        yield "text", "Go to Dazalar."
+
+
+def test_what_an_answer_did_stays_in_the_conversation(env):
+    svc, addons, tmp = env
+    svc = Service(svc.store, None, addons, client_factory=MarkingClient, lookahead=4)
+    svc.handle({"type": "question", "msgId": 5, "session": "S", "nextInbox": 2, "conv": "c", "char": "A-R",
+                "text": "Where do I turn it in?", "snapshot": {}})
+    _wait_final(addons, 2)
+    (turn,) = svc.convs.history("c")
+    assert turn["did"] == ["marked on the map (earlier marks removed): Dazalar (56.7, 59.5)",
+                           "saved to memory: Plays Beast Mastery"]
+
+
+def test_marks_of_an_answer_replace_earlier_ones_unless_added(env):
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        marks = []
+
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            if not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall(f"c{i}", "mark_on_map", json.dumps(m)) for i, m in enumerate(self.marks)]
+                return
+            yield "text", "Done."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+
+    def ask(n, marks):
+        Client.marks = marks
+        svc.handle({"type": "question", "msgId": n, "session": "S", "nextInbox": n, "conv": "c", "text": "mark it",
+                    "snapshot": {}})
+        return _wait_final(addons, n)
+
+    d = ask(2, [{"title": "1. Dazalar", "x": 56.7, "y": 59.5}, {"title": "2. Byancie", "x": 55.3, "y": 56.8}])
+    assert d["marksReplace"] is True and len(d["marks"]) == 2
+    assert svc.convs.history("c")[-1]["did"] == ["marked on the map (earlier marks removed): 1. Dazalar (56.7, 59.5)",
+                                                 "marked on the map: 2. Byancie (55.3, 56.8)"]
+    d = ask(8, [{"title": "Lyreena", "x": 57.6, "y": 56.6, "add": True}])
+    assert d["marksReplace"] is False
+    assert svc.convs.history("c")[-1]["did"] == ["added to the marks on the map: Lyreena (57.6, 56.6)"]
+
+
+def test_claude_sessions_started_together_get_their_own_folders(env, monkeypatch):
+    from foreverai import claude_code
+    svc, addons, _ = env
+    folders = []
+
+    class FakeSession:
+        def __init__(self, exe, workdir, *rest):
+            folders.append(str(workdir))
+
+    monkeypatch.setattr(claude_code, "ClaudeSession", FakeSession)
+    other = Service(svc.store, None, addons, client_factory=FakeClient, lookahead=4)
+    for _ in range(20):  # within the same millisecond
+        svc._new_claude_session("claude", "system")
+        other._new_claude_session("claude", "system")
+    assert len(set(folders)) == 40
+
+
+def test_plan_route_marks_its_stops(env):
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            Client.tools = [t["function"]["name"] for t in tools]
+            if not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall("c1", "plan_route", "{}")]
+                return
+            Client.result = messages[-1]["content"]
+            yield "text", "Here is the route."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    snapshot = {"player": {"coords": "50.0, 50.0", "map": "Teldrassil", "level": 10}, "quests": [
+        {"id": 2, "title": "Letter", "status": "READY TO TURN IN", "turnIn": "Postman (Teldrassil 65.0, 50.0)"},
+        {"id": 1, "title": "Far Hunt", "status": "in progress", "turnIn": "Giver (Teldrassil 50.0, 60.0)",
+         "whereToGet": ["Boar: kill Boar (level 5) — Teldrassil 80.0, 50.0 (2400 m, 9 spawn points in your zone)"]}]}
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "plan my route",
+                "snapshot": snapshot})
+    d = _wait_final(addons, 3)
+    assert "plan_route" in Client.tools
+    assert d["marks"] == [{"title": "1. Postman", "x": 65.0, "y": 50.0, "zone": "Teldrassil"},
+                          {"title": "2. Boar", "x": 80.0, "y": 50.0, "zone": "Teldrassil", "mob": "Boar"},
+                          {"title": "3. Giver", "x": 50.0, "y": 60.0, "zone": "Teldrassil"}]
+    assert d["marksReplace"] is True
+    assert Client.result.startswith("Route from 50, 50 (Teldrassil): 3 stops, about 4.9 km.")
+    assert Client.result.endswith("The 3 stops are marked on the map in this order (the marks of earlier answers are off "
+                                  "the map); do not mark them again. To mark other stops instead, call mark_on_map for each of them.")
+
+
+def test_every_tool_is_offered_to_claude_code():
+    from foreverai import claude_code
+    from foreverai.tools import TOOLS
+    names = {t["function"]["name"] for t in TOOLS}
+    assert {t.removeprefix("mcp__foreverai__") for t in claude_code.MCP_TOOLS} == names
+    assert all(claude_code.tool_phase(n) for n in names)
+
+
+def test_marks_after_plan_route_replace_the_route_marks(env):
+    """The model asked for the route and then marked its own choice of stops: those are the marks, not both sets."""
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            if not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall("c1", "plan_route", "{}"),
+                                     ToolCall("c2", "mark_on_map", '{"title": "Only this", "x": 65, "y": 50}'),
+                                     ToolCall("c3", "mark_on_map", '{"title": "And this", "x": 50, "y": 60}')]
+                return
+            yield "text", "Marked."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    snapshot = {"player": {"coords": "50.0, 50.0", "map": "Teldrassil", "level": 10}, "quests": [
+        {"id": 2, "title": "Letter", "status": "READY TO TURN IN", "turnIn": "Postman (Teldrassil 65.0, 50.0)"},
+        {"id": 3, "title": "Parcel", "status": "READY TO TURN IN", "turnIn": "Giver (Teldrassil 50.0, 60.0)"}]}
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "mark two",
+                "snapshot": snapshot})
+    d = _wait_final(addons, 3)
+    assert [m["title"] for m in d["marks"]] == ["Only this", "And this"] and d["marksReplace"] is True
+
+
+def _ctx(svc, addons, snapshot=None):
+    import threading
+    from foreverai.service import InboxWriter, TurnContext
+    return TurnContext({"msgId": 5}, InboxWriter(addons, "S", 1, 20, 4), snapshot or {}, threading.Event(), [])
+
+
+def test_the_model_decides_what_the_route_holds(env):
+    svc, addons, _ = env
+    snapshot = {"player": {"coords": "50.0, 50.0", "map": "Teldrassil", "level": 10}, "quests": [
+        {"id": 1, "title": "Far Hunt", "status": "in progress", "level": 12, "type": "Elite",
+         "turnIn": "Giver (Teldrassil 50.0, 60.0)",
+         "whereToGet": ["Boar: kill Boar (level 5) — Teldrassil 80.0, 50.0 (2400 m, 9 spawn points in your zone)"]},
+        {"id": 2, "title": "Letter", "status": "READY TO TURN IN", "turnIn": "Postman (Teldrassil 65.0, 50.0)"}],
+        "nearbyQuests": [{"id": 9, "title": "Fresh", "giver": "Elder", "level": 9, "where": "Teldrassil 55.0, 50.0"},
+                         {"id": 8, "title": "Ursal the Mauler", "giver": "Athridas", "where": "Teldrassil 56.0, 50.0"}]}
+    ctx = _ctx(svc, addons, snapshot)
+    text, err = svc.run_tool(ctx, "plan_route", {"skip": ["Far Hunt"], "new_quests": ["Fresh"], "end_x": 70, "end_y": 50,
+                                                 "end_title": "the road east"})
+    assert not err and [m["title"] for m in ctx.marks] == ["1. Elder", "2. Postman"]
+    assert "ending near the road east." in text and "- [Far Hunt]: left out as asked" in text
+    # hard quests at the end
+    ctx = _ctx(svc, addons, snapshot)
+    svc.run_tool(ctx, "plan_route", {"last": ["Far Hunt"]})
+    assert [m["title"] for m in ctx.marks] == ["1. Postman", "2. Boar", "3. Giver"]
+
+
+def test_an_answer_holds_twelve_marks_and_says_when_one_does_not_fit(env):
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons)
+    results = [svc.run_tool(ctx, "mark_on_map", {"title": f"Stop {n}", "x": 10 + n, "y": 20}) for n in range(1, 14)]
+    assert len(ctx.marks) == 12 and all(not err for _, err in results[:12])
+    assert results[12] == ("Not marked: an answer holds at most 12 marks, and Stop 13 would be one more.", True)
+
+
+def test_tool_results_count_toward_the_size_of_a_claude_session(env):
+    svc, addons, _ = env
+
+    class Session:
+        sent_chars = 1000
+
+    svc._claude = Session()
+    svc._turn = _ctx(svc, addons)
+    text, _ = svc.tool_from_bridge("search_knowledge_base", {"query": "x"})
+    assert svc._claude.sent_chars == 1000 + len(text) and len(text) > 10
+    svc._claude = None
+
+
+def test_creatures_of_a_route_and_of_a_mark_are_tracked(env):
+    """The game watches for the creatures the player is sent to: the reply names them (and the quest they are for)."""
+    svc, addons, _ = env
+    snapshot = {"player": {"coords": "50.0, 50.0", "map": "Teldrassil", "level": 10}, "quests": [
+        {"id": 1, "title": "Far Hunt", "status": "in progress", "turnIn": "Giver (Teldrassil 50.0, 60.0)",
+         "whereToGet": ["Boar: kill Boar (level 5) — Teldrassil 80.0, 50.0 (2400 m, 9 spawn points in your zone)",
+                        "Old Chest: from object Old Chest — Teldrassil 70.0, 50.0 (1600 m, 1 spawn point in your zone)"]}]}
+    ctx = _ctx(svc, addons, snapshot)
+    svc.run_tool(ctx, "plan_route", {})
+    assert ctx.track == [{"name": "Boar", "quest": "Far Hunt"}]  # not the chest, not the quest giver
+    assert "watching for: Boar" in ctx.did()
+
+    ctx = _ctx(svc, addons, snapshot)
+    text, err = svc.run_tool(ctx, "mark_on_map", {"title": "Strigid Screecher", "x": 64.2, "y": 69.2,
+                                                  "mob": "Strigid Screecher"})
+    assert not err and ctx.track == [{"name": "Strigid Screecher"}] and "a living one in sight is marked on the screen and announced" in text
+    svc.run_tool(ctx, "mark_on_map", {"title": "Dazalar", "x": 56.7, "y": 59.5})
+    assert ctx.track == [{"name": "Strigid Screecher"}]
+    # marks the model sets after a route replace the route's marks, and with them what the route tracked
+    ctx = _ctx(svc, addons, snapshot)
+    svc.run_tool(ctx, "plan_route", {})
+    svc.run_tool(ctx, "mark_on_map", {"title": "Only this", "x": 65, "y": 50})
+    assert ctx.track == []
+
+
+def test_the_reply_tells_the_game_what_to_track(env):
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            if not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall("c1", "mark_on_map",
+                                              '{"title": "Strigid Screecher", "x": 64.2, "y": 69.2, "mob": "Strigid Screecher"}')]
+                return
+            yield "text", "Marked."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "where is it",
+                "snapshot": {}})
+    d = _wait_final(addons, 3)
+    assert d["track"] == [{"name": "Strigid Screecher"}] and len(d["marks"]) == 1
+
+
+def test_a_watch_that_cannot_be_added_is_not_claimed(env):
+    """The reply to mark_on_map says what the game really watches for: not a name that is no name, not a sixth one."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, {})
+    text, err = svc.run_tool(ctx, "mark_on_map", {"title": "Somewhere", "x": 10, "y": 10, "mob": "[]"})
+    assert not err and ctx.track == [] and "watches for" not in text
+    for n in range(5):
+        text, _ = svc.run_tool(ctx, "mark_on_map", {"title": f"Stop {n}", "x": 20 + n, "y": 10, "mob": f"Creature {n}",
+                                                    "add": True})
+        assert f"The game watches for Creature {n}:" in text
+    text, err = svc.run_tool(ctx, "mark_on_map", {"title": "Stop 5", "x": 30, "y": 10, "mob": "Creature 5", "add": True})
+    assert not err and len(ctx.track) == 5 and "The game watches for" not in text
+    assert "Creature 5 is not watched for: the game watches for at most 5 creatures at once" in text
+    text, _ = svc.run_tool(ctx, "mark_on_map", {"title": "Again", "x": 31, "y": 10, "mob": "creature 0", "add": True})
+    assert "The game watches for Creature 0:" in text and len(ctx.track) == 5  # watched already
+
+
+ROUTE_ON_THE_MAP = {"marks": ["1. Bloodfeather Rogue — Teldrassil 37.3, 37.8 (97 m)",
+                              "2. Sentinel Arynia Cloudsbreak — Teldrassil 38.3, 34.4 (115 m)",
+                              "3. Oracle Glade Moonwell — Teldrassil 38.4, 34.1",
+                              "4. Byancie — Teldrassil 55.3, 56.8",
+                              "Taken off the route by the player: Dazalar"],
+                    "tracked": ["Bloodfeather Rogue: none in sight now; not seen since it is tracked",
+                                "Windmistress Gaedress (also counts for Amulet: Hatescreech): none in sight now"]}
+
+
+def test_the_model_edits_the_route_on_the_map(env):
+    """"I have no tool that removes marks" was the answer when the player wanted two stops gone."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_ON_THE_MAP)
+    text, err = svc.run_tool(ctx, "edit_route", {"remove": ["3. Oracle Glade Moonwell", "bloodfeather rogue"]})
+    assert not err
+    assert ctx.route_edit == {"remove": [{"title": "Bloodfeather Rogue", "x": 37.3, "y": 37.8},
+                                         {"title": "Oracle Glade Moonwell", "x": 38.4, "y": 34.1}]}
+    assert text == ("Taken off the route: Bloodfeather Rogue, Oracle Glade Moonwell. "
+                    "The route now: 1. Sentinel Arynia Cloudsbreak, 2. Byancie.")
+    assert ctx.did() == ["took off the route: Bloodfeather Rogue, Oracle Glade Moonwell"]
+
+    ctx = _ctx(svc, addons, ROUTE_ON_THE_MAP)
+    text, err = svc.run_tool(ctx, "edit_route", {"remove": ["2"], "order": ["Byancie"], "stop_tracking": ["windmistress gaedress"]})
+    assert not err and ctx.untrack == ["Windmistress Gaedress"]
+    assert ctx.route_edit == {"remove": [{"title": "Sentinel Arynia Cloudsbreak", "x": 38.3, "y": 34.4}],
+                              "order": [{"title": "Byancie", "x": 55.3, "y": 56.8},
+                                        {"title": "Bloodfeather Rogue", "x": 37.3, "y": 37.8},
+                                        {"title": "Oracle Glade Moonwell", "x": 38.4, "y": 34.1}]}
+    assert text == ("Taken off the route: Sentinel Arynia Cloudsbreak. The route now: 1. Byancie, 2. Bloodfeather Rogue, "
+                    "3. Oracle Glade Moonwell. No longer watched for: Windmistress Gaedress.")
+    assert ctx.did() == ["took off the route: Sentinel Arynia Cloudsbreak", "put the route in another order",
+                         "stopped watching for: Windmistress Gaedress"]
+
+    ctx = _ctx(svc, addons, ROUTE_ON_THE_MAP)
+    text, err = svc.run_tool(ctx, "edit_route", {"clear": True, "stop_tracking": ["all"]})
+    assert not err and ctx.route_edit == {"clear": True} and ctx.untrack == ["Bloodfeather Rogue", "Windmistress Gaedress"]
+    assert ctx.did() == ["cleared the route", "stopped watching for: Bloodfeather Rogue, Windmistress Gaedress"]
+
+
+def test_an_edit_that_fits_nothing_changes_nothing(env):
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_ON_THE_MAP)
+    text, err = svc.run_tool(ctx, "edit_route", {"remove": ["Dazalar", "Byancie"]})
+    assert err and ctx.route_edit is None
+    assert text == ("Nothing changed: no stop called Dazalar. The stops on the map: 1. Bloodfeather Rogue, "
+                    "2. Sentinel Arynia Cloudsbreak, 3. Oracle Glade Moonwell, 4. Byancie.")
+    text, err = svc.run_tool(ctx, "edit_route", {"stop_tracking": ["Strigid Owl"]})
+    assert err and ctx.untrack == [] and "nothing called Strigid Owl is watched for" in text
+    text, err = svc.run_tool(ctx, "edit_route", {})
+    assert err and "say what to change" in text
+    text, err = svc.run_tool(_ctx(svc, addons, {}), "edit_route", {"remove": ["Byancie"]})
+    assert err and text == "Nothing changed: nothing of yours is marked on the map."
+
+
+def test_marks_after_an_edit_are_added_to_the_edited_route(env):
+    """Replacing the route would undo the edit: a mark set after edit_route is an extra stop."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_ON_THE_MAP)
+    svc.run_tool(ctx, "edit_route", {"remove": ["Byancie"]})
+    svc.run_tool(ctx, "mark_on_map", {"title": "Dazalar", "x": 56.7, "y": 59.5})
+    assert ctx.replaces_marks is False and ctx.did()[-1] == "added to the marks on the map: Dazalar (56.7, 59.5)"
+    # a whole new route takes the place of the old one, edited or not
+    ctx.snapshot.update({"player": {"coords": "50.0, 50.0", "map": "Teldrassil", "level": 10}, "quests": [
+        {"id": 1, "title": "Far Hunt", "status": "in progress", "turnIn": "Giver (Teldrassil 50.0, 60.0)",
+         "whereToGet": ["Boar: kill Boar (level 5) — Teldrassil 80.0, 50.0 (2400 m, 9 spawn points in your zone)"]}]})
+    svc.run_tool(ctx, "plan_route", {})
+    assert ctx.route_edit is None and ctx.replaces_marks is True
+    assert ctx.marks[0] == {"title": "1. Boar", "x": 80.0, "y": 50.0, "zone": "Teldrassil", "mob": "Boar"}
+    assert "took off the route: Byancie" not in ctx.did()
+
+
+def test_the_reply_tells_the_game_how_to_change_the_route(env):
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            if not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall("c1", "edit_route", '{"remove": ["Byancie"], "stop_tracking": ["Bloodfeather Rogue"]}'),
+                                     ToolCall("c2", "mark_on_map", '{"title": "Owl", "x": 64.2, "y": 69.2, "mob": "Strigid Owl"}')]
+                return
+            yield "text", "Done."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "drop Byancie",
+                "snapshot": ROUTE_ON_THE_MAP})
+    d = _wait_final(addons, 3)
+    assert d["route"] == {"remove": [{"title": "Byancie", "x": 55.3, "y": 56.8}]} and d["untrack"] == ["Bloodfeather Rogue"]
+    assert d["marks"] == [{"title": "Owl", "x": 64.2, "y": 69.2, "zone": "", "mob": "Strigid Owl"}]  # the stop knows its creature
+    assert d["marksReplace"] is False

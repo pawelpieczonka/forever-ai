@@ -61,6 +61,10 @@ class KB:
         self._db.executescript(SCHEMA)
         self._db.commit()
 
+    def close(self) -> None:
+        with self._lock:
+            self._db.close()
+
     # ---------------------------------------------------------------- pages
     def page_meta(self, source: str, page_id: str) -> PageMeta | None:
         with self._lock:

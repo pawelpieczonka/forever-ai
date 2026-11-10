@@ -1,7 +1,7 @@
 -- ForeverAI: core (namespace, saved variables, events, conversations, requests)
 local ADDON, ns = ...
 ForeverAI = ns
-ns.version = "0.6.0"
+ns.version = "0.7.0"
 
 BINDING_HEADER_FOREVERAI = "ForeverAI"
 BINDING_NAME_FOREVERAI_TOGGLE = "Show/hide ForeverAI"
@@ -298,6 +298,12 @@ SlashCmdList.FOREVERAI = function(msg)
   elseif msg == "button" then
     ns.db.button.show = not ns.db.button.show
     ns.Button.Refresh()
+  elseif msg == "stop" then -- ends what the add-on keeps doing: the watch for creatures and the marks on the map
+    if ns.Track then ns.Track.Stop() end
+    if ns.Map then ns.Map.Clear() end
+    ns.print("Tracking stopped and marks cleared.")
+  elseif msg == "track" then
+    if ns.Track then ns.Track.Debug() end
   elseif msg == "progress" then
     if ns.Progress then ns.Progress.Debug() end
   elseif msg == "professions" then

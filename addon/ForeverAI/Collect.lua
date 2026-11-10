@@ -238,6 +238,8 @@ function S.game()
   }
   local st = safe(GetServerTime)
   if st then t.serverTime = date("!%Y-%m-%d %H:%M", st) .. " UTC" end
+  -- what "around" and "tracked" can know: without nameplates of all enemies the add-on sees only the target
+  if ns.Track and ns.Track.SightText then t.nameplates = ns.Track.SightText() end
   if C_GameRules then
     t.hardcore = safe(C_GameRules.IsHardcoreActive)
     t.selfFound = C_PlayerInfo and C_PlayerInfo.IsSelfFoundActive and safe(C_PlayerInfo.IsSelfFoundActive) or nil
@@ -354,6 +356,19 @@ function S.equipment()
       out[#out + 1] = { slot = SLOT_NAMES[slot], item = "(empty)" }
     end
   end
+  -- the ammunition slot: a bow, gun or crossbow shoots nothing without it, and the arrows stay in the bags either way.
+  -- Listed only when the game names what is in it: this client gave no link for the slot with arrows equipped, so
+  -- "nothing found" does not mean that the slot is empty.
+  local ammoSlot = (GetInventorySlotInfo and safe(GetInventorySlotInfo, "AmmoSlot")) or 0
+  local ammo = GetInventoryItemLink("player", ammoSlot)
+  if not ammo and GetInventoryItemID then
+    local id = safe(GetInventoryItemID, "player", ammoSlot)
+    local name = id and C_Item.GetItemNameByID and safe(C_Item.GetItemNameByID, id)
+    if name then ammo = "[" .. name .. "]" end
+  end
+  if ammo then
+    out[#out + 1] = { slot = "Ammo", item = strip(ammo), count = GetInventoryItemCount and safe(GetInventoryItemCount, "player", ammoSlot) }
+  end
   return out
 end
 
@@ -392,6 +407,13 @@ function S.gearTotals()
   return t
 end
 
+-- what a bag item that is not equipment does: its tooltip without the name (use effect, requirements), a few lines
+local function useText(link, bag, slot)
+  if not (C_TooltipInfo and C_TooltipInfo.GetBagItem) then return nil end
+  local full = cachedTooltip("use" .. link, C_TooltipInfo.GetBagItem, bag, slot, 9)
+  return full and full:match("^[^\n]*\n(.+)$") or nil
+end
+
 local function bagItems(bags, withTooltips)
   local agg, order, free = {}, {}, 0
   for _, bag in ipairs(bags) do
@@ -413,6 +435,7 @@ local function bagItems(bags, withTooltips)
           elseif withTooltips then
             local _, _, _, _, _, _, _, _, _, _, sell = safe(C_Item.GetItemInfo, info.hyperlink)
             if sell and sell > 0 then e.sellPrice = money(sell) end
+            e.tooltip = useText(info.hyperlink, bag, slot)
           end
           if info.isBound then e.bound = true end
           agg[key] = e
@@ -463,28 +486,37 @@ function S.talents()
     for _, treeID in ipairs(info.treeIDs) do
       local t = { config = label or info.name, tree = treeID, picked = {} }
       local cur = safe(C_Traits.GetTreeCurrencyInfo, cfg, treeID, false)
-      if type(cur) == "table" then
-        local free = {}
-        for _, c in ipairs(cur) do free[#free + 1] = tostring(c.quantity) .. "/" .. tostring(c.maxQuantity) end
-        t.unspent = table.concat(free, ", ")
+      if type(cur) == "table" and cur[1] then
+        t.unspent, t.earned = cur[1].quantity, cur[1].maxQuantity -- points to spend now, points earned so far
       end
       local nodes = safe(C_Traits.GetTreeNodes, treeID) or {}
       t.nodes = #nodes
+      local canPick = {}
       for _, nodeID in ipairs(nodes) do
+        budget()
         local n = safe(C_Traits.GetNodeInfo, cfg, nodeID)
-        if n and n.activeRank and n.activeRank > 0 and n.activeEntry then
-          local e = safe(C_Traits.GetEntryInfo, cfg, n.activeEntry.entryID)
+        local rank = n and n.activeRank or 0
+        local open = n and n.isAvailable and n.canPurchaseRank and rank < (n.maxRanks or 0)
+        if n and (rank > 0 or open) then
+          local entryID = (n.activeEntry and n.activeEntry.entryID) or (n.entryIDs and n.entryIDs[1])
+          local e = entryID and safe(C_Traits.GetEntryInfo, cfg, entryID)
           local d = e and e.definitionID and safe(C_Traits.GetDefinitionInfo, e.definitionID)
           local name = d and (d.overrideName or (d.spellID and C_Spell.GetSpellName(d.spellID)))
-          t.picked[#t.picked + 1] = tostring(name or ("spell " .. tostring(d and d.spellID))) .. " " .. n.activeRank .. "/" .. tostring(n.maxRanks)
+          local label = tostring(name or ("spell " .. tostring(d and d.spellID))) .. " " .. rank .. "/" .. tostring(n.maxRanks)
+          if rank > 0 then t.picked[#t.picked + 1] = label end
+          if open and #canPick < 40 then -- what a point can go into right now, with what it does
+            local desc = d and d.spellID and C.spellTip and C.spellTip(d.spellID, 300)
+            if desc and not desc:find(" ", 1, true) then desc = nil end -- only "Passive": the game gave no text
+            canPick[#canPick + 1] = label .. (desc and (": " .. desc) or "")
+          end
         end
       end
+      if #canPick > 0 then t.canPick = canPick end
       out[#out + 1] = t
     end
   end
   local active = safe(C_ClassTalents.GetActiveConfigID)
   if active then dumpConfig(active, "class") end
-  result.unspentTalents = safe(GetNumUnspentTalents)
   return result
 end
 
@@ -556,7 +588,9 @@ local function objectiveSources(QDB, qid)
   local okO, objs = pcall(QDB.QueryQuestSingle, qid, "objectives")
   if not (okO and type(objs) == "table") then return nil end
   local list = {}
-  local function add(label, sources) if #sources > 0 then list[#list + 1] = { label = label, sources = sources } end end
+  local function add(label, sources, credit)
+    if #sources > 0 then list[#list + 1] = { label = label, sources = sources, credit = credit } end
+  end
   local function id(o) return type(o) == "table" and o[1] or o end
   for _, o in ipairs(type(objs[1]) == "table" and objs[1] or {}) do -- creatures to kill
     local s = npcSource(QDB, id(o), "kill")
@@ -592,11 +626,33 @@ local function objectiveSources(QDB, qid)
         for _, nid in ipairs(entry[1]) do
           local s = npcSource(QDB, nid, "kill") if s then sources[#sources + 1] = s end
         end
-        add(type(entry[3]) == "string" and entry[3] or "kill credit", sources)
+        add(type(entry[3]) == "string" and entry[3] or "kill credit", sources, true)
       end
     end
   end
   return list
+end
+
+-- The creatures that give the same objective of a quest as ``name`` does: any Bloodfeather drops the belts, whichever
+-- one a route happens to name. Returns the objective's label and the names of all of them; nil and an empty list when
+-- the quest has no such objective; nothing at all while the quest database is not there.
+function C.SameObjective(questID, name)
+  local list = objectiveSources(questieDB(), questID)
+  if not list then return nil end
+  local key = tostring(name):lower()
+  for _, obj in ipairs(list) do
+    local names, known, has = {}, {}, false
+    for _, s in ipairs(obj.sources) do
+      local low = s.name:lower()
+      if (s.how == "kill" or s.how == "dropped by") and not known[low] then
+        known[low] = true
+        names[#names + 1] = s.name
+        has = has or low == key
+      end
+    end
+    if has then return obj.label, names end
+  end
+  return nil, {}
 end
 
 -- the player's map position and Questie zone (area) id
@@ -611,9 +667,19 @@ local function playerSpot()
   return mapID, pos and pos.x * 100, pos and pos.y * 100, area
 end
 
--- objective sources -> lines for the AI, nearest first, with distance in meters in the player's zone
-local function whereToGet(list, mapID, px, py, area)
+-- objective sources -> lines for the AI, nearest first, with distance in meters in the player's zone.
+-- The database calls every creature of a quest a kill; ``objectives`` (the quest log's own objective texts) tell which
+-- ones really are ("0/8 Befouled Webwood slain"): the others (talk to, tame, escort) only say where the creature is.
+local function whereToGet(list, mapID, px, py, area, objectives)
   if not list or #list == 0 then return nil end
+  local slain
+  if objectives then
+    slain = {}
+    for _, t in ipairs(objectives) do
+      local name = tostring(t):match("^%d+/%d+ (.-) slain") or tostring(t):match("^(.-) slain: %d+/%d+")
+      if name then slain[name:lower()] = true end
+    end
+  end
   local out = {}
   for _, obj in ipairs(list) do
     local ranked = {}
@@ -640,7 +706,11 @@ local function whereToGet(list, mapID, px, py, area)
           where = where .. string.format(" (%d m, %d spawn point%s in your zone)", r.best.d, r.here, r.here == 1 and "" or "s")
         end
       end
-      parts[#parts + 1] = string.format("%s %s%s — %s", r.s.how, r.s.name, r.s.level and (" (level " .. r.s.level .. ")") or "",
+      local how = r.s.how
+      if how == "kill" and slain and not obj.credit and not (slain[obj.label:lower()] or slain[r.s.name:lower()]) then
+        how = "find"
+      end
+      parts[#parts + 1] = string.format("%s %s%s — %s", how, r.s.name, r.s.level and (" (level " .. r.s.level .. ")") or "",
         where)
     end
     if #ranked > 5 then parts[#parts + 1] = string.format("and %d more", #ranked - 5) end
@@ -648,12 +718,14 @@ local function whereToGet(list, mapID, px, py, area)
   end
   return out
 end
+C.WhereToGet = whereToGet
 
 -- everything known about one quest (tagged with Alt+click): log state, Questie data, givers with coordinates
 function C.QuestInfo(id)
   id = tonumber(id)
   if not id then return nil end
   local out = { id = id }
+  local objectiveTexts
   out.title = C_QuestLog.GetTitleForQuestID and ns.safe(C_QuestLog.GetTitleForQuestID, id)
   local idx = C_QuestLog.GetLogIndexForQuestID and ns.safe(C_QuestLog.GetLogIndexForQuestID, id)
   if idx then
@@ -663,6 +735,7 @@ function C.QuestInfo(id)
     for _, ob in ipairs((C_QuestLog.GetQuestObjectives and ns.safe(C_QuestLog.GetQuestObjectives, id)) or {}) do
       o[#o + 1] = ns.clean(ob.text)
     end
+    objectiveTexts = o
     if #o > 0 then out.objectives = table.concat(o, "; ") end
   elseif C_QuestLog.IsQuestFlaggedCompleted and ns.safe(C_QuestLog.IsQuestFlaggedCompleted, id) then
     out.alreadyDone = true
@@ -680,7 +753,10 @@ function C.QuestInfo(id)
     end
     if not out.alreadyDone and not out.complete then
       local okS, sources = pcall(objectiveSources, questie, id)
-      if okS then out.whereToGet = whereToGet(sources, playerSpot()) end
+      if okS then
+        local mapID, px, py, area = playerSpot()
+        out.whereToGet = whereToGet(sources, mapID, px, py, area, out.inQuestLog and objectiveTexts or nil)
+      end
     end
   end
   if out.inQuestLog and C_QuestLog.SetSelectedQuest and GetQuestLogQuestText then
@@ -759,10 +835,13 @@ function S.quests()
       end
       -- every objective with its own state
       local objs = safe(C_QuestLog.GetQuestObjectives, qid) or {}
-      local o = {}
+      local o, texts = {}, {}
       for _, ob in ipairs(objs) do
         local t = clean(ob.text)
-        if t then o[#o + 1] = t .. (ob.finished and " [DONE]" or " [TO DO]") end
+        if t then
+          texts[#texts + 1] = t
+          o[#o + 1] = t .. (ob.finished and " [DONE]" or " [TO DO]")
+        end
       end
       e.objectives = #o > 0 and table.concat(o, "; ") or nil
       -- timed quests
@@ -781,7 +860,7 @@ function S.quests()
       local st = questStatic(qid, questie)
       e.objectiveText, e.description, e.rewards = st.objectiveText, st.description, st.rewards
       e.questGiver, e.turnIn = st.questGiver, st.turnIn
-      if e.status == "in progress" then e.whereToGet = whereToGet(st.sources, mapID, px, py, area) end
+      if e.status == "in progress" then e.whereToGet = whereToGet(st.sources, mapID, px, py, area, texts) end
       out[#out + 1] = e
     end
   end
@@ -905,6 +984,15 @@ local function tipParts(tip)
   return parts
 end
 
+-- the tooltip shows this spell (a hidden tooltip that is read too early still holds the spell read before it)
+function C.TipShows(tip, spellId)
+  local left = _G[tostring(tip:GetName()) .. "TextLeft1"]
+  local title = left and clean(left:GetText())
+  local name = C_Spell.GetSpellName and safe(C_Spell.GetSpellName, spellId)
+  if not name then return true end -- nothing to compare with
+  return title ~= nil and strip(title) == name
+end
+
 local spellTipCache = {} -- spellId..maxLen -> text sent to the AI
 local function remember(spellId, parts)
   local text = table.concat(parts, " | ")
@@ -920,7 +1008,9 @@ if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum.Too
   TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Spell, function(tip, data)
     local id = data and data.id
     if not id or not tip or not tip.GetName or not tip:GetName() then return end
-    C_Timer.After(0.05, function() if tip:IsShown() then pcall(function() remember(id, tipParts(tip)) end) end end)
+    C_Timer.After(0.05, function()
+      if tip:IsShown() and C.TipShows(tip, id) then pcall(function() remember(id, tipParts(tip)) end) end
+    end)
   end)
 end
 
@@ -959,7 +1049,7 @@ function C.WarmSpellDescriptions()
       pcall(scanTip.SetSpellByID, scanTip, id)
       phase = 1
     else
-      pcall(function() remember(id, tipParts(scanTip)) end)
+      pcall(function() if C.TipShows(scanTip, id) then remember(id, tipParts(scanTip)) end end)
       i, phase = i + 1, 0
     end
   end)
@@ -1098,22 +1188,22 @@ function S.actionBars()
   for _, b in ipairs(actionButtons) do
     budget()
     local ok, slot = pcall(buttonSlot, b)
-    if ok and slot then
+    -- only buttons the player sees: hidden bars (vehicle, override, gamepad layouts) repeat the same actions
+    if ok and slot and b:IsVisible() then
       local parent = b:GetParent()
-      local barName = (parent and parent.GetName and parent:GetName()) or ((b:GetName() or "?"):gsub("%d+$", ""))
+      -- a bar is its buttons' parent; some interfaces wrap every button in its own container ("...Container7")
+      local barName = ((parent and parent.GetName and parent:GetName()) or b:GetName() or "?"):gsub("%d+$", "")
       local bar = bars[barName]
       if not bar then
-        bar = { shown = false, total = 0, items = {} }
+        bar = { total = 0, items = {} }
         bars[barName] = bar
         order[#order + 1] = barName
       end
       bar.total = bar.total + 1
-      local visible = b:IsVisible()
-      if visible then bar.shown = true end
       local text = actionText(slot)
       if text then
         onBar[slot] = true
-        local key = visible and buttonKey(b)
+        local key = buttonKey(b)
         local num = tonumber((b:GetName() or ""):match("(%d+)$")) or bar.total
         bar.items[#bar.items + 1] = { n = num, text = string.format("button %d%s: %s", num, key and (" [key " .. key .. "]") or "", text) }
       end
@@ -1122,9 +1212,8 @@ function S.actionBars()
   local out = {}
   for _, name in ipairs(order) do
     local bar = bars[name]
-    if bar.shown or #bar.items > 0 then -- hidden, empty bars (vehicle, override...) say nothing
-      out[#out + 1] = string.format("%s — %s, %d of %d buttons used", name, bar.shown and "shown" or "hidden",
-        #bar.items, bar.total)
+    if #bar.items > 0 then -- an empty bar says nothing
+      out[#out + 1] = string.format("%s — %d of %d buttons used", name, #bar.items, bar.total)
       table.sort(bar.items, function(x, y) return x.n < y.n end)
       for _, it in ipairs(bar.items) do out[#out + 1] = "  " .. it.text end
     end
@@ -1145,7 +1234,7 @@ function S.actionBars()
 end
 
 local function skillLines(numFn, infoFn)
-  local out = {}
+  local out, seen = {}, {}
   if not (numFn and infoFn) then return out end
   for i = 1, math.min(80, safe(numFn) or 0) do
     local r = { safe(infoFn, i) }
@@ -1156,7 +1245,8 @@ local function skillLines(numFn, infoFn)
       local header = info.isHeader or info.header
       local rank = info.skillRank or info.rank or info.skillLineRank or info.currentRank
       local maxRank = info.skillMaxRank or info.maxRank or info.skillLineMaxRank
-      if name and not header then
+      if name and not header and not seen[name] then -- this client lists a profession under two headers
+        seen[name] = true
         out[#out + 1] = string.format("%s %s/%s", name, tostring(rank), tostring(maxRank))
       end
     elseif type(info) == "string" and not r[2] then
@@ -1452,7 +1542,7 @@ for _, ev in ipairs({ "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_PARTY", "CHAT_M
 end
 
 ------------------------------------------------------------------------ snapshot
-local ORDER = { "game", "player", "progress", "stats", "gearTotals", "equipment", "talents", "quests", "nearbyQuests",
+local ORDER = { "game", "player", "progress", "stats", "gearTotals", "equipment", "talents", "quests", "marks", "tracked", "nearbyQuests",
   "zoneNPCs", "nearbyMobs", "around", "recentEvents", "actionBars", "target", "mouseover", "pet", "tooltip", "group",
   "nearby", "auras", "windows", "bags", "bank", "spells", "skills", "professions", "reputations", "addons",
   "addonChanges", "chat" }

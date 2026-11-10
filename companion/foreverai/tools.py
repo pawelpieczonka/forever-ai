@@ -112,15 +112,85 @@ TOOLS.append({
         "description": "Mark a point on the player's map (waypoint with arrow). Use when the question is about a place: "
                        "quest turn-in NPC, mobs, herbs, dungeon entrance, trainer. Coordinates 0-100 as in the game "
                        "(from the quests/zoneNPCs/nearbyMobs data or the wiki). zone = English zone name (e.g. "
-                       "'Teldrassil'); omit for the player's current zone. Can be called several times (up to 8 points).",
+                       "'Teldrassil'); omit for the player's current zone. Can be called several times (up to 12 points). "
+                       "The marks of one answer replace the marks of your earlier answers; add=true keeps those and "
+                       "adds this point (an extra stop on a route that still holds).",
         "parameters": {
             "type": "object",
             "properties": {
                 "title": {"type": "string", "description": "Short name of the point, e.g. 'Conservator Ilthalaine'"},
                 "x": {"type": "number"}, "y": {"type": "number"},
                 "zone": {"type": "string"},
+                "add": {"type": "boolean", "description": "true: keep the marks of earlier answers and add this one"},
+                "mob": {"type": "string", "description": "When the mark is where a creature is to be found: its exact "
+                                                          "name. The game then watches for it: a living one in sight is "
+                                                          "marked on the screen and announced with a sound, and the "
+                                                          "tracked section tells you whether one is there"},
             },
             "required": ["title", "x", "y"],
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "edit_route",
+        "description": "Change the route that is on the player's map (the marks section) without marking it again: "
+                       "take stops off, put them in another order, clear it, or stop watching for a creature (the "
+                       "tracked section). Name a stop by its title or by its number in the marks section. Put "
+                       "everything into one call. The player sees the change on the map and in the add-on's window at "
+                       "once. To add a stop, call mark_on_map with add=true; for a whole new route, plan_route.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "remove": {"type": "array", "items": {"type": "string"}, "description": "Stops to take off the route"},
+                "order": {"type": "array", "items": {"type": "string"},
+                          "description": "Stops in the order to walk them; the stops you do not name follow in the "
+                                         "order they had"},
+                "clear": {"type": "boolean", "description": "true: take every stop off the map"},
+                "stop_tracking": {"type": "array", "items": {"type": "string"},
+                                  "description": "Creatures to stop watching for, by the name that starts their line "
+                                                 "in the tracked section; [\"all\"] for every one. A stop taken off "
+                                                 "the route takes the watch for its creature with it"},
+            },
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "plan_route",
+        "description": "The walking route through the player's quest log in their current zone: every objective and "
+                       "turn-in with a known place, in the order with the shortest way, each turn-in after its own "
+                       "objectives, with the distances, and what is left out and why (another zone, needs a skill, "
+                       "no known place). It also marks the stops on the map in that order (up to 12), replacing "
+                       "earlier marks. Use it whenever the player asks for a route, a path, an order for their "
+                       "quests or \"what is the best way to do these\"; do not order the stops yourself. You decide "
+                       "what the route holds: read the quests first (text, level against the player's, elite or "
+                       "group, escort, what you advised earlier) and say so with skip, last, new_quests and end.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "skip": {"type": "array", "items": {"type": "string"},
+                         "description": "Quest titles to leave out: quests the player cannot or should not do now "
+                                        "(an elite or group quest alone, far above their level, one you advised against)"},
+                "last": {"type": "array", "items": {"type": "string"},
+                         "description": "Quest titles to do after everything else (the hard ones: by then the player "
+                                        "may have a level more or company)"},
+                "new_quests": {"type": "array", "items": {"type": "string"},
+                               "description": "Titles of nearbyQuests worth picking up on the way: only the ones you "
+                                              "recommend, not all of them"},
+                "end_x": {"type": "number", "description": "Where the player goes after these quests, in this "
+                                                             "zone's coordinates (the road to the next zone, a flight master, "
+                                                             "the town for the turn-ins elsewhere): the route ends near it"},
+                "end_y": {"type": "number"},
+                "end_title": {"type": "string", "description": "What is at end_x, end_y, e.g. 'the road to Darnassus'"},
+                "mark": {"type": "boolean", "description": "false: only compute, do not mark (default true)"},
+            },
         },
     },
 })
