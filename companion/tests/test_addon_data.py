@@ -1,6 +1,7 @@
 """What the add-on collects for the model, checked in the add-on simulator with small pieces of game state: the gaps
 and the noise found in real conversations (ammunition, what a bag item does, empty action bars, "kill" on objectives
-that are not kills, talents that can be picked, a spell description from the wrong tooltip)."""
+that are not kills, talents that can be picked, a spell description from the wrong tooltip, every profession
+listed twice)."""
 
 import pytest
 
@@ -93,6 +94,45 @@ def test_skills_are_listed_once(sim):
     """)
     assert text(sim.lua("return table.concat(ForeverAI.Collect.sections.skills(), ' | ')")) == \
         "Leatherworking 3/75 | Skinning 9/75 | Bows 15/75"
+
+
+def test_skills_from_the_classic_api_are_listed_once(sim):
+    # the player's question on WoW Forever 1.60.1 had "Skinning 130/150", "Skinning 130/150", "Tailoring 51/75", ...
+    sim.lua("""
+      local lines = { { "Class Skills", 1 }, { "Arcane", nil, 1, 1 }, { "Professions", 1 },
+                      { "Skinning", nil, 130, 150 }, { "Skinning", nil, 130, 150 },
+                      { "Tailoring", nil, 51, 75 }, { "Tailoring", nil, 51, 75 },
+                      { "Secondary Skills", 1 }, { "Cooking", nil, 92, 150 }, { "Fishing", nil, 56, 75 },
+                      { "Cooking", nil, 92, 150 }, { "Fishing", nil, 56, 75 }, { "Wands", nil, 97, 100 } }
+      GetNumSkillLines = function() return #lines end
+      GetSkillLineInfo = function(i)
+        local l = lines[i]
+        return l[1], l[2], 1, l[3] or 0, 0, 0, l[4] or 0, nil, 0, 0, 0, 0, ""
+      end
+    """)
+    assert text(sim.lua("return table.concat(ForeverAI.Collect.sections.skills(), ' | ')")) == \
+        "Arcane 1/1 | Skinning 130/150 | Tailoring 51/75 | Cooking 92/150 | Fishing 56/75 | Wands 97/100"
+
+
+def test_skills_keep_the_cap_of_80_lines(sim):
+    sim.lua("""
+      GetNumSkillLines = function() return 200 end
+      GetSkillLineInfo = function(i) return "Skill " .. math.ceil(i / 2), nil, 1, i, 0, 0, 300 end
+    """)
+    # the first 80 rows of the client, each name once, in the client's order
+    assert text(sim.lua("return table.concat(ForeverAI.Collect.sections.skills(), '\\n')")).splitlines() == \
+        [f"Skill {n} {2 * n - 1}/300" for n in range(1, 41)]
+
+
+def test_the_simulated_hunter_lists_each_skill_once(sim):
+    # the simulator's client repeats each profession the way the game does
+    assert text(sim.lua("return select(1, GetSkillLineInfo(8)) .. '|' .. select(1, GetSkillLineInfo(9))")) == \
+        "Skinning|Skinning"
+    skills = text(sim.lua("return table.concat(ForeverAI.Collect.sections.skills(), '\\n')")).splitlines()
+    assert skills == ["Beast Mastery 1/1", "Marksmanship 1/1", "Survival 1/1", "Leatherworking 84/150",
+                      "Skinning 112/150", "Cooking 60/75", "First Aid 75/150", "Bows 118/120", "Daggers 64/120",
+                      "Swords 1/120", "Cloth 1/1", "Leather 1/1", "Language: Common 300/300",
+                      "Language: Darnassian 300/300"]
 
 
 def test_only_kill_objectives_say_kill(sim):

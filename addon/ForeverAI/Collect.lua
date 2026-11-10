@@ -1239,18 +1239,20 @@ local function skillLines(numFn, infoFn)
   for i = 1, math.min(80, safe(numFn) or 0) do
     local r = { safe(infoFn, i) }
     local info = r[1]
+    local name, header, rank, maxRank
     if type(info) == "table" then
       -- field names differ between client versions
-      local name = info.skillName or info.name or info.skillLineDisplayName or info.displayName
-      local header = info.isHeader or info.header
-      local rank = info.skillRank or info.rank or info.skillLineRank or info.currentRank
-      local maxRank = info.skillMaxRank or info.maxRank or info.skillLineMaxRank
-      if name and not header and not seen[name] then -- this client lists a profession under two headers
-        seen[name] = true
-        out[#out + 1] = string.format("%s %s/%s", name, tostring(rank), tostring(maxRank))
-      end
-    elseif type(info) == "string" and not r[2] then
-      out[#out + 1] = string.format("%s %s/%s", info, tostring(r[4]), tostring(r[7]))
+      name = info.skillName or info.name or info.skillLineDisplayName or info.displayName
+      header = info.isHeader or info.header
+      rank = info.skillRank or info.rank or info.skillLineRank or info.currentRank
+      maxRank = info.skillMaxRank or info.maxRank or info.skillLineMaxRank
+    elseif type(info) == "string" then
+      name, header, rank, maxRank = info, r[2], r[4], r[7]
+    end
+    -- WoW Forever lists every profession twice, in either API
+    if name and not header and not seen[name] then
+      seen[name] = true
+      out[#out + 1] = string.format("%s %s/%s", name, tostring(rank), tostring(maxRank))
     end
   end
   return out
