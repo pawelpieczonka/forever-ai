@@ -37,7 +37,9 @@ FIRST_FLUSH_S = 1.0
 FLUSH_EVERY_S = 1.5
 RETRY_TEXT_S = 2.0      # the addon reads the next inbox this soon while text is streaming
 RETRY_THINKING_S = 3.0  # ... and this soon while the model is still thinking / using tools
-GEMINI_DOWN_S = 600  # a Gemini model that could not answer is skipped (the fallback answers) this long
+# a Gemini model that could not answer is skipped (the fallback answers) until a probe in the background, at most this
+# often, finds that it can again
+GEMINI_RECHECK_S = 120
 MAX_TOOL_ROUNDS = 5
 EFFORT_NAMES = {"low": "low", "medium": "medium", "high": "high", "xhigh": "very high", "max": "max"}
 PROVIDER_NAMES = {"openrouter": "OpenRouter", "gemini": "Google Gemini", "claude_code": "Claude Code"}
@@ -168,7 +170,7 @@ class Service:
         self._balance: tuple[float, float] | None = None  # (value, fetched_at)
         self._models: tuple[list[dict], float] | None = None
         self._gemini_models: tuple[list[dict], float] | None = None
-        self._gemini_down: dict[str, float] = {}  # model -> until when the fallback answers instead
+        self._gemini_down: dict[str, float] = {}  # model the fallback answers for -> when it is checked again
         self._cancel: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
         self.on_event: Callable[[str], None] = lambda s: None
@@ -542,8 +544,9 @@ class Service:
         client = (self.gemini_factory if is_gemini else self.client_factory)(key)
         model = s.gemini_model if is_gemini else s.model
         fallback = gemini.FALLBACK_MODEL if is_gemini else s.fallback_model
-        if is_gemini and self._gemini_down.get(model, 0) > time.time():
-            log.info("%s did not answer recently: %s answers", model, fallback)
+        if is_gemini and model in self._gemini_down:
+            log.info("%s could not answer recently: %s answers", model, fallback)
+            self._recheck_gemini(client, model)
             model = fallback
         if is_gemini:
             def search(query: str) -> tuple[str, list[dict]]:
@@ -620,9 +623,9 @@ class Service:
                 if not text and not tried_fallback and fallback and fallback != model and retry:
                     tried_fallback = True
                     if is_gemini:
-                        self._gemini_down[model] = time.time() + GEMINI_DOWN_S
-                        activity.warning("%s could not answer, %s takes over for %d minutes: %s", model, fallback,
-                                         GEMINI_DOWN_S // 60, error)
+                        self._gemini_down[model] = time.time() + GEMINI_RECHECK_S
+                        activity.warning("%s could not answer, %s takes over until it can again: %s", model,
+                                         fallback, error)
                         gemini.drop_signatures(messages)
                         set_phase(f"{model} is unavailable, trying {fallback}…")
                     else:
@@ -654,6 +657,21 @@ class Service:
                      "secs": round(time.monotonic() - started, 1),
                      "status": self.status() if is_gemini else self._status_after(cost)})
         self.on_event(f"Last answer: {model}" + ("" if is_gemini else f", ${self.last_cost:.4f}"))
+
+    def _recheck_gemini(self, client: Gemini, model: str) -> None:
+        """Probe a Gemini model that could not answer, in the background so that no question waits for it, at most
+        every GEMINI_RECHECK_S; once it can answer, the next question uses it again."""
+        if self._gemini_down.get(model, 0) > time.time():
+            return
+        self._gemini_down[model] = time.time() + GEMINI_RECHECK_S
+
+        def check() -> None:
+            problem = client.probe(model)
+            if problem:
+                log.info("%s still cannot answer: %s", model, problem)
+            elif self._gemini_down.pop(model, None) is not None:
+                activity.info("%s can answer again", model)
+        threading.Thread(target=check, daemon=True, name="gemini-recheck").start()
 
     def links(self, md: str, ctx: TurnContext | None = None) -> list[dict]:
         """Item/spell/quest ids for names written in [brackets], so the game can make them clickable."""

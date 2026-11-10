@@ -3,6 +3,7 @@ import threading
 import time
 
 import httpx
+import pytest
 
 from foreverai import config, gemini
 from foreverai.gemini import SKIP_SIGNATURE, Gemini
@@ -101,6 +102,55 @@ def test_errors_another_model_may_answer():
     assert first("silent") == ("unavailable", "silent did not answer within 45 s.")
     assert first("streamed-quota")[0] == "unavailable"
     assert first("bad-request")[0] == "error"  # the same request would fail on any model
+
+
+def test_a_model_that_does_not_start_answering_is_probed():
+    """An overloaded model often never answers on the OpenAI-compatible endpoint; a tiny native request tells it from
+    a busy model within seconds instead of the 45 s read timeout."""
+    release = threading.Event()
+    probes = []
+
+    def handler(request: httpx.Request):
+        if request.url.path.endswith(":generateContent"):
+            model = request.url.path.split("/models/")[1].removesuffix(":generateContent")
+            probes.append((model, json.loads(request.content)["generationConfig"]))
+            if model == "overloaded":
+                return httpx.Response(503, json=[{"error": {"code": 503, "message": "High demand."}}])
+            if model == "dead":
+                raise httpx.ReadTimeout("The read operation timed out", request=request)
+            return httpx.Response(200, json={"candidates": [{"finishReason": "MAX_TOKENS"}]})
+        model = json.loads(request.content)["model"]
+        if model == "broken":
+            raise RuntimeError("bug")
+        if model in ("overloaded", "dead"):  # no answer at all (until the test ends)
+            release.wait(10)
+            raise httpx.ReadTimeout("The read operation timed out", request=request)
+        if model == "busy":  # slow to start, but it answers
+            time.sleep(0.3)
+        return httpx.Response(200, content=_sse({"choices": [{"delta": {"content": "Hello"}, "finish_reason": "stop"}]}))
+
+    c = Gemini("AIza-test-key-000000000000000", transport=httpx.MockTransport(handler), check_after=0.05)
+
+    def events(model):
+        return list(c.chat_stream(model, [], search_mode="never"))
+    try:
+        started = time.monotonic()
+        assert events("overloaded") == [("unavailable", "Gemini is overloaded or unavailable (503). Try again in a "
+                                                        "moment.")]
+        assert events("dead") == [("unavailable", "dead is not answering (no reply to a short test request within "
+                                                  "8 s).")]
+        assert time.monotonic() - started < 3
+        assert events("busy") == [("text", "Hello"), ("done", "stop")]  # the probe answered: it waits for the model
+        assert probes == [("overloaded", {"maxOutputTokens": 1}), ("dead", {"maxOutputTokens": 1}),
+                          ("busy", {"maxOutputTokens": 1})]
+        c.check_after = 0.3
+        assert events("fast") == [("text", "Hello"), ("done", "stop")]
+        time.sleep(0.4)
+        assert len(probes) == 3  # an answer that started in time costs no probe
+        with pytest.raises(RuntimeError):  # errors in the request's thread are not swallowed
+            events("broken")
+    finally:
+        release.set()
 
 
 def test_drop_signatures_before_another_model():
@@ -230,6 +280,63 @@ def test_gemini_falls_back_when_the_model_does_not_answer(env, monkeypatch):  # 
                 "snapshot": {}})
     assert _final_answer(addons, 10)["model"] == gemini.FALLBACK_MODEL
     assert BusyGemini.models_used[3:] == ["gemini-flash-latest", gemini.FALLBACK_MODEL]
+
+
+def test_gemini_does_not_wait_for_an_overloaded_model(env, monkeypatch):  # noqa: F811
+    """Seen on 2026-11-10: gemini-flash-latest returned 503 to native requests for hours and never answered on the
+    OpenAI-compatible endpoint. The fallback answers within seconds, and the model is used again once a probe in the
+    background finds that it can answer."""
+    svc, addons, _ = env
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSyTEST0000000000000000000xyz")
+    release = threading.Event()
+    state = {"overloaded": True, "chat": [], "probes": []}
+
+    def handler(request: httpx.Request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"models": []})
+        if request.url.path.endswith(":generateContent"):
+            model = request.url.path.split("/models/")[1].removesuffix(":generateContent")
+            state["probes"].append(model)
+            if state["overloaded"] and model == "gemini-flash-latest":
+                return httpx.Response(503, json=[{"error": {"code": 503, "message": "High demand."}}])
+            return httpx.Response(200, json={"candidates": [{"finishReason": "MAX_TOKENS"}]})
+        model = json.loads(request.content)["model"]
+        state["chat"].append(model)
+        if state["overloaded"] and model == "gemini-flash-latest":
+            release.wait(10)
+            raise httpx.ReadTimeout("The read operation timed out", request=request)
+        return httpx.Response(200, content=_sse({"choices": [{"delta": {"content": f"Hi from {model}."},
+                                                              "finish_reason": "stop"}]}))
+
+    svc.gemini_factory = lambda key: Gemini(key, transport=httpx.MockTransport(handler), check_after=0.05)
+    svc.store.update(provider="gemini", gemini_model="gemini-flash-latest")
+
+    def ask(n, inbox):
+        _send(svc, {"type": "question", "msgId": n, "session": "S", "nextInbox": inbox, "conv": "g", "text": "hi",
+                    "snapshot": {}})
+        return _final_answer(addons, inbox)
+    try:
+        final = ask(7, 1)
+        assert final and final["model"] == gemini.FALLBACK_MODEL and final["secs"] < 3
+        assert "Hi from gemini-flash-lite-latest." in final["text"]
+        assert state["chat"] == ["gemini-flash-latest", gemini.FALLBACK_MODEL]
+        assert state["probes"] == ["gemini-flash-latest"]
+        # the next questions do not wait for it, and it is not checked again before GEMINI_RECHECK_S
+        assert ask(8, 5)["model"] == gemini.FALLBACK_MODEL
+        assert state["chat"][2:] == [gemini.FALLBACK_MODEL] and len(state["probes"]) == 1
+        # the overload is over: the next question is still answered by the fallback, without waiting, and the check
+        # in the background brings the model back for the question after it
+        state["overloaded"] = False
+        svc._gemini_down["gemini-flash-latest"] = 0  # the check is due
+        assert ask(9, 10)["model"] == gemini.FALLBACK_MODEL
+        deadline = time.time() + 5
+        while "gemini-flash-latest" in svc._gemini_down and time.time() < deadline:
+            time.sleep(0.02)
+        assert state["probes"] == ["gemini-flash-latest"] * 2
+        final = ask(10, 15)
+        assert final["model"] == "gemini-flash-latest" and "Hi from gemini-flash-latest." in final["text"]
+    finally:
+        release.set()
 
 
 def test_choose_provider(tmp_path, monkeypatch):
