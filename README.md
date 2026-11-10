@@ -2,6 +2,42 @@
 
 AI assistant in a chat window inside World of Warcraft: Forever. It answers using your character, quests, gear and surroundings, a local Forever knowledge base and the auction house prices of your auction add-on. Answers come from Claude Code (Claude subscription), OpenRouter or Google Gemini.
 
+## What you can do with it
+
+Open the window with the **AI** button or `/fai` and ask in your own words, in your own language. ForeverAI already sees your character, your quest log, your bags and where you stand, so there is nothing to explain first.
+
+### Ask what to do next
+
+"What should I do next?", "Is this ring better than mine?", "Which talent do I take now?", "Why do I keep dying to this mob?" The answer is about your character as it is right now, not a general guide.
+
+<img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/ask.png?raw=true" alt="A question and its answer in the ForeverAI window" width="460">
+
+### Get a route, and find the creature instead of the spot
+
+"Plan a route through my quests" puts the stops on your map in the shortest walking order and leaves out what you should not do alone. The arrow leads you from stop to stop, and the marks are still there after a `/reload`.
+
+When a stop is a creature, ForeverAI watches for it: a living one in sight gets a marker over its nameplate, a sound and a line in the chat, and the strip under the chat shows how many are near you. **list** opens the stops of the route.
+
+<img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/route.png?raw=true" alt="A marked route with its list of stops and a tracked creature" width="460">
+
+### Change your mind
+
+Take a stop off with **x**, make another one the **next**, or just say it: "I already have the crawler legs, drop that stop". The route on the map changes; nothing is planned from scratch.
+
+<img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/edit.png?raw=true" alt="The route after a stop was dropped by asking" width="460">
+
+### More things to ask
+
+- "How long until level 30 at this pace?" and "How much gold did I make today, and on what?"
+- "What do I craft to get Leatherworking to 150 with what I have?"
+- "Find a one-handed sword on the auction house that is an upgrade for me, up to 5 gold."
+- "My bags are full. What can I sell?" (at a vendor it prepares the list; nothing is sold until you click **Accept**)
+- "Where do I buy Coarse Thread?" or "Where is the hunter trainer? Mark it."
+- "Remember that I play Beast Mastery and level with a friend who plays a mage."
+- **Alt+click** an item, a spell or a quest to ask about exactly that one.
+
+The pictures show the add-on's window as it looks in the game, with example answers; they were taken in the add-on simulator.
+
 ## Requirements
 
 - Windows 10/11, or Linux with WoW Forever running under Wine (Lutris, Steam/Proton, Bottles, Heroic or plain Wine)
