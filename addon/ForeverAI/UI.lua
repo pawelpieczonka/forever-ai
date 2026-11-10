@@ -915,11 +915,12 @@ function UI.UpdateStrip()
     local seen = t.alive > 0
     items[#items + 1] = {
       color = seen and { 0.36, 1, 0.62, 1 } or { 0.85, 0.64, 0.26, 1 },
-      text = string.format("|cff9aa3adTracking|r %s |cff%s· %s|r", esc(t.label), seen and "5dff9d" or "d9a441",
+      -- how many are in sight, in brackets: "(0)", "(2)"; words only when the add-on cannot see
+      text = string.format("|cff9aa3adTracking|r %s |cff%s%s|r", esc(t.label), seen and "5dff9d" or "d9a441",
         -- the add-on sees a creature only when it is targeted or pointed at: "after the fight" when the nameplates
         -- wait for the end of a fight (the game lets them be turned on only out of one), "nameplates off" when
         -- the player has turned them off
-        seen and (t.alive .. " in sight") or (t.blind and (t.waiting and "after the fight" or "nameplates off") or "none in sight")),
+        t.blind and (t.waiting and "· after the fight" or "· nameplates off") or string.format("(%d)", t.alive)),
       tip = "Stop tracking " .. t.label,
       close = function() ns.Track.Stop(t.name) end,
     }

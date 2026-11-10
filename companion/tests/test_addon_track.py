@@ -143,11 +143,11 @@ def test_strip_shows_what_goes_on_and_ends_it(sim, tmp_path):
     assert "Tracking Strigid" not in shown(sim) and "Route ·" not in shown(sim)
     sim.lua(ANSWER)
     sim.run(1)
-    assert "Tracking Strigid Screecher · none in sight" in shown(sim) and "Route · 2 stops" in shown(sim)
+    assert "Tracking Strigid Screecher (0)" in shown(sim) and "Route · 2 stops" in shown(sim)
     assert "Watching for Strigid Screecher: a living one in sight is marked on the screen and announced." in shown(sim)
     sim.lua('TEST_show({ { name = "Strigid Screecher" }, { name = "Strigid Screecher" } })')
     sim.run(1)
-    assert "Tracking Strigid Screecher · 2 in sight" in shown(sim) and "Strigid Screecher is in sight (2)" in shown(sim)
+    assert "Tracking Strigid Screecher (2)" in shown(sim) and "Strigid Screecher is in sight (2)" in shown(sim)
     sim.screenshot(tmp_path / "strip.png")
 
     sim.click("x", nth=2)  # the first x closes the window; the chips follow
@@ -227,12 +227,12 @@ def test_tracking_listens_by_itself_and_puts_the_players_settings_back(sim):
     sim.lua(ANSWER)
     sim.run(1)
     assert text(sim.lua('return GetCVar("nameplateShowAll") .. " " .. GetCVar("nameplateMaxDistance")')) == "1 100"
-    assert "Tracking Strigid Screecher · none in sight" in shown(sim)
+    assert "Tracking Strigid Screecher (0)" in shown(sim)
     assert "Show them" not in shown(sim) and "See farther" not in shown(sim)
     assert "the nameplates of all enemies are shown while a creature is tracked" in shown(sim)  # said once, in the chat
     sim.lua('TEST_show({ { name = "Strigid Screecher" } })')
     sim.run(1)
-    assert "Tracking Strigid Screecher · 1 in sight" in shown(sim)
+    assert "Tracking Strigid Screecher (1)" in shown(sim)
 
     sim.reload()  # still tracked after a /reload, and still the player's settings that are remembered
     sim.lua(FAKES)
@@ -276,7 +276,7 @@ def test_every_creature_that_gives_the_objective_counts(sim):
     sim.lua(QUESTIE)
     sim.lua(BELTS)
     sim.run(1)
-    assert "Tracking Bloodfeather Belt · none in sight" in shown(sim)
+    assert "Tracking Bloodfeather Belt (0)" in shown(sim)
     assert ("Watching for Bloodfeather Rogue (or any other creature that counts for Bloodfeather Belt): a living one in "
             "sight is marked on the screen and announced.") in shown(sim)
     assert text(sim.lua(SECTION)) == (
@@ -285,7 +285,7 @@ def test_every_creature_that_gives_the_objective_counts(sim):
     sim.lua('TEST_show({ { name = "Bloodfeather Harpy" }, { name = "Strigid Owl" }, { name = "Bloodfeather Sorceress" } })')
     sim.run(1)
     assert text(sim.lua("return TEST_marked()")) == "nameplate1,nameplate3"
-    assert "Tracking Bloodfeather Belt · 2 in sight" in shown(sim)
+    assert "Tracking Bloodfeather Belt (2)" in shown(sim)
     assert "Bloodfeather Harpy is in sight (2)" in shown(sim)  # the one that is there, by its own name
     assert text(sim.lua(SECTION)) == (
         "Bloodfeather Rogue (also counts for Bloodfeather Belt: Bloodfeather Harpy, Bloodfeather Sorceress): "
@@ -357,7 +357,7 @@ def test_the_strip_says_why_nothing_can_be_seen(sim):
     sim.lua("InCombatLockdown = function() return false end")
     sim._wow.fire(b"PLAYER_REGEN_ENABLED")
     sim.run(1)
-    assert "Tracking Strigid Screecher · none in sight" in shown(sim)
+    assert "Tracking Strigid Screecher (0)" in shown(sim)
 
 
 def test_an_empty_quest_log_right_after_login_ends_nothing(sim):

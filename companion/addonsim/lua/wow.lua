@@ -1245,6 +1245,19 @@ function MessageFrame:SetFading() end
 function MessageFrame:SetInsertMode() end
 ChatFrame1 = DEFAULT_CHAT_FRAME
 
+-- the game's notices in the upper middle of the screen ("Out of range"); add-ons put their own lines there too
+UIErrorsFrame = CreateFrame("Frame", "UIErrorsFrame", UIParent)
+UIErrorsFrame:SetPoint("TOP", UIParent, "TOP", 0, -122)
+UIErrorsFrame:SetSize(512, 60)
+local noticeText = UIErrorsFrame:CreateFontString(nil, "ARTWORK", "ChatFontNormal")
+noticeText:SetPoint("TOP")
+function UIErrorsFrame:AddMessage(text, r, g, b)
+  text = textOf(text)
+  host.log("notice", text)
+  if r and g and b then text = format("|cff%02x%02x%02x", r * 255, g * 255, b * 255) .. text .. "|r" end
+  noticeText:SetText(text) -- the newest one; the game fades them out
+end
+
 function print(...)
   local parts = {}
   for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
