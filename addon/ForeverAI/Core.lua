@@ -1,7 +1,7 @@
 -- ForeverAI: core (namespace, saved variables, events, conversations, requests)
 local ADDON, ns = ...
 ForeverAI = ns
-ns.version = "0.7.0"
+ns.version = "0.6.0"
 
 BINDING_HEADER_FOREVERAI = "ForeverAI"
 BINDING_NAME_FOREVERAI_TOGGLE = "Show/hide ForeverAI"
@@ -161,6 +161,7 @@ ns.On("ADDON_LOADED", function(_, name)
   ForeverAIDB.maxSnapshotKB = math.max(ForeverAIDB.maxSnapshotKB or 0, ns.defaults.maxSnapshotKB) -- old limit dropped data
   ForeverAIDB.sections.screen = nil  -- the screen is now chosen per message, next to Send
   ForeverAIDB.block = nil            -- timing test setting, no longer used
+  ForeverAIDB.probe = nil            -- a one-time check of the game's profession API, typed in the chat
   ForeverAICharDB = ForeverAICharDB or {}
   local char = ForeverAICharDB
   char.convs = char.convs or {}

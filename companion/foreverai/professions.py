@@ -3,8 +3,8 @@
 Per profession the add-on sends ``rank``, ``maxRank``, ``readAgo`` (seconds since its window was read), ``recipes``
 (``n`` name, ``i`` crafted item id, ``d`` difficulty optimal/medium/easy, ``c`` how many can be made now, ``u`` skill-ups
 per craft, ``m`` [min, max] made, ``r`` reagents: ``n`` name, ``i`` item id, ``q`` needed, ``h`` in the bags now, ``b`` more
-in the bank), ``gray`` (names of recipes that give no skill-ups), ``unlearned`` (count), ``partial`` (a filter hid part of
-the list), ``capped`` and ``trainer`` (what a trainer offered: ``offers`` with ``n``, ``rank``, ``cost``, ``skill``, ``lvl``,
+in the bank, ``g`` the skill at which it turns gray), ``gray`` (names of recipes that give no skill-ups), ``partial`` (a
+filter hid part of the list), ``capped`` and ``trainer`` (what a trainer offered: ``offers`` with ``n``, ``rank``, ``cost``, ``skill``, ``lvl``,
 ``ok``).
 """
 
@@ -34,6 +34,8 @@ def recipe_line(r: dict) -> str:
     color = COLORS.get(str(r.get("d")), "color unknown")
     ups = _int(r.get("u"))
     head = f"- {_item(r.get('n'), r.get('i'))} — {color}" + (f" ({ups} skill-ups per craft)" if ups and ups > 1 else "")
+    if _int(r.get("g")):
+        head += f", gray at skill {r['g']}"
     made = r.get("m")
     if isinstance(made, list) and len(made) == 2:
         head += f", makes {made[0]}-{made[1]}"
@@ -74,9 +76,6 @@ def render(section: Any) -> str:
         gray = [str(g) for g in p.get("gray") or []]
         if gray:
             out.append(f"Gray, no skill-ups ({len(gray)}): " + ", ".join(sorted(gray)))
-        if _int(p.get("unlearned")):
-            out.append(f"{p['unlearned']} recipes of {name} are not learned yet (the game lists them; see the knowledge base for "
-                       "where they come from).")
         if p.get("partial"):
             out.append(f"Part of the list was hidden by {p['partial']} in the profession window when it was last read; "
                        "recipes not shown then come from an earlier reading.")

@@ -26,7 +26,10 @@ C_Timer = { After = function(s, fn) timers[#timers + 1] = { due = gt + s, fn = f
 local frames = {}
 function CreateFrame()
   local f = { events = {}, scripts = {}, shown = true }
-  function f:RegisterEvent(e) self.events[e] = true end
+  function f:RegisterEvent(e)
+    if e:find("^CRAFT_") then error("Attempt to register unknown event \"" .. e .. "\"") end -- not in WoW Forever
+    self.events[e] = true
+  end
   function f:SetScript(k, fn) self.scripts[k] = fn end
   function f:Show() self.shown = true end
   function f:Hide() self.shown = false end
@@ -244,22 +247,25 @@ frames_(80)
 out("LINKED", tostring(db().Blacksmithing == nil))
 IsTradeSkillLinked = function() return false end
 
--- 7) the newer API (C_TradeSkillUI): every recipe by id whatever the filters show, unlearned ones only counted
+-- 7) the newer API (C_TradeSkillUI), as WoW Forever has it: every recipe by id whatever the filters show (unlearned
+-- ones only counted), no numAvailable, the gray level in maxTrivialLevel, an empty child profession, no Classic API
 GetNumTradeSkills, GetTradeSkillInfo, GetTradeSkillLine = nil, nil, nil
 local recipes = {}
 for i = 1, 450 do
-  recipes[i] = { recipeID = 3000 + i, name = "Recipe " .. i, learned = i <= 300, relativeDifficulty = i % 4,
-                 numAvailable = i % 3, numSkillUps = i == 2 and 3 or 1 }
+  recipes[i] = { recipeID = 3000 + i, name = "Recipe " .. i, learned = i <= 300, relativeDifficulty = i <= 300 and i % 4 or 0,
+                 numSkillUps = i == 2 and 3 or 1, maxTrivialLevel = 100 + i, isDummyRecipe = false,
+                 hyperlink = "|cnIQ1:|Hitem:" .. (7000 + i) .. "::::::::20:1482:::1:3524::::::|h[Recipe " .. i .. "]|h|r" }
 end
 C_TradeSkillUI = {
   IsTradeSkillReady = function() return true end,
   IsTradeSkillLinked = function() return false end,
-  GetBaseProfessionInfo = function() return { professionName = "Blacksmithing", skillLevel = 1, maxSkillLevel = 1 } end,
-  GetChildProfessionInfo = function() return { professionName = "Blacksmithing", parentProfessionName = "Blacksmithing", skillLevel = 132, maxSkillLevel = 150 } end,
+  GetBaseProfessionInfo = function() return { professionName = "Blacksmithing", professionID = 164, skillLevel = 132,
+                                              maxSkillLevel = 150, isPrimaryProfession = true, expansionName = "Unknown" } end,
+  GetChildProfessionInfo = function() return { professionName = "", professionID = 0, skillLevel = 0, maxSkillLevel = 0 } end,
   GetAllRecipeIDs = function() cost() local ids = {} for i, r in ipairs(recipes) do ids[i] = r.recipeID end return ids end,
   GetFilteredRecipeIDs = function() return { 3001 } end,
   GetRecipeInfo = function(id) cost() return recipes[id - 3000] end,
-  GetRecipeOutputItemData = function(id) cost() return { itemID = 7000 + (id - 3000) } end,
+  GetRecipeOutputItemData = function(id) cost() return id % 2 == 0 and { itemID = 7000 + (id - 3000) } or nil end,
   GetRecipeSchematic = function(id) cost() return { outputItemID = 7000 + (id - 3000), quantityMin = 1, quantityMax = 1,
     reagentSlotSchematics = { { reagents = { { itemID = 2589 } }, quantityRequired = 4, reagentType = 1, required = true },
                               { reagents = { { itemID = 9999 } }, quantityRequired = 1, reagentType = 0, required = false } } } end,
@@ -274,7 +280,13 @@ local r2
 for _, r in ipairs(b.recipes) do if r.n == "Recipe 2" then r2 = r end end
 out("RETAIL", b.rank .. "/" .. b.maxRank .. "," .. b.api .. "," .. #b.recipes .. "," .. #b.gray .. "," .. b.unlearned .. "," ..
   frameCount .. "," .. string.format("%.2f", maxFrameMs))
-out("RETAILR", r2.d .. "," .. r2.i .. "," .. r2.u .. "," .. #r2.r .. "," .. r2.r[1].n .. "x" .. r2.r[1].q)
+out("RETAILR", r2.d .. "," .. r2.i .. "," .. r2.u .. "," .. #r2.r .. "," .. r2.r[1].n .. "x" .. r2.r[1].q .. "," .. r2.g .. "," .. tostring(r2.c))
+local r1
+for _, r in ipairs(b.recipes) do if r.n == "Recipe 1" then r1 = r end end
+out("RETAILLINK", r1.i) -- no output data: the item id comes from the recipe's link (with its quality prefix)
+local bs
+for _, r in ipairs(ns.Collect.sections.professions().Blacksmithing.recipes) do if r.n == "Recipe 2" then bs = r end end
+out("RETAILNOW", bs.c .. "," .. bs.g)
 
 -- 8) a profession trainer: offers for the player's professions, without what is already learned
 GetNumTrainerServices = function() return 4 end
@@ -365,7 +377,9 @@ def test_professions_lua_retail_api(lua_run):
     assert int(recipes) == 225 and int(gray) == 75 and unlearned == "150"
     assert int(frames) >= 3 and float(max_ms) <= 2.5
     # only the required basic reagent; the output item; 3 skill-ups
-    assert lua_run["RETAILR"] == "easy,7002,3,1,Linen Clothx4"
+    assert lua_run["RETAILR"] == "easy,7002,3,1,Linen Clothx4,102,nil"
+    assert lua_run["RETAILLINK"] == "7001"
+    assert lua_run["RETAILNOW"] == "1,102"  # 7 Linen Cloth in the bags / 4 = 1, though the game gives no numAvailable
 
 
 def test_professions_lua_trainer(lua_run):
@@ -399,7 +413,7 @@ def test_professions_section_from_lua_renders(lua_run):
 def test_render_professions_order_trainer_and_notes():
     sec = {"Tailoring": {"rank": 51, "maxRank": 75, "readAgo": 7200, "partial": "a category filter", "unlearned": 12,
                          "recipes": [{"n": "Green", "d": "easy", "c": 0}, {"n": "Yellow", "d": "medium", "c": 3, "m": [1, 2]},
-                                     {"n": "Orange", "d": "optimal", "i": 5, "c": 1}],
+                                     {"n": "Orange", "d": "optimal", "i": 5, "c": 1, "g": 75}],
                          "trainer": {"npc": "Lisbeth", "readAgo": 90000,
                                      "offers": [{"n": "Simple Kilt", "cost": 500, "skill": 75, "lvl": 10, "ok": False}]}},
            "Cooking": {"rank": 92, "maxRank": 150, "readAgo": 30, "gray": ["Charred Wolf Meat"]}}
@@ -411,7 +425,8 @@ def test_render_professions_order_trainer_and_notes():
     assert "Tailoring 51/75 (recipes read from its window 2 h 0 min ago" in lines[3]
     assert [x.split(" — ")[0] for x in lines[4:7]] == ["- [Orange] (item 5)", "- [Yellow]", "- [Green]"]
     assert "yellow, makes 1-2, can make 3 now" in lines[5]
-    assert "12 recipes of Tailoring are not learned yet" in text and "hidden by a category filter" in text
+    assert lines[4] == "- [Orange] (item 5) — orange, gray at skill 75, can make 1 now"
+    assert "not learned" not in text and "hidden by a category filter" in text
     assert "Trainer (Lisbeth), seen 1 d 1 h ago, offers: [Simple Kilt] — 5s 0c, needs Tailoring 75, level 10, not yet" in text
 
 

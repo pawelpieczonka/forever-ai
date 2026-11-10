@@ -85,7 +85,10 @@ local function retailStep(j)
     local info = safe(U.GetRecipeInfo, id)
     if type(info) == "table" and info.name and info.learned ~= false and not info.isDummyRecipe then
       local diff = DIFFICULTY[info.relativeDifficulty] or (KNOWN_DIFF[tostring(info.difficulty)] and info.difficulty) or nil
-      local r = { n = info.name, s = id, d = diff, c = info.numAvailable, u = (info.numSkillUps or 1) > 1 and info.numSkillUps or nil }
+      -- WoW Forever leaves numAvailable empty ("can make" is counted from the bags later) but tells where a recipe
+      -- turns gray (maxTrivialLevel)
+      local r = { n = info.name, s = id, d = diff, c = info.numAvailable, g = tonumber(info.maxTrivialLevel),
+                  u = (info.numSkillUps or 1) > 1 and info.numSkillUps or nil }
       if diff ~= "trivial" then
         local out = U.GetRecipeOutputItemData and safe(U.GetRecipeOutputItemData, id)
         r.i = type(out) == "table" and out.itemID or itemIdOf(info.hyperlink) or nil
@@ -352,12 +355,16 @@ function PR.Section()
       local recipes = {}
       for _, r in ipairs(p.recipes or {}) do
         budget()
-        local x = { n = r.n, i = r.i, d = r.d, u = r.u, m = r.m }
+        local x = { n = r.n, i = r.i, d = r.d, u = r.u, m = r.m, g = r.g }
         if r.r then
           local can, reagents = nil, {}
           for _, g in ipairs(r.r) do
             local have = count(g.i) or g.h or 0
             local bank = count(g.i, true)
+            if not g.n and g.i then -- the item was not in the game's cache when the window was read
+              g.n = safe(C_Item.GetItemNameByID, g.i) or safe(C_Item.GetItemInfo, g.i)
+              if not g.n and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, g.i) end
+            end
             reagents[#reagents + 1] = { n = g.n, i = g.i, q = g.q, h = have, b = (bank and bank > have) and (bank - have) or nil }
             local n = math.floor(have / math.max(1, g.q or 1))
             can = can and math.min(can, n) or n
