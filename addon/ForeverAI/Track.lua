@@ -197,48 +197,48 @@ local function finished(mob)
 end
 
 ------------------------------------------------------------------------ nameplates while tracking
--- The player can let the game show the nameplates of all enemies, from as far as it allows, while something is
--- tracked (a button on the strip); their own settings come back when tracking ends.
+-- Tracking listens by itself: while something is tracked the game shows the nameplates of all enemies, from as far
+-- as it allows, and the player's own settings come back when tracking ends. The game does not let these settings be
+-- changed in a fight, so both wait for its end.
 local WANTED = { { "nameplateShowEnemies", "1" }, { "nameplateShowAll", "1" }, { "nameplateMaxDistance", "100" } }
 
--- nil: nothing to offer; "show": the game shows no nameplates of idle creatures; "far": they could reach farther
-function T.Offer()
-  if #list() == 0 then return nil end
-  if T.Sight() ~= "all" then return "show" end
-  if ns.char and ns.char.trackCVars and ns.char.trackCVars.nameplateMaxDistance ~= nil then return nil end
-  local range = tonumber(cvar("nameplateMaxDistance"))
-  if range and range < 100 then return "far" end
-  return nil
-end
+local function inFight() return InCombatLockdown and InCombatLockdown() and true or false end
 
 function T.ShowNameplates()
-  if InCombatLockdown and InCombatLockdown() then
-    ns.print("The game does not let nameplates be changed in a fight. Try again after it.")
-    return false
-  end
-  if not (ns.char and SetCVar) then return false end
-  ns.char.trackCVars = ns.char.trackCVars or {}
+  if not (ns.char and SetCVar) or inFight() then return false end
+  local saved = ns.char.trackCVars or {}
+  local first = next(saved) == nil
   for _, want in ipairs(WANTED) do
     local name, value = want[1], want[2]
     local old = cvar(name)
-    if old ~= nil and ns.char.trackCVars[name] == nil then ns.char.trackCVars[name] = old end
+    if old ~= nil and saved[name] == nil then saved[name] = old end
     if old ~= nil and old ~= value and not (name == "nameplateMaxDistance" and (tonumber(old) or 0) >= 100) then
       pcall(SetCVar, name, value) -- the game caps the distance at what it allows
     end
   end
-  T.Scan()
-  changed()
+  ns.char.trackCVars = saved
+  if first then
+    ns.print("Tracking: the nameplates of all enemies are shown while a creature is tracked. Your own settings come back when it ends.")
+  end
   return true
 end
 
 local function restoreNameplates()
   local saved = ns.char and ns.char.trackCVars
-  if not saved or not next(saved) then return end
-  if InCombatLockdown and InCombatLockdown() then return end -- tried again when tracking ends the next time
+  if not saved or not next(saved) or inFight() then return end
   for name, old in pairs(saved) do
     if cvar(name) ~= old then pcall(SetCVar, name, old) end
   end
   ns.char.trackCVars = nil
+end
+
+-- the settings follow the list: on while something is tracked, back when nothing is (called again after a fight)
+local function syncNameplates()
+  if #list() > 0 then
+    if T.ShowNameplates() then pcall(T.Scan) changed() end
+  else
+    restoreNameplates()
+  end
 end
 
 ------------------------------------------------------------------------ the list
@@ -250,6 +250,7 @@ local function forget(i)
   hideMarkers(1) -- the next scan puts back the ones that still belong
   if #tracked == 0 then restoreNameplates() end
 end
+T.SyncNameplates = syncNameplates
 
 function T.CheckQuests()
   local tracked = list()
@@ -279,6 +280,7 @@ function T.Set(mobs, add)
       end
     end
   end
+  if #tracked > 0 then T.ShowNameplates() end
   T.Scan()
   changed()
 end
@@ -370,7 +372,9 @@ end
 
 ns.On("PLAYER_ENTERING_WORLD", function()
   if not T.ticker then T.ticker = C_Timer.NewTicker(SCAN_S, function() pcall(T.Scan) end) end
+  C_Timer.After(2, function() pcall(syncNameplates) end) -- what was tracked before a /reload is listened for again
 end)
+ns.On("PLAYER_REGEN_ENABLED", function() pcall(syncNameplates) end) -- the fight is over: the settings can change now
 
 do -- the quest log changes in bursts: look once they have settled
   local pending

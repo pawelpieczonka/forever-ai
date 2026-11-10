@@ -856,9 +856,6 @@ local function Chip(parent)
   if c.text.SetMaxLines then c.text:SetMaxLines(1) end
   c.close = Btn(c, "x", 20, 20, function(self) if c.onClose then c.onClose() end end, "ghost")
   c.close:SetPoint("RIGHT", -1, 0)
-  c.act = Btn(c, "", 78, 18, function(self) if c.onAct then c.onAct() end end)
-  c.act:SetPoint("RIGHT", c.close, "LEFT", -2, 0)
-  c.act:Hide()
   return c
 end
 
@@ -872,12 +869,7 @@ local function layoutChips(items, width)
     c.text:SetWidth(0)
     c.text:SetText(it.text)
     c.close.tip, c.onClose = it.tip, it.close
-    c.act:SetShown(it.act ~= nil)
-    if it.act then
-      c.act:SetText(it.act[1])
-      c.act.tip, c.onAct = it.act[2], it.act[3]
-    end
-    local fixed = 8 + 6 + 6 + 6 + 22 + (it.act and (c.act:GetWidth() + 4) or 0)
+    local fixed = 8 + 6 + 6 + 6 + 22
     local textW = math.ceil(c.text.GetUnboundedStringWidth and c.text:GetUnboundedStringWidth() or c.text:GetStringWidth())
     local w = math.min(width, textW + fixed)
     c.text:SetWidth(w - fixed)
@@ -916,23 +908,16 @@ end
 function UI.UpdateStrip()
   if not strip then return end
   local items = {}
-  local offer = ns.Track and ns.Track.Offer and ns.Track.Offer() -- on the first chip only
-  for n, t in ipairs(ns.Track and ns.Track.State() or {}) do
+  for _, t in ipairs(ns.Track and ns.Track.State() or {}) do
     local seen = t.alive > 0
     items[#items + 1] = {
       color = seen and { 0.36, 1, 0.62, 1 } or { 0.85, 0.64, 0.26, 1 },
       text = string.format("|cff9aa3adTracking|r %s |cff%s· %s|r", esc(t.name), seen and "5dff9d" or "d9a441",
-        seen and (t.alive .. " in sight") or (t.blind and "nameplates off" or "none in sight")),
+        -- "after the fight": the game lets the nameplates be turned on only out of a fight; until then the add-on
+        -- sees a creature only when it is targeted or pointed at
+        seen and (t.alive .. " in sight") or (t.blind and "after the fight" or "none in sight")),
       tip = "Stop tracking " .. t.name,
       close = function() ns.Track.Stop(t.name) end,
-      -- the game shows nameplates only in a fight: the add-on then sees a creature only when it is targeted or pointed at
-      act = (n == 1 and offer == "show") and { "Show them", "Your game shows nameplates only for your target and in a "
-        .. "fight, so a creature standing next to you is not seen. This turns on the nameplates of all enemies, from as "
-        .. "far as the game allows, while something is tracked; your own settings come back when tracking ends. "
-        .. "Without it, point at the creature or target it.", function() ns.Track.ShowNameplates() end }
-        or (n == 1 and offer == "far") and { "See farther", "Lets nameplates show from as far as the game allows while "
-        .. "something is tracked, so a creature is seen sooner. Your own setting comes back when tracking ends.",
-        function() ns.Track.ShowNameplates() end } or nil,
     }
   end
   local stops = ns.Map and ns.Map.Count and ns.Map.Count() or 0

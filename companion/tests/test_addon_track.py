@@ -186,8 +186,10 @@ UnitIsDead = function(u) if seen[u] then return seen[u].dead or false end return
 """
 
 
-def test_without_nameplates_the_addon_says_it_cannot_see(sim):
+def test_in_a_fight_the_addon_says_it_cannot_see_and_listens_once_it_is_over(sim):
+    """The game shows nameplates only for the target and in a fight, and does not let that be changed in a fight."""
     sim.lua('SetCVar("nameplateShowEnemies", "1") SetCVar("nameplateShowAll", "0")')
+    sim.lua("InCombatLockdown = function() return true end")
     sim.lua(TRACK)
     sim.run(1)
     assert text(sim.lua(SECTION)) == (
@@ -195,10 +197,16 @@ def test_without_nameplates_the_addon_says_it_cannot_see(sim):
         "(nameplates of all enemies are off), so one can be near without being seen")
     assert text(sim.lua("local s = ForeverAI.Track.State()[1] return s.name .. '|' .. s.alive .. '|' .. tostring(s.blind)")) == \
         "Strigid Screecher|0|true"
+    sim.lua("InCombatLockdown = function() return false end")
+    sim._wow.fire(b"PLAYER_REGEN_ENABLED")
+    sim.run(1)
+    assert text(sim.lua('return GetCVar("nameplateShowAll")')) == "1"
+    assert text(sim.lua(SECTION)) == "Strigid Screecher: none in sight now; not seen since it is tracked"
 
 
 def test_the_target_and_the_mouseover_are_seen_without_nameplates(sim):
     sim.lua('SetCVar("nameplateShowAll", "0")')
+    sim.lua("InCombatLockdown = function() return true end")  # nameplates cannot be turned on yet
     sim.lua(LOOK_AT)
     sim.lua(TRACK)
     sim.lua('TEST_unit("mouseover", { name = "Strigid Screecher" })')
@@ -211,36 +219,26 @@ def test_the_target_and_the_mouseover_are_seen_without_nameplates(sim):
     assert "last seen alive moments ago" in text(sim.lua(SECTION))
 
 
-def test_the_strip_offers_to_show_nameplates_and_puts_the_settings_back(sim):
+def test_tracking_listens_by_itself_and_puts_the_players_settings_back(sim):
+    """No button to press: while something is tracked the game shows the nameplates of all enemies, from as far as it
+    allows (it caps the number itself); when tracking ends the player's own settings are back."""
     sim.slash("/fai")
     sim.lua('SetCVar("nameplateShowEnemies", "1") SetCVar("nameplateShowAll", "0") SetCVar("nameplateMaxDistance", "41")')
     sim.lua(ANSWER)
     sim.run(1)
-    assert "Tracking Strigid Screecher · nameplates off" in shown(sim) and "Show them" in shown(sim)
-    sim.click("Show them")
-    sim.run(1)
-    # every enemy's nameplate, and from as far as the game allows (it caps the number itself)
     assert text(sim.lua('return GetCVar("nameplateShowAll") .. " " .. GetCVar("nameplateMaxDistance")')) == "1 100"
     assert "Tracking Strigid Screecher · none in sight" in shown(sim)
     assert "Show them" not in shown(sim) and "See farther" not in shown(sim)
+    assert "the nameplates of all enemies are shown while a creature is tracked" in shown(sim)  # said once, in the chat
     sim.lua('TEST_show({ { name = "Strigid Screecher" } })')
     sim.run(1)
     assert "Tracking Strigid Screecher · 1 in sight" in shown(sim)
-    sim.slash("/fai stop")  # tracking over: the player's own settings are back
+
+    sim.reload()  # still tracked after a /reload, and still the player's settings that are remembered
+    sim.lua(FAKES)
+    sim.run(3)
+    assert text(sim.lua('return GetCVar("nameplateShowAll") .. " " .. GetCVar("nameplateMaxDistance")')) == "1 100"
+    sim.slash("/fai stop")
     sim.run(1)
     assert text(sim.lua('return GetCVar("nameplateShowAll") .. " " .. GetCVar("nameplateMaxDistance")')) == "0 41"
     assert sim.errors == []
-
-
-def test_with_nameplates_on_the_strip_offers_a_wider_range(sim):
-    sim.slash("/fai")
-    sim.lua('SetCVar("nameplateShowEnemies", "1") SetCVar("nameplateShowAll", "1") SetCVar("nameplateMaxDistance", "20")')
-    sim.lua(ANSWER)
-    sim.run(1)
-    assert "Tracking Strigid Screecher · none in sight" in shown(sim) and "See farther" in shown(sim)
-    sim.click("See farther")
-    sim.run(1)
-    assert text(sim.lua('return GetCVar("nameplateMaxDistance")')) == "100" and "See farther" not in shown(sim)
-    sim.slash("/fai stop")
-    sim.run(1)
-    assert text(sim.lua('return GetCVar("nameplateMaxDistance")')) == "20"
