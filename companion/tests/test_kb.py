@@ -145,3 +145,12 @@ def test_snapshot_text_is_not_cut_inside_a_section():
     assert "x" * 5000 in full and "left out" not in full
     small = render_snapshot(snap, max_chars=5300)
     assert "x" * 5000 in small and "y" * 3000 not in small and "(left out because of size: chat)" in small
+
+
+def test_a_closed_knowledge_base_lets_go_of_its_file(tmp_path):
+    path = tmp_path / "kb.sqlite"
+    kb = KB(path)
+    kb.upsert_page("wiki", "1", "Defensive Stance", "u", "10", "aaa", "2026-11-02", "Threat bonus 80%.")
+    kb.close()
+    path.unlink()  # on Windows an open database cannot be removed
+    assert not path.exists()

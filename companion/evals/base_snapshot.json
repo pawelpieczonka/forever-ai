@@ -7,7 +7,16 @@
     "earned": 2,
     "nodes": 52,
     "tree": 1091,
-    "picked": []
+    "picked": [],
+    "canPick": [
+     "Deadly Aspects 0/5",
+     "Endurance Training 0/5",
+     "Deflection 0/5",
+     "Improved Tracking 0/5",
+     "Lethal Attacks 0/5",
+     "Improved Concussive Shot 0/5",
+     "Hawk Eye 0/3"
+    ]
    }
   ]
  },
@@ -291,7 +300,7 @@
     "bound": true,
     "count": 1,
     "quality": "common",
-    "tooltip": "Soulbound\nUnique\nUse: Returns you to Shadowglen.  Speak to an Innkeeper in a different place to change your home location."
+    "tooltip": "Soulbound\nUnique"
    },
    {
     "item": "[Light Armor Kit]",
@@ -299,8 +308,7 @@
     "id": 2304,
     "sellCopper": 15,
     "sellPrice": "0g 0s 15c",
-    "quality": "common",
-    "tooltip": "Use: Permanently increase the armor value of an item worn on the chest, legs, hands or feet by 8.  Only usable on items level 1 and above."
+    "quality": "common"
    },
    {
     "item": "[Kaldorei Spider Kabob]",
@@ -332,8 +340,7 @@
     "id": 159,
     "sellCopper": 1,
     "sellPrice": "0g 0s 1c",
-    "quality": "common",
-    "tooltip": "Use: Restores 151 mana over 18 sec.  Must remain seated while drinking."
+    "quality": "common"
    },
    {
     "item": "[Shiny Red Apple]",
@@ -350,19 +357,21 @@
     "sellCopper": 10,
     "sellPrice": "0g 0s 10c",
     "quality": "common",
-    "tooltip": "Requires First Aid (1)\nUse: Heals 66 damage over 6 sec."
+    "tooltip": "Requires First Aid (1)"
    },
    {
     "id": 279981,
     "count": 2,
     "item": "[Basic Campfire Kit]",
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "Requires Cooking (1)"
    },
    {
     "id": 279968,
     "count": 5,
     "item": "[First Aid Kit]",
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "Requires First Aid (20)"
    },
    {
     "facts": {
@@ -387,7 +396,8 @@
     "id": 6889,
     "sellCopper": 4,
     "sellPrice": "0g 0s 4c",
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "Crafting Reagent"
    },
    {
     "item": "[Small Spider Leg]",
@@ -395,15 +405,15 @@
     "id": 5465,
     "sellCopper": 3,
     "sellPrice": "0g 0s 3c",
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "Crafting Reagent"
    },
    {
     "item": "[Taming Rod]",
     "id": 15923,
     "bound": true,
     "count": 1,
-    "quality": "common",
-    "tooltip": "Quest Item\nUnique\nUse: Begins taming a Strigid Screecher to be your companion for 10 minutes.  If you lose the beast's attention for any reason, the taming process will fail."
+    "quality": "common"
    },
    {
     "item": "[Recipe: Kaldorei Spider Kabob]",
@@ -411,7 +421,8 @@
     "id": 5482,
     "sellCopper": 10,
     "sellPrice": "0g 0s 10c",
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "\nKaldorei Spider Kabob\nUse: Teaches you how to cook a Kaldorei Spider Kabob.\nSmall Spider Leg\nRequires Cooking (10)"
    },
    {
     "item": "[Sharp Arrow]",
@@ -432,14 +443,16 @@
     "id": 18152,
     "bound": true,
     "count": 1,
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "Quest Item\nUnique"
    },
    {
     "item": "[Timberling Seed]",
     "id": 5168,
     "bound": true,
     "count": 1,
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "Quest Item"
    },
    {
     "facts": {
@@ -462,7 +475,8 @@
     "id": 2318,
     "sellCopper": 15,
     "sellPrice": "0g 0s 15c",
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "Crafting Reagent"
    }
   ]
  },
@@ -1432,11 +1446,6 @@
   {
    "item": "(empty)",
    "slot": "Tabard"
-  },
-  {
-   "slot": "Ammo",
-   "item": "[Sharp Arrow]",
-   "count": 1387
   }
  ]
 }

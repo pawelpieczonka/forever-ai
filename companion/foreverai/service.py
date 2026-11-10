@@ -49,10 +49,12 @@ EFFORT_NAMES = {"low": "low", "medium": "medium", "high": "high", "xhigh": "very
 PROVIDER_NAMES = {"openrouter": "OpenRouter", "gemini": "Google Gemini", "claude_code": "Claude Code"}
 SCREEN_NOTE = ("The player attached the current screen as an image (top-left corner blacked out). Use it for what "
                "the game data does not contain.")
-# A Claude session keeps every question with its game data (~30,000 characters each): after this many turns or
-# characters a fresh session takes over, with the last turns inline. Eight turns were a third of an evening's play.
+# A Claude session keeps every question with its game data (~30,000 characters each) and every tool result (a
+# knowledge-base search returns up to 45,000): after this many turns or characters a fresh session takes over, with
+# the last turns inline, before the model's context fills up and Claude Code stops to compact it.
 MAX_SESSION_TURNS = 14
-MAX_SESSION_CHARS = 450_000  # ~115k tokens
+MAX_SESSION_CHARS = 350_000  # ~90k tokens of questions and tool results; answers and thinking come on top
+MAX_MARKS = 12  # marks one answer can set: a route through a full quest log (route.EXACT_MAX)
 
 
 def model_name(model_id: str) -> str:
@@ -143,7 +145,9 @@ class TurnContext:
         """What this answer did besides its text, in words the model reads in the following turns."""
         out = []
         for i, m in enumerate(self.marks):
-            how = ("marked on the map (earlier marks removed)" if i == 0 else "marked on the map")                 if self.replaces_marks else "added to the marks on the map"
+            how = "added to the marks on the map"
+            if self.replaces_marks:
+                how = "marked on the map (earlier marks removed)" if i == 0 else "marked on the map"
             out.append(f"{how}: {m['title']} ({m['x']}, {m['y']})")
         for a in self.actions:
             op = a.get("op")
@@ -751,7 +755,9 @@ class Service:
                 del ctx.marks[:], ctx.mark_adds[:]
             if mark:
                 ctx.route_marked = False
-            if mark and len(ctx.marks) < 8:
+            if mark and len(ctx.marks) >= MAX_MARKS:
+                return f"Not marked: an answer holds at most {MAX_MARKS} marks, and {mark['title']} would be one more.", True
+            if mark:
                 ctx.marks.append(mark)
                 ctx.mark_adds.append(add)
                 text = text.rstrip(".") + (", added to your earlier marks." if add else
@@ -760,11 +766,20 @@ class Service:
         if name == "plan_route":
             from .route import plan_route
             ctx.phase_cb("Planning the route…")
-            route = plan_route(ctx.snapshot, new_quests=args.get("new_quests") is True)
+
+            def titles(value) -> list[str]:
+                return [str(v) for v in value] if isinstance(value, list) else ([value] if isinstance(value, str) and value else [])
+            try:
+                end = (float(args["end_x"]), float(args["end_y"]))
+            except (KeyError, TypeError, ValueError):
+                end = None
+            route = plan_route(ctx.snapshot, new_quests=args.get("new_quests") is True or titles(args.get("new_quests")),
+                               skip=titles(args.get("skip")), last=titles(args.get("last")), end=end,
+                               end_title=str(args.get("end_title") or "")[:60] or None)
             text = route["text"]
             if args.get("mark") is not False and route["stops"]:
                 del ctx.marks[:], ctx.mark_adds[:]  # the route is the whole set of marks of this answer
-                for n, stop in enumerate(route["stops"][:8], 1):
+                for n, stop in enumerate(route["stops"][:MAX_MARKS], 1):
                     ctx.marks.append({"title": f"{n}. {stop['title']}"[:60], "x": round(stop["x"], 1),
                                       "y": round(stop["y"], 1), "zone": stop["zone"]})
                     ctx.mark_adds.append(False)
@@ -880,7 +895,11 @@ class Service:
     def tool_from_bridge(self, name: str, args: dict) -> tuple:
         log.info("tool %s %s", name, {k: str(v)[:60] for k, v in (args or {}).items()})
         activity.info("Tool: %s", name)
-        return self.run_tool(self._turn, name, args)
+        text, is_error = self.run_tool(self._turn, name, args)
+        session = self._claude
+        if session is not None:  # the result stays in the session's context like the questions do
+            session.sent_chars = getattr(session, "sent_chars", 0) + len(text)
+        return text, is_error
 
     def screen_image(self, ctx: TurnContext) -> str | None:
         """The screen at the moment of the question (JPEG, base64), only when the player ticked "Screen"."""

@@ -354,12 +354,18 @@ function S.equipment()
       out[#out + 1] = { slot = SLOT_NAMES[slot], item = "(empty)" }
     end
   end
-  -- the ammunition slot: a bow, gun or crossbow shoots nothing without it, and the arrows stay in the bags either way
-  local ammo = GetInventoryItemLink("player", 0)
+  -- the ammunition slot: a bow, gun or crossbow shoots nothing without it, and the arrows stay in the bags either way.
+  -- Listed only when the game names what is in it: this client gave no link for the slot with arrows equipped, so
+  -- "nothing found" does not mean that the slot is empty.
+  local ammoSlot = (GetInventorySlotInfo and safe(GetInventorySlotInfo, "AmmoSlot")) or 0
+  local ammo = GetInventoryItemLink("player", ammoSlot)
+  if not ammo and GetInventoryItemID then
+    local id = safe(GetInventoryItemID, "player", ammoSlot)
+    local name = id and C_Item.GetItemNameByID and safe(C_Item.GetItemNameByID, id)
+    if name then ammo = "[" .. name .. "]" end
+  end
   if ammo then
-    out[#out + 1] = { slot = "Ammo", item = strip(ammo), count = GetInventoryItemCount and safe(GetInventoryItemCount, "player", 0) }
-  elseif select(2, UnitClass("player")) == "HUNTER" then
-    out[#out + 1] = { slot = "Ammo", item = "(empty: nothing in the ammunition slot)" }
+    out[#out + 1] = { slot = "Ammo", item = strip(ammo), count = GetInventoryItemCount and safe(GetInventoryItemCount, "player", ammoSlot) }
   end
   return out
 end
@@ -498,6 +504,7 @@ function S.talents()
           if rank > 0 then t.picked[#t.picked + 1] = label end
           if open and #canPick < 40 then -- what a point can go into right now, with what it does
             local desc = d and d.spellID and C.spellTip and C.spellTip(d.spellID, 300)
+            if desc and not desc:find(" ", 1, true) then desc = nil end -- only "Passive": the game gave no text
             canPick[#canPick + 1] = label .. (desc and (": " .. desc) or "")
           end
         end

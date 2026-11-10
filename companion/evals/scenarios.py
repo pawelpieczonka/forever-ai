@@ -87,8 +87,6 @@ A_QUEST_NEXT_TO_THE_ROUTE = {"marks": ROUTE_MARKS, "nearbyQuests": [
     + base_snapshot()["nearbyQuests"]}
 BUILD = ("Build: Gladius Gaming \"Forever Solo Hunter\" (BM, Solo). Talents: Endurance Training 5, Unleashed Fury 5, "
          "Summon Hawk, Ferocity 5, Bestial Wrath. Stat: Agility.")
-NO_AMMO = [e for e in base_snapshot()["equipment"] if e.get("slot") != "Ammo"] + [
-    {"slot": "Ammo", "item": "(empty: nothing in the ammunition slot)"}]
 QUIET = [c.calls("mark_on_map", 0, 0), c.never_says(r"PvP")]
 PL = c.language("pl")
 
@@ -144,7 +142,16 @@ SCENARIOS = [
         Turn("co teraz?", [c.says(r"Screecher"), c.max_words(90), c.calls("mark_on_map", 0, 1), c.never_says(r"PvP")])]),
     Scenario("full_route", "A route was asked for 22 times: every stop marked, in a sensible order.", [
         Turn("uloz mi optymalna trase pod wszystkie questy i oznacz ja",
-             [c.calls("plan_route", 1, 1), c.marked(3, 8), c.marks(56.7, 59.5), c.says(r"Moonwell"), c.max_words(260), PL])]),
+             [c.calls("plan_route", 1, 2), c.marked(3, 12), c.marks(56.7, 59.5), c.says(r"Moonwell"), c.says(r"elit"),
+              c.max_words(260), PL])]),
+    Scenario("route_respects_advice", "The model advised against a quest and the route it asked for a minute later "
+                                      "stopped at that quest's giver; the last stop, a turn-in, was not marked.", [
+        Turn("ok uloz pathing na questy zeby to wykonac w jak najszybszy sposob",
+             [c.calls("plan_route", 1, 2), c.never_marks(r"Athridas|Ursal"), c.marks(56.7, 59.5), c.marks(56.1, 61.7),
+              c.max_words(260), PL])],
+        history=[{"q": "warto brac questy jakies dookola?",
+                  "a": "Tak, ale tylko po drodze: [The Enchanted Glade] weź przy studni w Oracle Glade. [Ursal the Mauler] "
+                       "na razie pomiń, to mocny mob na 12 poziom. [Mist] to eskorta, tylko jeśli masz ochotę."}]),
     Scenario("no_repeats", "The same advice and warnings came back in every answer of a conversation.", [
         Turn("co teraz?", [c.says(r"Screecher"), c.max_words(90)], patch=AT_THE_SCREECHER),
         Turn("ile mi brakuje do 12 lvl?", [c.says(r"7[\s.,  ]?832"), c.max_words(70), c.max_headings(0), *QUIET]),
@@ -156,7 +163,7 @@ SCENARIOS = [
                                            "one answer.", [
         Turn("[Light Armor Kit] po co to?", [c.max_words(90), c.max_headings(1), c.at_most(1, r"Classic"), PL, *QUIET])]),
     Scenario("mark_again", "\"oznacz jeszcze raz\" came 5 times; here the player cleared the marks and wants them back.", [
-        Turn("wyczyscilem znaczniki, oznacz trase jeszcze raz", [c.marked(3, 8), c.marks(56.7, 59.5), c.marks(37.5, 36.8),
+        Turn("wyczyscilem znaczniki, oznacz trase jeszcze raz", [c.marked(3, 12), c.marks(56.7, 59.5), c.marks(37.5, 36.8),
                                                                  c.max_words(120), c.never_says(r"PvP")])],
         history=[ROUTE]),
     Scenario("advice_did_not_work", "The ammunition slot: four answers of guesses, up to \"disable Baganator and "
@@ -165,7 +172,7 @@ SCENARIOS = [
              [c.never_says(r"Baganator", r"/reload", r"/run", r"EquipItemByName"), c.max_words(90),
               c.at_most(1, r"Classic"), *QUIET],
              patch={"recentEvents": ["6s ago [error] Must have ammo equipped in the ammo slot (x3)"]
-                    + base_snapshot()["recentEvents"], "windows": None, "equipment": NO_AMMO})],
+                    + base_snapshot()["recentEvents"], "windows": None})],
         history=[{"q": "czemu nie moge uzywac luku???",
                   "a": "Gra zgłasza \"Must have ammo equipped in the ammo slot\": strzały nie są założone. Kliknij "
                        "prawym przyciskiem [Sharp Arrow] w torbie."}]),

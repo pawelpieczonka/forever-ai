@@ -257,6 +257,11 @@ def test_marks_stay_after_reload_and_leave_when_reached(sim):
     assert sim.lua(ON_THE_MAP) == b"ForeverAI: 1. Postman | ForeverAI: Giver"
     assert sim.lua(SECTION) == both
 
+    sim._wow.fire(b"PLAYER_ENTERING_WORLD")  # a loading screen (a boat, an instance): no second set of waypoints
+    sim.run(4)
+    assert sim.lua(ON_THE_MAP) == b"ForeverAI: 1. Postman | ForeverAI: Giver" and sim.lua("return TomTom.n") == 4
+    assert sim.lua("local n = 0 for _ in pairs(TomTom.points) do n = n + 1 end return n") == 2
+
     sim._wow.player.x = 0.4495  # a few steps from the first stop
     sim.run(4)
     assert sim.lua(ON_THE_MAP) == b"ForeverAI: Giver" and sim.lua("return TomTom.arrow") == b"ForeverAI: Giver"

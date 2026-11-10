@@ -99,13 +99,19 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["FOREVERAI_DATA"] = str(scratch)
     kb_file = next((p for p in (real / "kb.sqlite", config.REPO_ROOT / "seed" / "kb.sqlite") if p.exists()), None)
 
+    if kb_file:  # one copy for the run; every scenario reads it through its own connection
+        shutil.copy(kb_file, scratch / "kb.sqlite")
+
     def one(sc: Scenario) -> dict:
         kb = None
         if kb_file:
             from foreverai.kb.store import KB
-            shutil.copy(kb_file, scratch / f"kb-{sc.name}.sqlite")
-            kb = KB(scratch / f"kb-{sc.name}.sqlite")
-        res = run_scenario(sc, model=model, effort=effort, search_mode=args.search, kb=kb)
+            kb = KB(scratch / "kb.sqlite")
+        try:
+            res = run_scenario(sc, model=model, effort=effort, search_mode=args.search, kb=kb)
+        finally:
+            if kb:
+                kb.close()  # an open database keeps the scratch folder on disk (Windows)
         print(f"{'ok  ' if not res['failed'] else 'FAIL'} {sc.name}: {res['passed']} passed, {res['failed']} failed, "
               + ", ".join(f"{t['secs']} s" for t in res["turns"]), flush=True)
         return res

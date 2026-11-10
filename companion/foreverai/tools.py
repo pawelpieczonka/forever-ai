@@ -112,7 +112,7 @@ TOOLS.append({
         "description": "Mark a point on the player's map (waypoint with arrow). Use when the question is about a place: "
                        "quest turn-in NPC, mobs, herbs, dungeon entrance, trainer. Coordinates 0-100 as in the game "
                        "(from the quests/zoneNPCs/nearbyMobs data or the wiki). zone = English zone name (e.g. "
-                       "'Teldrassil'); omit for the player's current zone. Can be called several times (up to 8 points). "
+                       "'Teldrassil'); omit for the player's current zone. Can be called several times (up to 12 points). "
                        "The marks of one answer replace the marks of your earlier answers; add=true keeps those and "
                        "adds this point (an extra stop on a route that still holds).",
         "parameters": {
@@ -136,14 +136,28 @@ TOOLS.append({
         "description": "The walking route through the player's quest log in their current zone: every objective and "
                        "turn-in with a known place, in the order with the shortest way, each turn-in after its own "
                        "objectives, with the distances, and what is left out and why (another zone, needs a skill, "
-                       "no known place). It also marks the stops on the map in that order (up to 8), replacing "
+                       "no known place). It also marks the stops on the map in that order (up to 12), replacing "
                        "earlier marks. Use it whenever the player asks for a route, a path, an order for their "
-                       "quests or \"what is the best way to do these\"; do not order the stops yourself.",
+                       "quests or \"what is the best way to do these\"; do not order the stops yourself. You decide "
+                       "what the route holds: read the quests first (text, level against the player's, elite or "
+                       "group, escort, what you advised earlier) and say so with skip, last, new_quests and end.",
         "parameters": {
             "type": "object",
             "properties": {
-                "new_quests": {"type": "boolean", "description": "true: also stop at the quest givers of nearbyQuests "
-                                                                 "in this zone (when the player wants new quests on the way)"},
+                "skip": {"type": "array", "items": {"type": "string"},
+                         "description": "Quest titles to leave out: quests the player cannot or should not do now "
+                                        "(an elite or group quest alone, far above their level, one you advised against)"},
+                "last": {"type": "array", "items": {"type": "string"},
+                         "description": "Quest titles to do after everything else (the hard ones: by then the player "
+                                        "may have a level more or company)"},
+                "new_quests": {"type": "array", "items": {"type": "string"},
+                               "description": "Titles of nearbyQuests worth picking up on the way: only the ones you "
+                                              "recommend, not all of them"},
+                "end_x": {"type": "number", "description": "Where the player goes after these quests, in this "
+                                                             "zone's coordinates (the road to the next zone, a flight master, "
+                                                             "the town for the turn-ins elsewhere): the route ends near it"},
+                "end_y": {"type": "number"},
+                "end_title": {"type": "string", "description": "What is at end_x, end_y, e.g. 'the road to Darnassus'"},
                 "mark": {"type": "boolean", "description": "false: only compute, do not mark (default true)"},
             },
         },

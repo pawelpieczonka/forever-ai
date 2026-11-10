@@ -76,6 +76,18 @@ def marked(lo: int, hi: int) -> Check:
     return check
 
 
+def never_marks(pattern: str) -> Check:
+    """No mark of the answer has a title that matches."""
+    def check(turn: dict) -> Result:
+        titles = [m.group(1) for line in turn.get("did") or []
+                  if (m := re.match(r"^(?:marked on the map|added to the marks)[^:]*: (.+) \([\d.]+, [\d.]+\)$", line))]
+        titles += [str(t["args"].get("title")) for t in _tools(turn, "mark_on_map")
+                   if str(t["args"].get("title")) not in titles]
+        found = [t for t in titles if re.search(pattern, t, re.I)]
+        return Result(f"never marks {pattern}", not found, "marked: " + ", ".join(found) if found else "")
+    return check
+
+
 def marks(x: float, y: float, tolerance: float = 0.6) -> Check:
     """A map mark at (x, y)."""
     def check(turn: dict) -> Result:

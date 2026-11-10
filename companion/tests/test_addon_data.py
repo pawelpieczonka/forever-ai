@@ -23,12 +23,21 @@ def text(value) -> str:
 
 def test_ammunition_slot_is_part_of_the_equipment(sim):
     last = "local e = ForeverAI.Collect.sections.equipment() local a = e[#e] return a.slot .. '|' .. a.item .. '|' .. tostring(a.count)"
-    assert text(sim.lua(last)) == "Ammo|(empty: nothing in the ammunition slot)|nil"  # a hunter without arrows equipped
+    # the game says nothing about the slot (the real client gave no link with arrows equipped): no line, and
+    # certainly no claim that the slot is empty
+    assert text(sim.lua(last)) == "Tabard|(empty)|nil"
     sim.lua("""
+      GetInventorySlotInfo = function(name) return name == "AmmoSlot" and 0 or nil end
       GetInventoryItemLink = function(unit, slot)
         if slot == 0 then return "|cffffffff|Hitem:2515::::::::11:::::|h[Sharp Arrow]|h|r" end
       end
       GetInventoryItemCount = function(unit, slot) return slot == 0 and 1387 or 0 end
+    """)
+    assert text(sim.lua(last)) == "Ammo|[Sharp Arrow]|1387"
+    sim.lua("""
+      GetInventoryItemLink = function() return nil end                      -- a client without a link for the slot
+      GetInventoryItemID = function(unit, slot) return slot == 0 and 2515 or nil end
+      C_Item.GetItemNameByID = function(id) return id == 2515 and "Sharp Arrow" or nil end
     """)
     assert text(sim.lua(last)) == "Ammo|[Sharp Arrow]|1387"
 
@@ -120,7 +129,9 @@ def test_talents_that_can_be_picked_now(sim):
       local spells = { [1110] = "Endurance Training", [1210] = "Bestial Wrath", [1310] = "Improved Aspect of the Hawk" }
       C_Traits.GetDefinitionInfo = function(def) return { spellID = def } end
       C_Spell.GetSpellName = function(id) return spells[id] end
-      C_Spell.GetSpellDescription = function(id) return id == 1110 and "Increases the Health of your pet by 3%." or nil end
+      C_Spell.GetSpellDescription = function(id)                             -- the real client: often only "Passive"
+        return id == 1110 and "Increases the Health of your pet by 3%." or "Passive"
+      end
       GetNumUnspentTalents = function() return 0 end
     """)
     t = "local t = ForeverAI.Collect.sections.talents() local tree = t.trees[1] "

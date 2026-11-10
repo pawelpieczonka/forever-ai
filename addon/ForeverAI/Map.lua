@@ -104,25 +104,36 @@ function M.Clear()
   if C_Map.ClearUserWaypoint then pcall(C_Map.ClearUserWaypoint) end
 end
 
--- after login or /reload: the saved marks go back on the map
+-- After login, /reload or a loading screen the saved marks are on the map once: what this session already placed
+-- is taken off first (the event also comes with every boat, portal and instance).
 function M.Restore()
+  local saved = list()
+  for _, mk in ipairs(saved) do unplace(mk) end
   wipe(M.uids)
-  for i, mk in ipairs(list()) do place(mk, i == 1) end
+  for i, mk in ipairs(saved) do place(mk, i == 1) end
 end
 
-local function metersTo(mk)
+-- where the player is, asked once for all marks: map, x, y (0-100)
+local function playerSpot()
   local mapID = C_Map.GetBestMapForUnit("player")
-  if not mapID or mapID ~= mk.mapID then return nil end
-  local pos = C_Map.GetPlayerMapPosition(mapID, "player")
-  return pos and ns.MapMeters(mapID, pos.x * 100, pos.y * 100, mk.x, mk.y)
+  local pos = mapID and C_Map.GetPlayerMapPosition(mapID, "player")
+  if pos then return mapID, pos.x * 100, pos.y * 100 end
+end
+
+local function metersTo(mk, mapID, px, py)
+  if not px or mapID ~= mk.mapID then return nil end
+  return ns.MapMeters(mapID, px, py, mk.x, mk.y)
 end
 
 -- a stop the player has reached leaves the list; the arrow moves on to the first stop that is left
 function M.Check()
-  local saved = list()
+  local saved = ns.char and ns.char.marks
+  if not saved or #saved == 0 then return end
+  local mapID, px, py = playerSpot()
+  if not px then return end
   local reached = false
   for i = #saved, 1, -1 do
-    local d = metersTo(saved[i])
+    local d = metersTo(saved[i], mapID, px, py)
     if d and d <= REACHED_M then
       unplace(saved[i])
       table.remove(saved, i)
@@ -139,8 +150,9 @@ function M.Section()
   local saved = list()
   if #saved == 0 then return nil end
   local out = {}
+  local mapID, px, py = playerSpot()
   for i, mk in ipairs(saved) do
-    local d = metersTo(mk)
+    local d = metersTo(mk, mapID, px, py)
     out[i] = string.format("%d. %s — %s %.1f, %.1f%s", i, (tostring(mk.title):gsub("^%d+[%.%)]%s*", "")),
       tostring(mk.zone or "?"), mk.x, mk.y, d and string.format(" (%d m)", d) or "")
   end

@@ -773,3 +773,50 @@ def test_marks_after_plan_route_replace_the_route_marks(env):
                 "snapshot": snapshot})
     d = _wait_final(addons, 3)
     assert [m["title"] for m in d["marks"]] == ["Only this", "And this"] and d["marksReplace"] is True
+
+
+def _ctx(svc, addons, snapshot=None):
+    import threading
+    from foreverai.service import InboxWriter, TurnContext
+    return TurnContext({"msgId": 5}, InboxWriter(addons, "S", 1, 20, 4), snapshot or {}, threading.Event(), [])
+
+
+def test_the_model_decides_what_the_route_holds(env):
+    svc, addons, _ = env
+    snapshot = {"player": {"coords": "50.0, 50.0", "map": "Teldrassil", "level": 10}, "quests": [
+        {"id": 1, "title": "Far Hunt", "status": "in progress", "level": 12, "type": "Elite",
+         "turnIn": "Giver (Teldrassil 50.0, 60.0)",
+         "whereToGet": ["Boar: kill Boar (level 5) — Teldrassil 80.0, 50.0 (2400 m, 9 spawn points in your zone)"]},
+        {"id": 2, "title": "Letter", "status": "READY TO TURN IN", "turnIn": "Postman (Teldrassil 65.0, 50.0)"}],
+        "nearbyQuests": [{"id": 9, "title": "Fresh", "giver": "Elder", "level": 9, "where": "Teldrassil 55.0, 50.0"},
+                         {"id": 8, "title": "Ursal the Mauler", "giver": "Athridas", "where": "Teldrassil 56.0, 50.0"}]}
+    ctx = _ctx(svc, addons, snapshot)
+    text, err = svc.run_tool(ctx, "plan_route", {"skip": ["Far Hunt"], "new_quests": ["Fresh"], "end_x": 70, "end_y": 50,
+                                                 "end_title": "the road east"})
+    assert not err and [m["title"] for m in ctx.marks] == ["1. Elder", "2. Postman"]
+    assert "ending near the road east." in text and "- [Far Hunt]: left out as asked" in text
+    # hard quests at the end
+    ctx = _ctx(svc, addons, snapshot)
+    svc.run_tool(ctx, "plan_route", {"last": ["Far Hunt"]})
+    assert [m["title"] for m in ctx.marks] == ["1. Postman", "2. Boar", "3. Giver"]
+
+
+def test_an_answer_holds_twelve_marks_and_says_when_one_does_not_fit(env):
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons)
+    results = [svc.run_tool(ctx, "mark_on_map", {"title": f"Stop {n}", "x": 10 + n, "y": 20}) for n in range(1, 14)]
+    assert len(ctx.marks) == 12 and all(not err for _, err in results[:12])
+    assert results[12] == ("Not marked: an answer holds at most 12 marks, and Stop 13 would be one more.", True)
+
+
+def test_tool_results_count_toward_the_size_of_a_claude_session(env):
+    svc, addons, _ = env
+
+    class Session:
+        sent_chars = 1000
+
+    svc._claude = Session()
+    svc._turn = _ctx(svc, addons)
+    text, _ = svc.tool_from_bridge("search_knowledge_base", {"query": "x"})
+    assert svc._claude.sent_chars == 1000 + len(text) and len(text) > 10
+    svc._claude = None
