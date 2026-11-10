@@ -1,4 +1,5 @@
 import re
+import runpy
 from pathlib import Path
 
 import httpx
@@ -6,6 +7,7 @@ import httpx
 from foreverai import __version__, updates
 
 ROOT = Path(__file__).resolve().parents[2]
+version_check = runpy.run_path(str(ROOT / ".github/version_check.py"))
 
 
 def test_version_is_the_same_everywhere():
@@ -23,6 +25,30 @@ def test_release_names_match_the_build_scripts():
     assert "ForeverAI-$version-Windows-x64.zip" in (ROOT / "build_exe.ps1").read_text()
     workflow = (ROOT / ".github/workflows/release.yml").read_text()
     assert "ForeverAI-*-Linux-x86_64.tar.gz" in workflow and "ForeverAI-*-Windows-x64.zip" in workflow
+
+
+def test_pull_request_version_step():
+    problem = version_check["problem"]
+    for new in ("0.5.3", "0.6.0", "1.0.0"):
+        assert problem("0.5.2", new, ["companion/foreverai/web.py"]) is None
+    for new in ("0.5.2", "0.5.4", "0.6.1", "0.5.1"):  # no step, two steps, back
+        assert "raise it by one step, to 0.5.3" in problem("0.5.2", new, ["addon/ForeverAI/UI.lua"])
+    assert problem("0.5.2", "0.5.2", []) is None
+    assert "keep the version at 0.5.2" in problem("0.5.2", "0.5.3", [])
+
+
+def test_pull_request_app_changes():
+    base = {"addon/ForeverAI/Core.lua": 'ns.version = "0.5.2"\nlocal a = 1\n'}
+    bump = {"addon/ForeverAI/Core.lua": 'ns.version = "0.5.3"\nlocal a = 1\n'}
+    edit = {"addon/ForeverAI/Core.lua": 'ns.version = "0.5.3"\nlocal a = 2\n'}
+    others = ["README.md", "CLAUDE.md", ".github/workflows/release.yml", "companion/tests/test_web.py",
+              "companion/pyproject.toml"]
+    apps = version_check["app_changes"]
+    assert apps(others + ["addon/ForeverAI/Core.lua"], "0.5.2", "0.5.3", base.get, bump.get) == []
+    assert apps(["addon/ForeverAI/Core.lua"], "0.5.2", "0.5.3", base.get, edit.get) == ["addon/ForeverAI/Core.lua"]
+    changed = ["companion/foreverai/web.py", "companion/foreverai_app.py", "companion/requirements.txt",
+               "seed/kb.sqlite", "assets/foreverai.png", "build_linux.sh", "build_exe.ps1"]
+    assert apps(changed, "0.5.2", "0.5.3", base.get, bump.get) == changed
 
 
 def test_version_order():

@@ -11,22 +11,33 @@ The prebuilt apps are not committed. `.github/workflows/release.yml` builds both
 
 - Every pull request builds both apps (workflow artifacts). A push to `main` publishes the GitHub Release `v<version>` with both files and `SHA256SUMS.txt` when the version in the source has no release yet; the workflow creates the tag. So a version bump merged to `main` is a release, and changes merged without a bump are released with the next one. Pushing a tag `v<version>` also publishes it; the tag must match the version in the source.
 - `release/`, `build/` and `dist/` are local build output and ignored by git. Never commit build output.
-- The file names carry the platform (Windows / Linux) and must stay that way; `companion/foreverai/updates.py` (`asset_name`) finds the download for the update notice by these names, and `tests/test_release.py` checks that the scripts and the workflow agree.
+- The file names carry the platform (Windows / Linux) and must stay that way; `companion/foreverai/updates.py` (`asset_name`) finds the download for the update notice by these names, and `companion/tests/test_release.py` checks that the scripts and the workflow agree.
 - The starter knowledge base is `seed/kb.sqlite` (committed, bundled into both apps).
 
 ## Changes that affect the apps
 
-Anything that goes into the apps: `companion/**` (code, `requirements.txt`, `constraints.txt`), `addon/ForeverAI/**` (bundled and copied into the game folder), `assets/**`, `seed/kb.sqlite`, the version number, `build_exe.ps1`, `build_linux.sh`.
+Anything that goes into the apps: the code (`companion/foreverai/**`, `companion/foreverai_app.py`), `companion/requirements.txt`, `companion/constraints.txt`, `addon/ForeverAI/**` (bundled and copied into the game folder), `assets/**`, `seed/kb.sqlite`, the version number, `build_exe.ps1`, `build_linux.sh`. The tests in `companion/tests/` and the rest of `companion/pyproject.toml` do not; `.github/version_check.py` (`APP_PATHS`) uses the same list.
 
 - The CI builds both platforms for every pull request; check that both build jobs pass before you say a change is done. Do not merge or tag with one platform failing.
 - PyInstaller cannot cross-compile. Locally you can only build your own platform; never copy a build from one platform into the other.
-- Version number: `addon/ForeverAI/ForeverAI.toc`, `ns.version` in `addon/ForeverAI/Core.lua`, `companion/foreverai/__init__.py`, `companion/pyproject.toml` (all four together). Bumping it publishes a release once merged to `main`.
+
+### Version number
+
+The version is `X.Y.Z`, kept in four files that change together: `addon/ForeverAI/ForeverAI.toc`, `ns.version` in `addon/ForeverAI/Core.lua`, `companion/foreverai/__init__.py`, `companion/pyproject.toml` (`companion/tests/test_release.py` checks that they agree).
+
+Every pull request that changes what goes into the apps raises the version by one step from the version on `main`, so merging it publishes a release:
+
+- **Z (patch):** small changes, bug fixes and minor improvements.
+- **Y (minor):** a single new feature; Z goes back to 0.
+- **X (major):** a large set of changes that adds entirely new functionality to the add-on; Y and Z go back to 0. This is the user's decision: when a pull request might be major, ask them, and never raise X on your own.
+
+The step belongs to the pull request, not to its commits: with 0.5.2 on `main`, a pull request with a fix is 0.5.3, stays 0.5.3 with a second fix, and becomes 0.6.0 when a later commit adds a feature. When `main` gets a new version before the pull request is merged, merge `main` and take the step from that version. A pull request that changes nothing in the apps (the README, this file, tests, the workflow) keeps the version, since a bump would publish a release with nothing new in it. The workflow's `version` job checks both on every pull request.
 
 ### Before you finish
 
 1. Run the tests: `companion/.venv/bin/python -m pytest -q` (Linux) or `companion\.venv\Scripts\python.exe -m pytest -q` (Windows), in `companion`. They include a Lua 5.1 test of the add-on's auction code when `lua5.1` is installed; `luac5.1 -p addon/ForeverAI/*.lua` checks the add-on's syntax.
 2. If you changed what goes into the apps, build your platform and smoke-test it. `build_linux.sh` refuses to build while the app in `release/linux` is running (replacing its files breaks it): ask the user to close it. Linux: `release/linux/ForeverAI-Linux/ForeverAI-Linux --help` must print the usage. Windows (a windowed .exe prints nothing): check that `ForeverAI-Windows.exe` exists. On both: `_internal/seed/kb.sqlite` and `_internal/addon/ForeverAI/ForeverAI.toc` must be present, and the `## Version:` in that `.toc` must match the source.
-3. Push and check that the workflow's test, Linux and Windows jobs pass.
+3. Push and check that the workflow's test, version, Linux and Windows jobs pass.
 4. Mention in your summary which builds were checked and how (local build, CI run).
 
 ## Integrations with other add-ons

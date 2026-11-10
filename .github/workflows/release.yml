@@ -1,4 +1,5 @@
-# Builds the Windows and the Linux app from the same commit. Pull requests get both builds as workflow artifacts. A push
+# Builds the Windows and the Linux app from the same commit. Pull requests get both builds as workflow artifacts, and
+# the version job checks that a pull request changing the apps bumps the version (.github/version_check.py). A push
 # to main publishes them as the GitHub Release v<version> when the version in the source has no release yet (bump the
 # version to release); pushing a tag v<version> does the same:
 #   ForeverAI-<version>-Windows-x64.zip     -> ForeverAI-Windows/ForeverAI-Windows.exe
@@ -32,6 +33,19 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1
           for f in addon/ForeverAI/*.lua; do luac5.1 -p "$f"; done
+
+  version:
+    # a pull request that changes the apps raises the version by one step, so merging it publishes a release
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Version step
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: python3 .github/version_check.py "$BASE"
 
   build-linux:
     needs: test
