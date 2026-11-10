@@ -186,8 +186,10 @@ SCENARIOS = [
              [c.says(r"Narret Shadowgrove|Terunne Bearshaper"), c.calls("mark_on_map", 1, 2), c.max_words(150), PL])]),
     Scenario("mob_is_not_there", "\"nie ma zadnego tego moba dookola\": the spawn point from the database was "
                                  "repeated.", [
-        Turn("nie ma tu zadnego screechera dookola", [c.max_words(150), PL, c.never_says(r"PvP")],
-             patch={"target": None, "windows": None, "around": None})],
+        Turn("nie ma tu zadnego screechera dookola", [c.max_words(150), PL, c.never_says(r"PvP"), c.says(r"63[.,]0|120 m")],
+             patch={"target": None, "windows": None, "around": None, "marks": ["1. Strigid Screecher — Teldrassil 64.2, 69.2 (24 m)"],
+                    "tracked": ["Strigid Screecher: none in sight now; last seen alive 4 min ago near Teldrassil 63.0, 70.5 "
+                                "(120 m from here)"]})],
         history=[{"q": "co teraz?", "a": "Oswój [Strigid Screecher]: najbliższy jest 24 m od ciebie (64.2, 69.2). "
                                          "Zaznacz go i użyj [Taming Rod] (**F11**)."}]),
     Scenario("tame_is_not_kill", "The quest data said \"kill Strigid Screecher\" for a creature that has to be tamed, and a "
@@ -210,6 +212,14 @@ SCENARIOS = [
             ("[Light Armor Kit] po co to?", "Dodaje 8 Armor do klaty, nóg, rąk albo butów. Możesz też robić je dla skilla."),
             ("gdzie kupie coarse thread?", "U **Narret Shadowgrove** (Trade Supplies) w Dolanaar, 541 m stąd."),
             ("ok", "Powodzenia!")]]),
+    Scenario("tracked_creature_in_sight", "A point on the map does not find a creature; the game marks a living one in sight.", [
+        Turn("gdzie ta sowa? nie widze jej", [c.says(r"czaszk|ikon|skull"), c.max_words(150), PL, *QUIET],
+             patch={"target": None, "windows": None, "marks": ["1. Strigid Screecher — Teldrassil 64.2, 69.2 (24 m)"],
+                    "tracked": ["Strigid Screecher: 1 alive in sight now, marked with the skull raid icon"],
+                    "around": ["Strigid Screecher, level 8, neutral, Beast", "Strigid Owl, level 5, neutral, Beast"]})]),
+    Scenario("mark_a_creature", "Asked where a creature is: the mark comes with a watch for it.", [
+        Turn("gdzie znajde befouled webwood? oznacz",
+             [c.calls("mark_on_map", 1, 1), c.marks(51.5, 56.4), c.did(r"watching for: .*Befouled Webwood"), c.max_words(150), PL])]),
     Scenario("talents_from_the_build", "The build is in memory and the talent window is open.", [
         Turn("co tu wybrac?", [c.says(r"Endurance Training"), c.max_words(150), *QUIET], memory=[BUILD])]),
 ]

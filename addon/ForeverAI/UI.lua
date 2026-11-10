@@ -165,7 +165,7 @@ local function Scroll(parent)
 end
 
 ------------------------------------------------------------------------ state
-local main, panels, tabs, header, pill, footer, notice, reloadBtn, sendBtn, input, screenCheck
+local main, panels, tabs, header, pill, footer, notice, reloadBtn, sendBtn, input, screenCheck, strip
 local chat, emptyState
 local entries = {}
 local currentAnswer
@@ -350,7 +350,12 @@ function UI.UpdateAnswer(data)
     if metaText ~= "" then bubble("meta", metaText) end
     ns.RecordEntry({ k = "a", t = data.text or "", links = data.links, meta = metaText ~= "" and metaText or nil })
     for _, a in ipairs(data.actions or {}) do UI.ActionCard(a) end
-    if data.marks and #data.marks > 0 then UI.MarksCard(data.marks, data.marksReplace) end
+    local marked = data.marks and #data.marks > 0
+    if marked then UI.MarksCard(data.marks, data.marksReplace, data.track) end
+    -- the creatures to watch for belong to the marks: a new set of marks brings its own (or none)
+    if ns.Track and (marked or (type(data.track) == "table" and #data.track > 0)) then
+      ns.Track.Set(data.track or {}, data.marksReplace == false)
+    end
     if type(data.auction) == "table" and #data.auction > 0 then UI.AuctionCard(data.auction) end
     currentAnswer = nil
   else
@@ -481,7 +486,7 @@ function UI.ActionCard(action)
 end
 
 -- replace == false: the answer adds stops to the marks of earlier answers; otherwise its marks replace them
-function UI.MarksCard(marks, replace)
+function UI.MarksCard(marks, replace, track)
   if replace ~= false then ns.Map.Clear() end
   local placed, how = ns.Map.Apply(marks)
   if #placed == 0 then return end
@@ -489,9 +494,14 @@ function UI.MarksCard(marks, replace)
   for _, p in ipairs(placed) do
     lines[#lines + 1] = string.format("• %s  |cff9aa3ad(%s %.1f, %.1f)|r", esc(p.title), esc(p.zone or ""), p.x, p.y)
   end
+  local names = {}
+  for _, t in ipairs(type(track) == "table" and track or {}) do names[#names + 1] = esc(type(t) == "table" and t.name or t) end
+  if #names > 0 then
+    lines[#lines + 1] = "|cff9aa3adWatching for " .. table.concat(names, ", ") .. ": a living one in sight gets a raid icon.|r"
+  end
+  -- ending the marks or the watch is on the strip above the text field: this card scrolls away
   card("|cff7fd6ffMarked on the map|r |cff6a7380(" .. how .. ")|r\n" .. table.concat(lines, "\n"), { 0.3, 0.6, 0.9, 0.7 }, {
     { "Show map", 96, function() ns.Map.Show(placed[1].mapID) end, "primary" },
-    { "Clear marks", 110, function(self) ns.Map.Clear() self:Done("|cff8a93a0Marks cleared.|r") end },
   })
   relayout()
 end
@@ -826,6 +836,101 @@ local SUGGESTIONS = {
   "What did the latest hotfixes change?",
 }
 
+------------------------------------------------------------------------ status strip
+-- What the add-on keeps doing after the answer has scrolled away: a creature it watches for, the marked route. One
+-- chip each, above the text field, with a button that ends it. The strip slides open and closed.
+local STRIP_ROW, STRIP_GAP = 22, 4
+local chips = {}
+
+local function Chip(parent)
+  local c = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+  c:SetHeight(STRIP_ROW)
+  backdrop(c, { 1, 1, 1, 0.045 }, { 1, 1, 1, 0.09 })
+  c.dot = c:CreateTexture(nil, "OVERLAY")
+  c.dot:SetSize(6, 6)
+  c.dot:SetPoint("LEFT", 8, 0)
+  c.text = label(c, "", F.small)
+  c.text:SetPoint("LEFT", c.dot, "RIGHT", 6, 0)
+  c.text:SetJustifyV("MIDDLE")
+  if c.text.SetWordWrap then c.text:SetWordWrap(false) end
+  if c.text.SetMaxLines then c.text:SetMaxLines(1) end
+  c.close = Btn(c, "x", 20, 20, function(self) if c.onClose then c.onClose() end end, "ghost")
+  c.close:SetPoint("RIGHT", -1, 0)
+  return c
+end
+
+-- chips in a row, wrapping to a second row in a narrow window; returns the height they take
+local function layoutChips(items, width)
+  local x, row = 0, 0
+  for i, it in ipairs(items) do
+    local c = chips[i] or Chip(strip)
+    chips[i] = c
+    c.dot:SetColorTexture(unpack(it.color))
+    c.text:SetWidth(0)
+    c.text:SetText(it.text)
+    c.close.tip, c.onClose = it.tip, it.close
+    local textW = math.ceil(c.text.GetUnboundedStringWidth and c.text:GetUnboundedStringWidth() or c.text:GetStringWidth())
+    local w = math.min(width, textW + 8 + 6 + 6 + 6 + 22)
+    c.text:SetWidth(w - (8 + 6 + 6 + 6 + 22))
+    if x > 0 and x + w > width then x, row = 0, row + 1 end
+    c:ClearAllPoints()
+    c:SetPoint("TOPLEFT", strip, "TOPLEFT", x, -row * (STRIP_ROW + STRIP_GAP))
+    c:SetWidth(w)
+    c:Show()
+    x = x + w + 6
+  end
+  for i = #items + 1, #chips do chips[i]:Hide() end
+  return #items > 0 and ((row + 1) * STRIP_ROW + row * STRIP_GAP + 6) or 0
+end
+
+local function slideStrip(target)
+  strip.target = target
+  if target > 0 then strip:Show() end
+  if strip.sliding then return end
+  strip.sliding = true
+  strip:SetScript("OnUpdate", function(self, dt)
+    local h = self.height or 0
+    h = h + (self.target - h) * math.min(1, (dt or 0.016) * 16)
+    if math.abs(self.target - h) < 0.5 then h = self.target end
+    self.height = h
+    self:SetHeight(math.max(h, 0.001))
+    self:SetAlpha(self.full and self.full > 0 and math.min(1, h / self.full) or 1)
+    if h == self.target then
+      self.sliding = false
+      self:SetScript("OnUpdate", nil)
+      if h == 0 then self:Hide() end
+      if chat and chat.stick then chat:ToBottom() end
+    end
+  end)
+end
+
+function UI.UpdateStrip()
+  if not strip then return end
+  local items = {}
+  for _, t in ipairs(ns.Track and ns.Track.State() or {}) do
+    local seen = t.alive > 0
+    items[#items + 1] = {
+      color = seen and { 0.36, 1, 0.62, 1 } or { 0.85, 0.64, 0.26, 1 },
+      text = string.format("|cff9aa3adTracking|r %s |cff%s· %s|r", esc(t.name), seen and "5dff9d" or "d9a441",
+        seen and (t.alive .. " in sight") or "none in sight"),
+      tip = "Stop tracking " .. t.name,
+      close = function() ns.Track.Stop(t.name) end,
+    }
+  end
+  local stops = ns.Map and ns.Map.Count and ns.Map.Count() or 0
+  if stops > 0 then
+    items[#items + 1] = {
+      color = { 0.3, 0.6, 0.9, 1 },
+      text = string.format("|cff9aa3adRoute|r · %d stop%s", stops, stops == 1 and "" or "s"),
+      tip = "Clear the marks on the map",
+      close = function() ns.Map.Clear() end,
+    }
+  end
+  local h = layoutChips(items, math.max(100, strip:GetWidth()))
+  if h > 0 then strip.full = h end
+  slideStrip(h)
+end
+
 local function build()
   local pos = ns.db.window
   main = CreateFrame("Frame", "ForeverAIFrame", UIParent, "BackdropTemplate")
@@ -950,9 +1055,17 @@ local function build()
     ns.ApplyTooltipFont()
   end)
   screenCheck:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  strip = CreateFrame("Frame", nil, pc)
+  strip:SetPoint("BOTTOMLEFT", inputBar, "TOPLEFT", 0, 0)
+  strip:SetPoint("BOTTOMRIGHT", inputBar, "TOPRIGHT", 0, 0)
+  strip:SetHeight(0.001)
+  strip:Hide()
+  strip:SetScript("OnSizeChanged", function(self, w)
+    if self.lastW ~= w then self.lastW = w C_Timer.After(0, UI.UpdateStrip) end -- chips wrap in a narrow window
+  end)
   chat = Scroll(pc)
   chat:SetPoint("TOPLEFT", 10, -6)
-  chat:SetPoint("BOTTOMRIGHT", inputBar, "TOPRIGHT", 0, 6)
+  chat:SetPoint("BOTTOMRIGHT", strip, "TOPRIGHT", 0, 6)
   chat:HookScript("OnSizeChanged", function() C_Timer.After(0, relayout) end)
   emptyState = CreateFrame("Frame", nil, pc)
   emptyState:SetPoint("CENTER", chat, "CENTER", 0, 20)
@@ -1039,6 +1152,7 @@ local function build()
     UI.UpdateHeader()
     UI.UpdateBusy()
     UI.ShowTab(activeTab)
+    UI.UpdateStrip()
   end)
 end
 

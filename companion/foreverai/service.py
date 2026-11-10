@@ -55,6 +55,7 @@ SCREEN_NOTE = ("The player attached the current screen as an image (top-left cor
 MAX_SESSION_TURNS = 14
 MAX_SESSION_CHARS = 350_000  # ~90k tokens of questions and tool results; answers and thinking come on top
 MAX_MARKS = 12  # marks one answer can set: a route through a full quest log (route.EXACT_MAX)
+MAX_TRACKED = 5  # creatures the add-on watches for at once (one raid icon each)
 
 
 def model_name(model_id: str) -> str:
@@ -128,6 +129,7 @@ class TurnContext:
         self.marks: list[dict] = []
         self.mark_adds: list[bool] = []  # per mark_on_map call: the model asked to keep the earlier marks
         self.route_marked = False  # the marks so far are plan_route's own
+        self.track: list[dict] = []  # creatures the game watches for with these marks: {"name", "quest"}
         self.phase_cb: Callable[[str], None] = lambda p: None
         self.pre_urls: set[str] = set()
         self.known: dict = {}  # addon options the game reported in this answer (validates proposals)
@@ -159,7 +161,14 @@ class TurnContext:
                 out.append(f"proposed abandoning [{a.get('title')}]")
             else:
                 out.append(f"proposed a change in {a.get('addon')}: {str(a.get('description') or '')[:80]}")
+        if self.track:
+            out.append("watching for: " + ", ".join(t["name"] for t in self.track))
         return out + self.notes
+
+    def watch(self, name: str, quest: str | None = None) -> None:
+        name = str(name or "").strip("[] ")[:60]
+        if name and len(self.track) < MAX_TRACKED and all(t["name"].lower() != name.lower() for t in self.track):
+            self.track.append({"name": name, **({"quest": quest} if quest else {})})
 
     @property
     def replaces_marks(self) -> bool:
@@ -671,7 +680,7 @@ class Service:
         final_text = md_to_wow(text) if text else "(no answer)"
         writer.send({"kind": "answer", "final": True, "msgId": msg_id, "text": final_text, "sources": ctx.used_sources(text),
                      "actions": ctx.actions, "marks": ctx.marks, "marksReplace": ctx.replaces_marks,
-                     "cost": self.last_cost, "model": model,
+                     "track": ctx.track, "cost": self.last_cost, "model": model,
                      **({"costNote": "Gemini API"} if is_gemini else {}),
                      "links": self.links(text, ctx), "auction": ctx.auction_card(text),
                      "secs": round(time.monotonic() - started, 1),
@@ -752,7 +761,7 @@ class Service:
             mark, text = validate_mark(args)
             add = args.get("add") is True
             if mark and ctx.route_marked and not add:  # the model marks its own choice of the route's stops
-                del ctx.marks[:], ctx.mark_adds[:]
+                del ctx.marks[:], ctx.mark_adds[:], ctx.track[:]
             if mark:
                 ctx.route_marked = False
             if mark and len(ctx.marks) >= MAX_MARKS:
@@ -762,6 +771,9 @@ class Service:
                 ctx.mark_adds.append(add)
                 text = text.rstrip(".") + (", added to your earlier marks." if add else
                                            "; the marks of your earlier answers are off the map.")
+                if args.get("mob"):
+                    ctx.watch(args["mob"])
+                    text += f" The game watches for {ctx.track[-1]['name']}: a living one in sight gets a raid icon."
             return text, mark is None
         if name == "plan_route":
             from .route import plan_route
@@ -778,7 +790,10 @@ class Service:
                                end_title=str(args.get("end_title") or "")[:60] or None)
             text = route["text"]
             if args.get("mark") is not False and route["stops"]:
-                del ctx.marks[:], ctx.mark_adds[:]  # the route is the whole set of marks of this answer
+                del ctx.marks[:], ctx.mark_adds[:], ctx.track[:]  # the route is the whole set of marks of this answer
+                for stop in route["stops"][:MAX_MARKS]:
+                    if stop.get("mob"):
+                        ctx.watch(stop["mob"], stop.get("quest"))
                 for n, stop in enumerate(route["stops"][:MAX_MARKS], 1):
                     ctx.marks.append({"title": f"{n}. {stop['title']}"[:60], "x": round(stop["x"], 1),
                                       "y": round(stop["y"], 1), "zone": stop["zone"]})
@@ -1096,7 +1111,7 @@ class Service:
         writer.send({"kind": "answer", "final": True, "msgId": msg_id,
                      "text": md_to_wow(text) if text else "(no answer)", "links": self.links(text, ctx),
                      "auction": ctx.auction_card(text),
-                     "marks": ctx.marks, "marksReplace": ctx.replaces_marks,
+                     "marks": ctx.marks, "marksReplace": ctx.replaces_marks, "track": ctx.track,
                      "sources": ctx.used_sources(text), "actions": ctx.actions,
                      "model": model_name(s.claude_model),
                      "costNote": "Claude subscription", "secs": round(time.monotonic() - started, 1),

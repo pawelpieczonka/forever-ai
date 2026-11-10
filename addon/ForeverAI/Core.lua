@@ -298,6 +298,10 @@ SlashCmdList.FOREVERAI = function(msg)
   elseif msg == "button" then
     ns.db.button.show = not ns.db.button.show
     ns.Button.Refresh()
+  elseif msg == "stop" then -- ends what the add-on keeps doing: the watch for creatures and the marks on the map
+    if ns.Track then ns.Track.Stop() end
+    if ns.Map then ns.Map.Clear() end
+    ns.print("Tracking stopped and marks cleared.")
   elseif msg == "progress" then
     if ns.Progress then ns.Progress.Debug() end
   elseif msg == "professions" then

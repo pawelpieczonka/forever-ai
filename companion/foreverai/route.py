@@ -124,7 +124,8 @@ def _named(title: str, names) -> bool:
 
 def plan_route(snapshot: dict, new_quests: bool | list = False, skip: list | None = None, last: list | None = None,
                end: tuple[float, float] | None = None, end_title: str | None = None) -> dict:
-    """{"stops": [{"title", "what", "note", "x", "y", "zone", "meters"}], "left_out": [...], "meters": total, "text"}.
+    """{"stops": [{"title", "what", "note", "x", "y", "zone", "meters", "mob", "quest"}], "left_out": [...],
+    "meters": total, "text"}; "mob" is the creature to look for at a stop (None for objects and NPCs to talk to).
 
     ``skip``: quest titles to leave out; ``last``: quests done after everything else (hard ones); ``new_quests``: the
     titles of nearbyQuests to pick up (True: all of this zone); ``end``: map coordinates in this zone where the player
@@ -168,8 +169,11 @@ def plan_route(snapshot: dict, new_quests: bool | list = False, skip: list | Non
                     left_out.append(f"[{title}]: {label} in {m.group('zone')} ({m.group('x')}, {m.group('y')}), another zone")
                     blocked = True
                 else:
+                    how = _HOW.match(m.group("desc"))
+                    creature = bool(how) and how.group(1).lower() in ("kill", "find", "dropped by")
                     objectives.append({"title": _name(m.group("desc")), "what": f"[{title}]: {m.group('desc')}",
-                                       "xy": (float(m.group("x")), float(m.group("y"))), "after": []})
+                                       "xy": (float(m.group("x")), float(m.group("y"))), "after": [],
+                                       "mob": _name(m.group("desc")) if creature else None, "quest": title})
             if not objectives and not blocked:  # still to do, and nothing says where: the turn-in is not a stop yet
                 left_out.append(f"[{title}]: no known place for what is left to do" + (f" ({todo})" if todo else ""))
                 blocked = True
@@ -217,7 +221,8 @@ def plan_route(snapshot: dict, new_quests: bool | list = False, skip: list | Non
         meters = int(round(math.hypot(node["at"][0] - pos[0], node["at"][1] - pos[1]))) if scale else None
         total += meters or 0
         stops.append({"title": node["title"], "what": node["what"], "note": node["note"], "x": node["xy"][0],
-                      "y": node["xy"][1], "zone": zone, "meters": meters})
+                      "y": node["xy"][1], "zone": zone, "meters": meters, "mob": node.get("mob"),
+                      "quest": node.get("quest")})
         pos = node["at"]
     if stops:
         length = f", about {total / 1000:.1f} km" if scale else ""

@@ -820,3 +820,46 @@ def test_tool_results_count_toward_the_size_of_a_claude_session(env):
     text, _ = svc.tool_from_bridge("search_knowledge_base", {"query": "x"})
     assert svc._claude.sent_chars == 1000 + len(text) and len(text) > 10
     svc._claude = None
+
+
+def test_creatures_of_a_route_and_of_a_mark_are_tracked(env):
+    """The game watches for the creatures the player is sent to: the reply names them (and the quest they are for)."""
+    svc, addons, _ = env
+    snapshot = {"player": {"coords": "50.0, 50.0", "map": "Teldrassil", "level": 10}, "quests": [
+        {"id": 1, "title": "Far Hunt", "status": "in progress", "turnIn": "Giver (Teldrassil 50.0, 60.0)",
+         "whereToGet": ["Boar: kill Boar (level 5) — Teldrassil 80.0, 50.0 (2400 m, 9 spawn points in your zone)",
+                        "Old Chest: from object Old Chest — Teldrassil 70.0, 50.0 (1600 m, 1 spawn point in your zone)"]}]}
+    ctx = _ctx(svc, addons, snapshot)
+    svc.run_tool(ctx, "plan_route", {})
+    assert ctx.track == [{"name": "Boar", "quest": "Far Hunt"}]  # not the chest, not the quest giver
+    assert "watching for: Boar" in ctx.did()
+
+    ctx = _ctx(svc, addons, snapshot)
+    text, err = svc.run_tool(ctx, "mark_on_map", {"title": "Strigid Screecher", "x": 64.2, "y": 69.2,
+                                                  "mob": "Strigid Screecher"})
+    assert not err and ctx.track == [{"name": "Strigid Screecher"}] and "a living one in sight gets a raid icon" in text
+    svc.run_tool(ctx, "mark_on_map", {"title": "Dazalar", "x": 56.7, "y": 59.5})
+    assert ctx.track == [{"name": "Strigid Screecher"}]
+    # marks the model sets after a route replace the route's marks, and with them what the route tracked
+    ctx = _ctx(svc, addons, snapshot)
+    svc.run_tool(ctx, "plan_route", {})
+    svc.run_tool(ctx, "mark_on_map", {"title": "Only this", "x": 65, "y": 50})
+    assert ctx.track == []
+
+
+def test_the_reply_tells_the_game_what_to_track(env):
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            if not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall("c1", "mark_on_map",
+                                              '{"title": "Strigid Screecher", "x": 64.2, "y": 69.2, "mob": "Strigid Screecher"}')]
+                return
+            yield "text", "Marked."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "where is it",
+                "snapshot": {}})
+    d = _wait_final(addons, 3)
+    assert d["track"] == [{"name": "Strigid Screecher"}] and len(d["marks"]) == 1

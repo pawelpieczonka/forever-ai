@@ -76,6 +76,14 @@ def marked(lo: int, hi: int) -> Check:
     return check
 
 
+def did(pattern: str) -> Check:
+    """Something the answer did besides its text (a mark, a proposal, a creature to watch for) matches."""
+    def check(turn: dict) -> Result:
+        lines = turn.get("did") or []
+        return Result(f"did: {pattern}", any(re.search(pattern, line, re.I) for line in lines), "; ".join(lines)[:200])
+    return check
+
+
 def never_marks(pattern: str) -> Check:
     """No mark of the answer has a title that matches."""
     def check(turn: dict) -> Result:

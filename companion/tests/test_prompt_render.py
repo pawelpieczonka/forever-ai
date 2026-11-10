@@ -64,3 +64,11 @@ def test_profession_tools_in_the_bags_are_named():
     assert '"item":"[Skinning Knife]","id":7005,"count":1,"professionTool":"Skinning"' in out
     assert '"item":"[Mining Pick]","id":2901,"count":1,"professionTool":"Mining"' in out
     assert out.count("professionTool") == 2 and bags["items"][0].get("professionTool") is None  # the snapshot stays as it came
+
+
+def test_tracked_creatures_come_right_after_the_marks():
+    text = render_snapshot({"quests": ["Quest log: 1/40"], "marks": ["1. Screecher — Teldrassil 64.2, 69.2 (24 m)"],
+                            "tracked": ["Strigid Screecher: none in sight now; not seen since it is tracked"],
+                            "nearbyQuests": [{"title": "x"}]})
+    assert text.index("## marks") < text.index("## tracked") < text.index("## nearbyQuests")
+    assert "- Strigid Screecher: none in sight now; not seen since it is tracked" in section(text, "tracked")

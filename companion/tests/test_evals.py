@@ -141,3 +141,9 @@ def test_never_marks_looks_at_every_mark_of_the_answer():
                             "marked on the map: 2. Athridas Bearmantle (56.0, 57.3)"])
     assert not c.never_marks(r"Athridas|Ursal")(t).ok and c.never_marks(r"Mist")(t).ok
     assert c.never_marks(r"Athridas|Ursal")(t).detail == "marked: 2. Athridas Bearmantle"
+
+
+def test_did_check_reads_what_the_answer_did():
+    t = turn("ok", did=["marked on the map (earlier marks removed): Befouled Webwood (51.5, 56.4)", "watching for: Befouled Webwood"])
+    assert c.did(r"watching for: .*Befouled Webwood")(t).ok and not c.did(r"watching for: .*Screecher")(t).ok
+    assert c.did(r"watching for: .*Screecher")(t).label == "did: watching for: .*Screecher"

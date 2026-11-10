@@ -50,6 +50,15 @@ end
 
 local function usesTomTom() return TomTom and TomTom.AddWaypoint end
 
+-- the window shows how many stops are marked
+local function changed()
+  if ns.UI and ns.UI.UpdateStrip then pcall(ns.UI.UpdateStrip) end
+end
+
+function M.Count()
+  return ns.char and ns.char.marks and #ns.char.marks or 0
+end
+
 -- the arrow leads to the first stop
 local function point(mk)
   local uid = mk and M.uids[mk]
@@ -94,6 +103,7 @@ function M.Apply(marks)
     end
   end
   M.last = placed
+  changed()
   return placed, usesTomTom() and "TomTom" or "map pin"
 end
 
@@ -102,6 +112,7 @@ function M.Clear()
   wipe(M.uids)
   if ns.char then ns.char.marks = {} end
   if C_Map.ClearUserWaypoint then pcall(C_Map.ClearUserWaypoint) end
+  changed()
 end
 
 -- After login, /reload or a loading screen the saved marks are on the map once: what this session already placed
@@ -141,6 +152,7 @@ function M.Check()
     end
   end
   if reached then
+    changed()
     if saved[1] then point(saved[1]) elseif not usesTomTom() and C_Map.ClearUserWaypoint then pcall(C_Map.ClearUserWaypoint) end
   end
 end
