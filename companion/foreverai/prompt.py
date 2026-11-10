@@ -57,7 +57,7 @@ Examples of the right size (shown in English here; the real answer is in the pla
 
 # Game data (attached to every question; a snapshot of that moment)
 
-- player, stats, gearTotals (stats from all equipped items), equipment, bags, talents, spells (with each spell's description), actionBars (every bar the interface has, shown or hidden, with each button's key and action), skills, auras, reputations, pet.
+- player, stats, gearTotals (stats from all equipped items), equipment (with the ammunition slot for a hunter: "Ammo"; arrows stay in the bags when they are equipped), bags (an item that is not equipment has a tooltip with what it does), talents (unspent = points to spend now, picked, canPick = the talents a point can go into right now with what they do), spells (with each spell's description), actionBars (the bars the player sees, each used button with its key and action; "not on a shown bar" = placed on a bar that is hidden now), skills, auras, reputations, pet.
 - quests: the quest log with each quest's status (READY TO TURN IN / in progress / FAILED), every objective marked [DONE] or [TO DO], the full quest text (description, objectiveText), time left, rewards, quest giver and turn-in NPC with coordinates, and whereToGet: for every unfinished objective which creature, object or item it needs and where, each with the nearest spawn point, the distance and the number of spawn points in the player's zone.
 - marks: your marks that are on the player's map right now, in walking order, with the distance. A stop leaves the list when the player reaches it; the marks survive a /reload. No marks section: nothing of yours is marked.
 - nearbyQuests: quests available nearby (from the Questie database; may differ slightly in Forever).
@@ -69,13 +69,13 @@ Examples of the right size (shown in English here; the real answer is in the pla
 - Items have facts: stats ("NONE" = certainly no stats), required level, cannotUse (cannot equip), vsEquipped (difference to the equipped item), vendor price.
 - nearby: players the add-on noticed (not a complete list); addons: installed add-ons.
 - Answer from this data. If you were wrong earlier in the conversation and the data says otherwise, correct yourself plainly. A screenshot comes only when the player chose to attach one; even then the game data comes first.
-- What the data cannot show, so do not conclude anything from its absence: the ammunition slot (arrows stay in the bags when equipped); what a bag item does unless it has a tooltip or is the item in the tooltip section; the player's current health; whether a creature or NPC stands at its spawn point right now; whether a spot lies in a cave or on another floor. Say "I cannot see that" for these, briefly.
+- What the data cannot show, so do not conclude anything from its absence: the player's current health; whether a creature or NPC stands at its spawn point right now; whether a spot lies in a cave or on another floor; what an item without a tooltip does. Say "I cannot see that" for these, briefly.
 
 # Quests
 
 - State a quest's progress only from its status and objectives in the data; never guess. A FAILED quest must be abandoned and picked up again.
 - Where to get or do an objective: answer from whereToGet (and nearbyMobs), with the place and distance. Do not say the data does not tell where when whereToGet has it, and do not send the player to the quest log or a wiki for it.
-- whereToGet comes from a database of the original game. It says "kill" for every creature it names: when the objective is something else (talk to, tame, escort, raise a skill), the line only tells where that creature or NPC is. A spawn point is where a creature usually is, not proof that one is there now: when the player says there are none, believe them and give the next spawn area or what nearbyMobs and around show.
+- whereToGet comes from a database of the original game. "kill" is a creature the objective wants dead; "find" is a creature or NPC the objective needs for something else (talk to, tame, escort, use an item on): read the objective and the quest text for what to do with it, and never tell the player to kill it. A spawn point is where a creature usually is, not proof that one is there now: when the player says there are none, believe them and give the next spawn area or what nearbyMobs and around show.
 - "Should I take this quest?": yes or no first, with the one reason that decides it (its level against the player's, whether it lies on the way, a reward the build wants).
 - Reward choices: name the pick and why in a sentence. The build in memory decides first, then stats (vsEquipped), then the vendor price when nothing is useful.
 - Propose abandoning a quest (failed, not needed, full quest log, or the player asks) with propose_quest_abandon; the player confirms with a click and it cannot be undone.
@@ -154,6 +154,59 @@ def _fmt(v: Any) -> str:
     return str(v)
 
 
+def _nearby(players: list, me: str | None) -> str | None:
+    """Players around: how many, who (name, level, class) and who is targeting the player. Race, guild, what each
+    one targets and their gear were 6,000 characters per question and made every answer warn about PvP."""
+    people = [p for p in players if isinstance(p, dict) and p.get("name")]
+    if not people:
+        return None
+
+    def short(p: dict) -> str:
+        return str(p["name"]).split("-", 1)[0]
+    levels = [p["level"] for p in people if isinstance(p.get("level"), (int, float))]
+    span = f", levels {min(levels)}-{max(levels)}" if levels else ""
+    names = ", ".join(" ".join(str(x) for x in (short(p), p.get("level"), p.get("class")) if x) for p in people[:15])
+    more = f" and {len(people) - 15} more" if len(people) > 15 else ""
+    lines = [f"{len(people)} players noticed nearby{span}: {names}{more}"]
+    for p in people:
+        if me and str(p.get("targeting") or "") == me:
+            seen = str(p.get("seen") or "").split(" (")[0]
+            lines.append(f"- targeting the player: {short(p)}, level {p.get('level')} {p.get('class')}"
+                         + (", PvP flagged" if p.get("pvp") else "") + (f", {seen}" if seen else ""))
+    return "\n".join(lines)
+
+
+def _quests(quests: list) -> list:
+    """A quest that only has to be turned in needs its turn-in NPC, not its story."""
+    out = []
+    for q in quests:
+        if isinstance(q, dict):
+            drop = {"tracked"} | ({"description"} if str(q.get("status") or "").startswith("READY") else set())
+            q = {k: v for k, v in q.items() if k not in drop}
+        out.append(q)
+    return out
+
+
+def _equipment(slots: list) -> list:
+    """Empty slots in one line."""
+    worn = [e for e in slots if not (isinstance(e, dict) and e.get("item") == "(empty)")]
+    empty = [str(e.get("slot")) for e in slots if isinstance(e, dict) and e.get("item") == "(empty)"]
+    return worn + (["empty slots: " + ", ".join(empty)] if empty else [])
+
+
+def _action_bars(lines: list) -> list:
+    """Older add-ons listed every button container, used or not, and the hidden bars: leave those out."""
+    out, skip = [], False
+    for line in lines:
+        if isinstance(line, str) and not line.startswith(" ") and " — " in line and "buttons used" in line:
+            skip = ", 0 of " in line or " — hidden, " in line
+        elif isinstance(line, str) and not line.startswith(" "):
+            skip = False
+        if not skip:
+            out.append(line)
+    return out
+
+
 def render_snapshot(snap: dict, max_chars: int = 200000) -> str:
     """Game data as text. Nothing is cut inside a section; only if the whole text would exceed ``max_chars`` are the
     lowest-priority sections (the end of SECTION_ORDER) left out, and the model is told which."""
@@ -175,6 +228,13 @@ def render_snapshot(snap: dict, max_chars: int = 200000) -> str:
         if key in ("progress", "professions"):
             parts.append((key, f"## {key}\n{(progress if key == 'progress' else professions).render(val)}"))
             continue
+        if key == "nearby" and isinstance(val, list):
+            body = _nearby(val, (snap.get("player") or {}).get("name") if isinstance(snap.get("player"), dict) else None)
+            if body:
+                parts.append((key, f"## {key}\n{body}"))
+                continue
+        if isinstance(val, list):
+            val = {"quests": _quests, "equipment": _equipment, "actionBars": _action_bars}.get(key, lambda v: v)(val)
         if isinstance(val, dict):
             lines = [f"{k}: {_fmt(v)}" for k, v in val.items() if v not in (None, "", [], {})]
             body = "\n".join(lines)

@@ -1,10 +1,10 @@
 {
  "talents": {
-  "unspentTalents": 0,
   "trees": [
    {
     "config": "class",
-    "unspent": "2/2",
+    "unspent": 2,
+    "earned": 2,
     "nodes": 52,
     "tree": 1091,
     "picked": []
@@ -290,7 +290,8 @@
     "id": 6948,
     "bound": true,
     "count": 1,
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "Soulbound\nUnique\nUse: Returns you to Shadowglen.  Speak to an Innkeeper in a different place to change your home location."
    },
    {
     "item": "[Light Armor Kit]",
@@ -298,7 +299,8 @@
     "id": 2304,
     "sellCopper": 15,
     "sellPrice": "0g 0s 15c",
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "Use: Permanently increase the armor value of an item worn on the chest, legs, hands or feet by 8.  Only usable on items level 1 and above."
    },
    {
     "item": "[Kaldorei Spider Kabob]",
@@ -330,7 +332,8 @@
     "id": 159,
     "sellCopper": 1,
     "sellPrice": "0g 0s 1c",
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "Use: Restores 151 mana over 18 sec.  Must remain seated while drinking."
    },
    {
     "item": "[Shiny Red Apple]",
@@ -346,7 +349,8 @@
     "id": 1251,
     "sellCopper": 10,
     "sellPrice": "0g 0s 10c",
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "Requires First Aid (1)\nUse: Heals 66 damage over 6 sec."
    },
    {
     "id": 279981,
@@ -398,7 +402,8 @@
     "id": 15923,
     "bound": true,
     "count": 1,
-    "quality": "common"
+    "quality": "common",
+    "tooltip": "Quest Item\nUnique\nUse: Begins taming a Strigid Screecher to be your companion for 10 minutes.  If you lose the beast's attention for any reason, the taming process will fail."
    },
    {
     "item": "[Recipe: Kaldorei Spider Kabob]",
@@ -1248,7 +1253,7 @@
    "rewards": "270 XP",
    "turnIn": "Nadyia Maneweaver (Teldrassil 41.9, 49.4)",
    "whereToGet": [
-    "Nadyia Maneweaver: kill Nadyia Maneweaver (level 30) — Teldrassil 41.9, 49.4 (1191 m, 1 spawn point in your zone)"
+    "Nadyia Maneweaver: find Nadyia Maneweaver (level 30) — Teldrassil 41.9, 49.4 (1191 m, 1 spawn point in your zone)"
    ],
    "title": "Camping 101: Leatherworking",
    "questGiver": "Lyreena Duskblade (Teldrassil 57.6, 56.6)",
@@ -1263,7 +1268,7 @@
    "rewards": "270 XP",
    "turnIn": "Radnaal Maneweaver (Teldrassil 42.1, 50.0)",
    "whereToGet": [
-    "Radnaal Maneweaver: kill Radnaal Maneweaver (level 19) — Teldrassil 42.1, 50.0 (1175 m, 1 spawn point in your zone)"
+    "Radnaal Maneweaver: find Radnaal Maneweaver (level 19) — Teldrassil 42.1, 50.0 (1175 m, 1 spawn point in your zone)"
    ],
    "questGiver": "Lyreena Duskblade (Teldrassil 57.6, 56.6)",
    "title": "Camping 101: Skinning",
@@ -1279,7 +1284,7 @@
    "rewards": "850 XP",
    "turnIn": "Dazalar (Teldrassil 56.7, 59.5)",
    "whereToGet": [
-    "Strigid Screecher: kill Strigid Screecher (level 7-8) — Teldrassil 64.2, 69.2 (24 m, 36 spawn points in your zone)"
+    "Strigid Screecher: find Strigid Screecher (level 7-8) — Teldrassil 64.2, 69.2 (24 m, 36 spawn points in your zone)"
    ],
    "questGiver": "Dazalar (Teldrassil 56.7, 59.5)",
    "title": "Taming the Beast",
@@ -1427,6 +1432,11 @@
   {
    "item": "(empty)",
    "slot": "Tabard"
+  },
+  {
+   "slot": "Ammo",
+   "item": "[Sharp Arrow]",
+   "count": 1387
   }
  ]
 }

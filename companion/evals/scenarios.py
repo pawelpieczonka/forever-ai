@@ -87,6 +87,8 @@ A_QUEST_NEXT_TO_THE_ROUTE = {"marks": ROUTE_MARKS, "nearbyQuests": [
     + base_snapshot()["nearbyQuests"]}
 BUILD = ("Build: Gladius Gaming \"Forever Solo Hunter\" (BM, Solo). Talents: Endurance Training 5, Unleashed Fury 5, "
          "Summon Hawk, Ferocity 5, Bestial Wrath. Stat: Agility.")
+NO_AMMO = [e for e in base_snapshot()["equipment"] if e.get("slot") != "Ammo"] + [
+    {"slot": "Ammo", "item": "(empty: nothing in the ammunition slot)"}]
 QUIET = [c.calls("mark_on_map", 0, 0), c.never_says(r"PvP")]
 PL = c.language("pl")
 
@@ -163,7 +165,7 @@ SCENARIOS = [
              [c.never_says(r"Baganator", r"/reload", r"/run", r"EquipItemByName"), c.max_words(90),
               c.at_most(1, r"Classic"), *QUIET],
              patch={"recentEvents": ["6s ago [error] Must have ammo equipped in the ammo slot (x3)"]
-                    + base_snapshot()["recentEvents"], "windows": None})],
+                    + base_snapshot()["recentEvents"], "windows": None, "equipment": NO_AMMO})],
         history=[{"q": "czemu nie moge uzywac luku???",
                   "a": "Gra zgłasza \"Must have ammo equipped in the ammo slot\": strzały nie są założone. Kliknij "
                        "prawym przyciskiem [Sharp Arrow] w torbie."}]),
@@ -177,6 +179,10 @@ SCENARIOS = [
              patch={"target": None, "windows": None, "around": None})],
         history=[{"q": "co teraz?", "a": "Oswój [Strigid Screecher]: najbliższy jest 24 m od ciebie (64.2, 69.2). "
                                          "Zaznacz go i użyj [Taming Rod] (**F11**)."}]),
+    Scenario("tame_is_not_kill", "The quest data said \"kill Strigid Screecher\" for a creature that has to be tamed, and a "
+                                 "route told the player to kill it.", [
+        Turn("jak zrobic tego questa z sowa?", [c.says(r"Taming Rod"), c.never_says(r"\bzabij", r"\bzabić"), c.max_words(90), PL,
+                                               *QUIET])]),
     Scenario("talents_from_the_build", "The build is in memory and the talent window is open.", [
         Turn("co tu wybrac?", [c.says(r"Endurance Training"), c.max_words(80), *QUIET], memory=[BUILD])]),
 ]

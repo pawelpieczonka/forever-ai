@@ -257,6 +257,7 @@ for _, name in ipairs({
   "GetSpecializationInfoByID", "GetTitleText", "GetTrainerServiceCost", "GetTrainerServiceInfo",
   "GetTrainerServiceLevelReq", "GetTrainerServiceSkillReq", "HasAction", "NotifyInspect", "RepairAllItems", "SetAbandonQuest", "GetNumFactions",
   "GetFactionInfo", "GetNumSpellTabs", "GetSpellTabInfo", "GetSpellBookItemName", "GetContainerNumSlots",
+  "GetInventoryItemCount",
 }) do
   if _G[name] == nil then _G[name] = empty(name) end
 end
