@@ -624,27 +624,6 @@ def _wait_final(addons, n, timeout=5):
     raise AssertionError("no final answer")
 
 
-def test_every_answered_question_is_recorded_for_replay(env):
-    svc, addons, _ = env
-    snapshot = {"game": {"build": "1.60.1.70862"}, "quests": [{"title": "The Balance of Nature"}]}
-    svc.handle({"type": "question", "msgId": 42, "session": "S1", "nextInbox": 3, "conv": "c", "char": "Aldric-Realm",
-                "text": "What should I do with my quest?", "snapshot": snapshot})
-    _wait_final(addons, 3)
-    (rec,) = svc.turns.load()
-    assert rec["question"] == "What should I do with my quest?" and rec["snapshot"] == snapshot
-    assert rec["conv"] == "c" and rec["char"] == "Aldric-Realm" and rec["history"] == [] and rec["memory"] == []
-    assert "[Young Nightsaber]" in rec["answer"]
-    assert [(t["name"], t["args"]) for t in rec["tools"]] == [("search_knowledge_base", {"query": "Balance of Nature"})]
-    assert rec["tools"][0]["result"] == "The knowledge base is not available." and rec["tools"][0]["error"] is False
-    assert rec["provider"] == "openrouter" and rec["model"] == "openai/gpt-6-luna"
-    assert rec["secs"] >= 0 and len(rec["promptHash"]) == 8 and rec["at"].startswith("20")
-    # the second question of the conversation is recorded with the history the model got
-    svc.handle({"type": "question", "msgId": 43, "session": "S1", "nextInbox": 8, "conv": "c", "char": "Aldric-Realm",
-                "text": "And then?", "snapshot": snapshot})
-    _wait_final(addons, 8)
-    assert [h["q"] for h in svc.turns.load()[-1]["history"]] == ["What should I do with my quest?"]
-
-
 class MarkingClient(FakeClient):
     def chat_stream(self, model, messages, tools, search_mode, max_tokens):
         if not any(m["role"] == "tool" for m in messages):
@@ -663,7 +642,6 @@ def test_what_an_answer_did_stays_in_the_conversation(env):
     (turn,) = svc.convs.history("c")
     assert turn["did"] == ["marked on the map (earlier marks removed): Dazalar (56.7, 59.5)",
                            "saved to memory: Plays Beast Mastery"]
-    assert svc.turns.load()[-1]["did"] == turn["did"]
 
 
 def test_marks_of_an_answer_replace_earlier_ones_unless_added(env):
@@ -693,8 +671,6 @@ def test_marks_of_an_answer_replace_earlier_ones_unless_added(env):
     d = ask(8, [{"title": "Lyreena", "x": 57.6, "y": 56.6, "add": True}])
     assert d["marksReplace"] is False
     assert svc.convs.history("c")[-1]["did"] == ["added to the marks on the map: Lyreena (57.6, 56.6)"]
-    tool = svc.turns.load()[-1]["tools"][0]
-    assert tool["result"] == "Marked on the map: Lyreena (57.6, 56.6), added to your earlier marks."
 
 
 def test_claude_sessions_started_together_get_their_own_folders(env, monkeypatch):

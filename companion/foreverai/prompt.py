@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import datetime
 from typing import Any
@@ -141,11 +140,6 @@ SECTION_ORDER = ["taggedInQuestion", "game", "player", "progress", "stats", "gea
 HISTORY_TURNS = 12
 FULL_TURNS = 4
 OLD_ANSWER_CHARS = 400
-
-
-def prompt_hash() -> str:
-    """Identifies the system prompt an answer was written with (in the turn records)."""
-    return hashlib.sha1(SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:8]
 
 
 def _fmt(v: Any) -> str:

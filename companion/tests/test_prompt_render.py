@@ -5,7 +5,7 @@ from pathlib import Path
 
 from foreverai.prompt import render_snapshot
 
-BASE = json.loads((Path(__file__).resolve().parents[1] / "evals" / "base_snapshot.json").read_text(encoding="utf-8"))
+BASE = json.loads((Path(__file__).resolve().parent / "base_snapshot.json").read_text(encoding="utf-8"))
 
 
 def section(text: str, name: str) -> str:

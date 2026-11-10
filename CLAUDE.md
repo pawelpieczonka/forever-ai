@@ -102,15 +102,6 @@ Pull request images go on the `screenshots` branch, which is never merged, so th
 4. Push, open the pull request (with the screenshots when the app or the add-on looks different) and check that the workflow's test, version, Linux and Windows jobs pass.
 5. Mention in your summary which builds were checked and how (local build, CI run).
 
-## Changes to the system prompt or to the game data the model gets
-
-`companion/foreverai/prompt.py` (the system prompt, the rendering of the game data) and the tool descriptions in `tools.py` decide how the assistant behaves; a change that reads well can still make answers longer, repeat advice or re-plan a route the player already follows.
-
-- Run the scenarios before and after: in `companion`, `python -m evals.run` (needs Claude Code signed in; `--prompt-file` runs another prompt text for comparison, `--model claude-haiku-5-5` the default model, `--only name,name` some scenarios). The report with every answer goes to `companion/data/evals/`. Read the answers, not only the check counts.
-- The app records every answered question in `data/turns/` (question, game data, answer, tools, time); `python -m evals.run --replay 10` runs the last ones again and shows the recorded answer beside the new one.
-- A new failure seen in a real conversation becomes a scenario in `companion/evals/scenarios.py` first.
-- `companion/evals/` is development only: it is not part of the apps.
-
 ## Integrations with other add-ons
 
 ForeverAI reads other add-ons (Auctionator's price data and public API, Pawn's upgrade check, AceConfig options trees) but never changes their code or files. Changes to another add-on's settings only happen through a proposal the player accepts in the game.

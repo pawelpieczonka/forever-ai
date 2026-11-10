@@ -5,7 +5,7 @@ from pathlib import Path
 
 from foreverai.route import plan_route
 
-BASE = json.loads((Path(__file__).resolve().parents[1] / "evals" / "base_snapshot.json").read_text(encoding="utf-8"))
+BASE = json.loads((Path(__file__).resolve().parent / "base_snapshot.json").read_text(encoding="utf-8"))
 
 
 def quest(qid, title, status="in progress", turn_in=None, where=None, **extra):
