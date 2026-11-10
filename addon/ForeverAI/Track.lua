@@ -370,6 +370,75 @@ function T.Debug()
   for _, line in ipairs(T.Section() or { "nothing is tracked" }) do ns.print(line) end
 end
 
+-- /fai probe: a look at every way the game might show an add-on something that has no nameplate (a herb, a vein, a
+-- chest). Printed in the chat and sent along with the next question (game.probe), to learn what this client offers.
+function T.Probe()
+  local out = {}
+  local function say(line)
+    out[#out + 1] = line
+    ns.print(line)
+  end
+  local function unitLine(unit)
+    if not safe(UnitExists, unit) then return "nothing" end
+    local guid = clean(safe(UnitGUID, unit)) or ""
+    local kind, id = guid:match("^(%a+)%-"), select(6, strsplit("-", guid))
+    return string.format("%s (%s%s)", tostring(clean(safe(UnitName, unit))), tostring(kind or "?"), id and (", id " .. id) or "")
+  end
+  for _, unit in ipairs({ "target", "mouseover", "softenemy", "softfriend" }) do say(unit .. ": " .. unitLine(unit)) end
+  -- the "soft target": the game itself picks the nearest thing the player can interact with, objects included
+  local own = cvar("SoftTargetInteract")
+  say(string.format("softinteract with the game's own setting (SoftTargetInteract %s): %s", tostring(own), unitLine("softinteract")))
+  local settings = {}
+  for _, name in ipairs({ "SoftTargetInteractRange", "SoftTargetInteractArc", "SoftTargetNameplateInteract",
+                          "SoftTargetIconGameObject", "SoftTargetIconInteract" }) do
+    settings[#settings + 1] = name .. " " .. tostring(cvar(name))
+  end
+  say("soft target settings: " .. table.concat(settings, ", "))
+  -- vignettes: what the game draws on the minimap by itself (rare creatures, treasures)
+  local names = {}
+  if C_VignetteInfo and C_VignetteInfo.GetVignettes then
+    for _, id in ipairs(safe(C_VignetteInfo.GetVignettes) or {}) do
+      local info = safe(C_VignetteInfo.GetVignetteInfo, id)
+      names[#names + 1] = tostring(type(info) == "table" and info.name or id)
+    end
+  end
+  say(string.format("vignettes (%d): %s", #names, #names > 0 and table.concat(names, ", ") or "none"))
+  -- nameplates by kind: an object with a nameplate would show as GameObject
+  local kinds = {}
+  if C_NamePlate and C_NamePlate.GetNamePlates then
+    for _, plate in ipairs(safe(C_NamePlate.GetNamePlates) or {}) do
+      local unit = plate.namePlateUnitToken or (plate.UnitFrame and plate.UnitFrame.unit)
+      local kind = unit and (clean(safe(UnitGUID, unit)) or ""):match("^(%a+)%-") or "?"
+      kinds[kind] = (kinds[kind] or 0) + 1
+    end
+  end
+  local parts = {}
+  for kind, n in pairs(kinds) do parts[#parts + 1] = kind .. " " .. n end
+  table.sort(parts)
+  say("nameplates by kind: " .. (#parts > 0 and table.concat(parts, ", ") or "none"))
+  local tip = ns.Collect and ns.Collect.CaptureTooltip and ns.Collect.CaptureTooltip()
+  say("tooltip: " .. (tip and tostring(tip.lines):gsub("\n", " / ") or "none"))
+  local tracking = {}
+  if C_Minimap and C_Minimap.GetNumTrackingTypes and C_Minimap.GetTrackingInfo then
+    for i = 1, (safe(C_Minimap.GetNumTrackingTypes) or 0) do
+      local info = safe(C_Minimap.GetTrackingInfo, i)
+      if type(info) == "table" and info.active then tracking[#tracking + 1] = tostring(info.name) end
+    end
+  end
+  say("minimap tracking on: " .. (#tracking > 0 and table.concat(tracking, ", ") or "none or not readable"))
+  if ns.char then ns.char.lastProbe = out end
+  -- the same look with the soft target turned on for a moment (the player's setting comes back)
+  if own ~= nil and own ~= "3" and not inFight() and SetCVar then
+    pcall(SetCVar, "SoftTargetInteract", "3")
+    C_Timer.After(2, function()
+      say("softinteract with SoftTargetInteract 3: " .. unitLine("softinteract"))
+      pcall(SetCVar, "SoftTargetInteract", own)
+    end)
+  else
+    say("softinteract with SoftTargetInteract 3: " .. (own == "3" and "that is the game's own setting" or "not tried"))
+  end
+end
+
 ns.On("PLAYER_ENTERING_WORLD", function()
   if not T.ticker then T.ticker = C_Timer.NewTicker(SCAN_S, function() pcall(T.Scan) end) end
   C_Timer.After(2, function() pcall(syncNameplates) end) -- what was tracked before a /reload is listened for again
