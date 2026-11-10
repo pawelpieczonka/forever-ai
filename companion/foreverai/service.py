@@ -124,6 +124,7 @@ class TurnContext:
         self.actions: list[dict] = []
         self.marks: list[dict] = []
         self.mark_adds: list[bool] = []  # per mark_on_map call: the model asked to keep the earlier marks
+        self.route_marked = False  # the marks so far are plan_route's own
         self.phase_cb: Callable[[str], None] = lambda p: None
         self.pre_urls: set[str] = set()
         self.known: dict = {}  # addon options the game reported in this answer (validates proposals)
@@ -744,13 +745,34 @@ class Service:
             return text, action is None
         if name == "mark_on_map":
             mark, text = validate_mark(args)
+            add = args.get("add") is True
+            if mark and ctx.route_marked and not add:  # the model marks its own choice of the route's stops
+                del ctx.marks[:], ctx.mark_adds[:]
+            if mark:
+                ctx.route_marked = False
             if mark and len(ctx.marks) < 8:
-                add = args.get("add") is True
                 ctx.marks.append(mark)
                 ctx.mark_adds.append(add)
                 text = text.rstrip(".") + (", added to your earlier marks." if add else
                                            "; the marks of your earlier answers are off the map.")
             return text, mark is None
+        if name == "plan_route":
+            from .route import plan_route
+            ctx.phase_cb("Planning the route…")
+            route = plan_route(ctx.snapshot, new_quests=args.get("new_quests") is True)
+            text = route["text"]
+            if args.get("mark") is not False and route["stops"]:
+                del ctx.marks[:], ctx.mark_adds[:]  # the route is the whole set of marks of this answer
+                for n, stop in enumerate(route["stops"][:8], 1):
+                    ctx.marks.append({"title": f"{n}. {stop['title']}"[:60], "x": round(stop["x"], 1),
+                                      "y": round(stop["y"], 1), "zone": stop["zone"]})
+                    ctx.mark_adds.append(False)
+                ctx.route_marked = True
+                count = len(ctx.marks)
+                which = f"The {count} stops are" if count == len(route["stops"]) else f"The first {count} stops are"
+                text += (f"\n{which} marked on the map in this order (the marks of earlier answers are off the map); "
+                         "do not mark them again. To mark other stops instead, call mark_on_map for each of them.")
+            return text, False
         if name == "save_memory":
             if phase:
                 ctx.phase_cb(phase)
@@ -912,7 +934,7 @@ class Service:
     def _claude_system(self, system: str) -> str:
         s = self.store.settings
         system += ("\n\nThe foreverai MCP server provides: search_knowledge_base, search_auction_house, addon_options, "
-                   "propose_addon_change, propose_quest_abandon, propose_vendor_action, mark_on_map, "
+                   "propose_addon_change, propose_quest_abandon, propose_vendor_action, mark_on_map, plan_route, "
                    "save_memory, delete_memory, fetch_url. Read web pages (e.g. build links) only with fetch_url — it gets "
                    "past bot blocking.")
         if s.search_mode == "always":

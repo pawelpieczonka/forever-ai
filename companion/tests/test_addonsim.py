@@ -237,3 +237,31 @@ def test_new_marks_replace_the_earlier_ones_unless_added(sim):
     sim.lua(mark % ("Dazalar", "nil"))  # an app that does not say: replace
     assert sim.lua(ON_THE_MAP) == b"ForeverAI: Dazalar"
     assert sim.errors == []
+
+
+SECTION = "local s = ForeverAI.Collect.sections.marks() return s and table.concat(s, ' | ') or 'none'"
+
+
+def test_marks_stay_after_reload_and_leave_when_reached(sim):
+    sim.slash("/fai")
+    sim.lua(TOMTOM + "function TomTom:SetCrazyArrow(uid, dist, title) self.arrow = title end")
+    sim._wow.player.x, sim._wow.player.y = 0.40, 0.40
+    sim.lua('ForeverAI.UI.MarksCard({ { title = "1. Postman", x = 45.0, y = 40.0 }, { title = "Giver", x = 50.0, y = 40.0 } })')
+    both = b"1. Postman \xe2\x80\x94 Darkshore 45.0, 40.0 (299 m) | 2. Giver \xe2\x80\x94 Darkshore 50.0, 40.0 (599 m)"
+    assert sim.lua(SECTION) == both
+    assert sim.lua("return ForeverAI.Collect.Snapshot().marks ~= nil") is True  # goes with every question
+
+    sim.reload()  # the game forgets waypoints; the add-on puts its marks back
+    sim.lua(TOMTOM + "function TomTom:SetCrazyArrow(uid, dist, title) self.arrow = title end")
+    sim.run(4)
+    assert sim.lua(ON_THE_MAP) == b"ForeverAI: 1. Postman | ForeverAI: Giver"
+    assert sim.lua(SECTION) == both
+
+    sim._wow.player.x = 0.4495  # a few steps from the first stop
+    sim.run(4)
+    assert sim.lua(ON_THE_MAP) == b"ForeverAI: Giver" and sim.lua("return TomTom.arrow") == b"ForeverAI: Giver"
+    assert sim.lua(SECTION) == b"1. Giver \xe2\x80\x94 Darkshore 50.0, 40.0 (302 m)"
+
+    sim.lua("ForeverAI.Map.Clear()")
+    assert sim.lua(SECTION) == b"none" and sim.lua(ON_THE_MAP) == b""
+    assert sim.errors == []

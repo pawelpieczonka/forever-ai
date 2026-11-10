@@ -53,15 +53,33 @@ def calls(name: str, lo: int, hi: int) -> Check:
     return check
 
 
+def _marked(turn: dict) -> list[tuple[float, float]]:
+    """Where the answer put marks: mark_on_map calls and what the answer did (the route tool marks its stops itself)."""
+    got = []
+    for t in _tools(turn, "mark_on_map"):
+        try:
+            got.append((float(t["args"].get("x")), float(t["args"].get("y"))))
+        except (TypeError, ValueError):
+            pass
+    for line in turn.get("did") or []:
+        m = re.match(r"^(?:marked on the map|added to the marks).*\((\d+(?:\.\d+)?), (\d+(?:\.\d+)?)\)$", line)
+        if m and (float(m.group(1)), float(m.group(2))) not in got:
+            got.append((float(m.group(1)), float(m.group(2))))
+    return got
+
+
+def marked(lo: int, hi: int) -> Check:
+    """How many places the answer marked, however it did it."""
+    def check(turn: dict) -> Result:
+        got = len(_marked(turn))
+        return Result(f"marks {lo}" if lo == hi else f"marks {lo}-{hi} places", lo <= got <= hi, f"{got} marks")
+    return check
+
+
 def marks(x: float, y: float, tolerance: float = 0.6) -> Check:
     """A map mark at (x, y)."""
     def check(turn: dict) -> Result:
-        got = []
-        for t in _tools(turn, "mark_on_map"):
-            try:
-                got.append((float(t["args"].get("x")), float(t["args"].get("y"))))
-            except (TypeError, ValueError):
-                pass
+        got = _marked(turn)
         ok = any(abs(gx - x) <= tolerance and abs(gy - y) <= tolerance for gx, gy in got)
         return Result(f"marks {x}, {y}", ok, f"marked {got}")
     return check

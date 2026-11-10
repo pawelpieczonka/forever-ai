@@ -296,7 +296,7 @@ def test_mcp_server_protocol():
     assert init["result"]["capabilities"] == {"tools": {}}
     names = [t["name"] for t in srv.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]]
     assert names == ["search_knowledge_base", "propose_addon_change", "save_memory", "delete_memory", "fetch_url",
-                     "mark_on_map", "addon_options", "propose_quest_abandon", "propose_vendor_action",
+                     "mark_on_map", "plan_route", "addon_options", "propose_quest_abandon", "propose_vendor_action",
                      "search_auction_house"]
     res = srv.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                       "params": {"name": "addon_options", "arguments": {"addon": "Questie"}}})
@@ -712,3 +712,64 @@ def test_claude_sessions_started_together_get_their_own_folders(env, monkeypatch
         svc._new_claude_session("claude", "system")
         other._new_claude_session("claude", "system")
     assert len(set(folders)) == 40
+
+
+def test_plan_route_marks_its_stops(env):
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            Client.tools = [t["function"]["name"] for t in tools]
+            if not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall("c1", "plan_route", "{}")]
+                return
+            Client.result = messages[-1]["content"]
+            yield "text", "Here is the route."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    snapshot = {"player": {"coords": "50.0, 50.0", "map": "Teldrassil", "level": 10}, "quests": [
+        {"id": 2, "title": "Letter", "status": "READY TO TURN IN", "turnIn": "Postman (Teldrassil 65.0, 50.0)"},
+        {"id": 1, "title": "Far Hunt", "status": "in progress", "turnIn": "Giver (Teldrassil 50.0, 60.0)",
+         "whereToGet": ["Boar: kill Boar (level 5) — Teldrassil 80.0, 50.0 (2400 m, 9 spawn points in your zone)"]}]}
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "plan my route",
+                "snapshot": snapshot})
+    d = _wait_final(addons, 3)
+    assert "plan_route" in Client.tools
+    assert d["marks"] == [{"title": "1. Postman", "x": 65.0, "y": 50.0, "zone": "Teldrassil"},
+                          {"title": "2. Boar", "x": 80.0, "y": 50.0, "zone": "Teldrassil"},
+                          {"title": "3. Giver", "x": 50.0, "y": 60.0, "zone": "Teldrassil"}]
+    assert d["marksReplace"] is True
+    assert Client.result.startswith("Route from 50, 50 (Teldrassil): 3 stops, about 4.9 km.")
+    assert Client.result.endswith("The 3 stops are marked on the map in this order (the marks of earlier answers are off "
+                                  "the map); do not mark them again. To mark other stops instead, call mark_on_map for each of them.")
+
+
+def test_every_tool_is_offered_to_claude_code():
+    from foreverai import claude_code
+    from foreverai.tools import TOOLS
+    names = {t["function"]["name"] for t in TOOLS}
+    assert {t.removeprefix("mcp__foreverai__") for t in claude_code.MCP_TOOLS} == names
+    assert all(claude_code.tool_phase(n) for n in names)
+
+
+def test_marks_after_plan_route_replace_the_route_marks(env):
+    """The model asked for the route and then marked its own choice of stops: those are the marks, not both sets."""
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            if not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall("c1", "plan_route", "{}"),
+                                     ToolCall("c2", "mark_on_map", '{"title": "Only this", "x": 65, "y": 50}'),
+                                     ToolCall("c3", "mark_on_map", '{"title": "And this", "x": 50, "y": 60}')]
+                return
+            yield "text", "Marked."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    snapshot = {"player": {"coords": "50.0, 50.0", "map": "Teldrassil", "level": 10}, "quests": [
+        {"id": 2, "title": "Letter", "status": "READY TO TURN IN", "turnIn": "Postman (Teldrassil 65.0, 50.0)"},
+        {"id": 3, "title": "Parcel", "status": "READY TO TURN IN", "turnIn": "Giver (Teldrassil 50.0, 60.0)"}]}
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "mark two",
+                "snapshot": snapshot})
+    d = _wait_final(addons, 3)
+    assert [m["title"] for m in d["marks"]] == ["Only this", "And this"] and d["marksReplace"] is True

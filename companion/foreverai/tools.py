@@ -132,6 +132,28 @@ TOOLS.append({
 TOOLS.append({
     "type": "function",
     "function": {
+        "name": "plan_route",
+        "description": "The walking route through the player's quest log in their current zone: every objective and "
+                       "turn-in with a known place, in the order with the shortest way, each turn-in after its own "
+                       "objectives, with the distances, and what is left out and why (another zone, needs a skill, "
+                       "no known place). It also marks the stops on the map in that order (up to 8), replacing "
+                       "earlier marks. Use it whenever the player asks for a route, a path, an order for their "
+                       "quests or \"what is the best way to do these\"; do not order the stops yourself.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "new_quests": {"type": "boolean", "description": "true: also stop at the quest givers of nearbyQuests "
+                                                                 "in this zone (when the player wants new quests on the way)"},
+                "mark": {"type": "boolean", "description": "false: only compute, do not mark (default true)"},
+            },
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
         "name": "addon_options",
         "description": "Search the settings of an installed add-on IN THE GAME (live): its real options tree (the same as "
                        "the add-on's options window) — name, description, type, CURRENT value and allowed values; for "

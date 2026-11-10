@@ -1,8 +1,11 @@
--- ForeverAI: map markers requested by the AI (TomTom arrow when installed, otherwise the game's own waypoint)
+-- ForeverAI: map markers requested by the AI (TomTom arrow when installed, otherwise the game's own waypoint).
+-- The marks are kept per character: they come back after a /reload (the game and TomTom forget them), a stop leaves
+-- the list when the player reaches it, and what is left goes to the AI with every question (section "marks").
 local ADDON, ns = ...
 local M = {}
 ns.Map = M
-M.uids = {}
+M.uids = {}          -- mark (a table of the saved list) -> its TomTom waypoint
+local REACHED_M = 12 -- a stop this close is done
 
 local function rootMap()
   local id = C_Map.GetBestMapForUnit("player") or (C_Map.GetFallbackWorldMapID and C_Map.GetFallbackWorldMapID())
@@ -38,37 +41,110 @@ function M.FindMap(zone)
   return found
 end
 
+-- the marks on the map now, in walking order: { title, x, y (0-100), mapID, zone }
+local function list()
+  if not ns.char then return {} end
+  ns.char.marks = ns.char.marks or {}
+  return ns.char.marks
+end
+
+local function usesTomTom() return TomTom and TomTom.AddWaypoint end
+
+-- the arrow leads to the first stop
+local function point(mk)
+  local uid = mk and M.uids[mk]
+  if uid and TomTom and TomTom.SetCrazyArrow then
+    pcall(TomTom.SetCrazyArrow, TomTom, uid, 10, "ForeverAI: " .. tostring(mk.title))
+  elseif mk and not usesTomTom() and C_Map.SetUserWaypoint and UiMapPoint then
+    local okSet = pcall(C_Map.SetUserWaypoint, UiMapPoint.CreateFromCoordinates(mk.mapID, mk.x / 100, mk.y / 100))
+    if okSet and C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
+      pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
+    end
+  end
+end
+
+local function place(mk, first)
+  if usesTomTom() then
+    local ok, uid = pcall(TomTom.AddWaypoint, TomTom, mk.mapID, mk.x / 100, mk.y / 100,
+      { title = "ForeverAI: " .. tostring(mk.title), persistent = false, minimap = true, world = true, crazy = first })
+    if ok and uid then M.uids[mk] = uid end
+  elseif first then
+    point(mk)
+  end
+end
+
+local function unplace(mk)
+  local uid = M.uids[mk]
+  if uid and TomTom and TomTom.RemoveWaypoint then pcall(TomTom.RemoveWaypoint, TomTom, uid) end
+  M.uids[mk] = nil
+end
+
+-- adds the marks to the ones on the map (UI.MarksCard clears first unless the answer adds stops)
 function M.Apply(marks)
-  local placed = {}
-  local tomtom = TomTom and TomTom.AddWaypoint
-  for i, mk in ipairs(marks or {}) do
+  local placed, saved = {}, list()
+  for _, mk in ipairs(marks or {}) do
     local mapID = M.FindMap(mk.zone)
     if mapID then
-      local x, y = (tonumber(mk.x) or 0) / 100, (tonumber(mk.y) or 0) / 100
-      if tomtom then
-        local ok, uid = pcall(TomTom.AddWaypoint, TomTom, mapID, x, y,
-          { title = "ForeverAI: " .. tostring(mk.title), persistent = false, minimap = true, world = true, crazy = i == 1 })
-        if ok and uid then M.uids[#M.uids + 1] = uid end
-      elseif i == 1 and C_Map.SetUserWaypoint and UiMapPoint then
-        local okSet = pcall(C_Map.SetUserWaypoint, UiMapPoint.CreateFromCoordinates(mapID, x, y))
-        if okSet and C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
-          pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
-        end
-      end
       local info = C_Map.GetMapInfo(mapID)
-      placed[#placed + 1] = { title = mk.title, x = mk.x, y = mk.y, mapID = mapID, zone = info and info.name or mk.zone }
+      local e = { title = tostring(mk.title), x = tonumber(mk.x) or 0, y = tonumber(mk.y) or 0, mapID = mapID,
+        zone = info and info.name or mk.zone }
+      saved[#saved + 1] = e
+      place(e, #saved == 1)
+      placed[#placed + 1] = e
     end
   end
   M.last = placed
-  return placed, tomtom and "TomTom" or "map pin"
+  return placed, usesTomTom() and "TomTom" or "map pin"
 end
 
 function M.Clear()
-  if TomTom and TomTom.RemoveWaypoint then
-    for _, uid in ipairs(M.uids) do pcall(TomTom.RemoveWaypoint, TomTom, uid) end
-  end
+  for _, mk in ipairs(list()) do unplace(mk) end
   wipe(M.uids)
+  if ns.char then ns.char.marks = {} end
   if C_Map.ClearUserWaypoint then pcall(C_Map.ClearUserWaypoint) end
+end
+
+-- after login or /reload: the saved marks go back on the map
+function M.Restore()
+  wipe(M.uids)
+  for i, mk in ipairs(list()) do place(mk, i == 1) end
+end
+
+local function metersTo(mk)
+  local mapID = C_Map.GetBestMapForUnit("player")
+  if not mapID or mapID ~= mk.mapID then return nil end
+  local pos = C_Map.GetPlayerMapPosition(mapID, "player")
+  return pos and ns.MapMeters(mapID, pos.x * 100, pos.y * 100, mk.x, mk.y)
+end
+
+-- a stop the player has reached leaves the list; the arrow moves on to the first stop that is left
+function M.Check()
+  local saved = list()
+  local reached = false
+  for i = #saved, 1, -1 do
+    local d = metersTo(saved[i])
+    if d and d <= REACHED_M then
+      unplace(saved[i])
+      table.remove(saved, i)
+      reached = true
+    end
+  end
+  if reached then
+    if saved[1] then point(saved[1]) elseif not usesTomTom() and C_Map.ClearUserWaypoint then pcall(C_Map.ClearUserWaypoint) end
+  end
+end
+
+-- for the AI: what is marked now, in order, with the distance when the stop is in the player's zone
+function M.Section()
+  local saved = list()
+  if #saved == 0 then return nil end
+  local out = {}
+  for i, mk in ipairs(saved) do
+    local d = metersTo(mk)
+    out[i] = string.format("%d. %s — %s %.1f, %.1f%s", i, (tostring(mk.title):gsub("^%d+[%.%)]%s*", "")),
+      tostring(mk.zone or "?"), mk.x, mk.y, d and string.format(" (%d m)", d) or "")
+  end
+  return out
 end
 
 function M.Show(mapID)
@@ -78,4 +154,13 @@ function M.Show(mapID)
     if not WorldMapFrame:IsShown() and ToggleWorldMap then pcall(ToggleWorldMap) end
     if mapID then pcall(WorldMapFrame.SetMapID, WorldMapFrame, mapID) end
   end
+end
+
+ns.On("PLAYER_ENTERING_WORLD", function()
+  C_Timer.After(2, M.Restore) -- TomTom is ready by then
+  if not M.ticker then M.ticker = C_Timer.NewTicker(2, function() pcall(M.Check) end) end
+end)
+
+if ns.Collect and ns.Collect.sections then
+  ns.Collect.sections.marks = M.Section
 end

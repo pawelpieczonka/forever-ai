@@ -123,3 +123,14 @@ def test_language_check():
     assert c.language("pl")(pl).ok and not c.language("pl")(en).ok
     assert c.language("en")(en).ok and not c.language("en")(pl).ok
     assert c.language("pl")(en).label == "answers in pl"
+
+
+def test_marks_are_counted_from_what_the_answer_did():
+    """The route tool marks its stops itself: the marks are in "did", not in mark_on_map calls."""
+    t = turn("Trasa.", [{"name": "plan_route", "args": {}}],
+             did=["marked on the map (earlier marks removed): 1. Dazalar (56.7, 59.5)",
+                  "marked on the map: 2. Oracle Glade Moonwell (38.4, 34.1)"])
+    assert c.marked(2, 2)(t).ok and not c.marked(3, 8)(t).ok and c.marked(3, 8)(t).detail == "2 marks"
+    assert c.marks(56.7, 59.5)(t).ok and c.marks(38.4, 34.1)(t).ok and not c.marks(10, 10)(t).ok
+    added = turn("ok", did=["added to the marks on the map: Lyreena (57.6, 56.6)"])
+    assert c.marked(1, 1)(added).ok and c.marks(57.6, 56.6)(added).ok

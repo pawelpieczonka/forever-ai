@@ -78,7 +78,10 @@ ROUTE = {"q": "uloz mi trase pod obecne questy i oznacz",
          "did": ["marked on the map: Strigid Screecher (64.2, 69.2)", "marked on the map: Dazalar (56.7, 59.5)",
                  "marked on the map: Sentinel Eralya Leafshadow (37.5, 36.8)",
                  "marked on the map: Oracle Glade Moonwell (38.4, 34.1)"]}
-A_QUEST_NEXT_TO_THE_ROUTE = {"nearbyQuests": [
+ROUTE_MARKS = ["1. Strigid Screecher — Teldrassil 64.2, 69.2 (24 m)", "2. Dazalar — Teldrassil 56.7, 59.5 (444 m)",
+               "3. Sentinel Eralya Leafshadow — Teldrassil 37.5, 36.8 (1590 m)",
+               "4. Oracle Glade Moonwell — Teldrassil 38.4, 34.1 (1602 m)"]
+A_QUEST_NEXT_TO_THE_ROUTE = {"marks": ROUTE_MARKS, "nearbyQuests": [
     {"id": 489, "title": "Seek Redemption!", "giver": "Syral Bladeleaf", "level": 7, "minLevel": 4, "distance": "38 m",
      "where": "Teldrassil 64.5, 68.9", "objective": "Collect 3 Fel Cones and bring them to Syral Bladeleaf."}]
     + base_snapshot()["nearbyQuests"]}
@@ -113,7 +116,8 @@ SCENARIOS = [
         Turn("co mam tu zrobic?", [c.says(r"Taming Rod"), c.max_words(90), *QUIET,
                                    c.never_says(r"now[aąe] tras", r"zmieni(am|łem|ć) tras")],
              patch={**AT_THE_SCREECHER, **A_QUEST_NEXT_TO_THE_ROUTE}),
-        Turn("ok mam go", [c.says(r"Dazalar"), c.max_words(70), *QUIET], patch=TAMED)],
+        Turn("ok mam go", [c.says(r"Dazalar"), c.max_words(70), *QUIET],
+             patch={**TAMED, "marks": [m.replace(f"{n + 2}. ", f"{n + 1}. ") for n, m in enumerate(ROUTE_MARKS[1:])]})],
         history=[ROUTE]),
     Scenario("sell_junk_at_vendor", "\"sprzedales mi mieczyk do skorowania\": tools and materials were sold.", [
         Turn("sprzedaj smieci", [c.calls("propose_vendor_action", 1, 1), c.sells("Cracked Shortbow", "2773"),
@@ -138,7 +142,7 @@ SCENARIOS = [
         Turn("co teraz?", [c.says(r"Screecher"), c.max_words(90), c.calls("mark_on_map", 0, 1), c.never_says(r"PvP")])]),
     Scenario("full_route", "A route was asked for 22 times: every stop marked, in a sensible order.", [
         Turn("uloz mi optymalna trase pod wszystkie questy i oznacz ja",
-             [c.calls("mark_on_map", 3, 8), c.marks(56.7, 59.5), c.says(r"Moonwell"), c.max_words(260), PL])]),
+             [c.calls("plan_route", 1, 1), c.marked(3, 8), c.marks(56.7, 59.5), c.says(r"Moonwell"), c.max_words(260), PL])]),
     Scenario("no_repeats", "The same advice and warnings came back in every answer of a conversation.", [
         Turn("co teraz?", [c.says(r"Screecher"), c.max_words(90)], patch=AT_THE_SCREECHER),
         Turn("ile mi brakuje do 12 lvl?", [c.says(r"7[\s.,  ]?832"), c.max_words(70), c.max_headings(0), *QUIET]),
@@ -149,9 +153,9 @@ SCENARIOS = [
     Scenario("item_without_a_description", "\"Z pamięci (Classic), może być nieaktualne\" appeared several times in "
                                            "one answer.", [
         Turn("[Light Armor Kit] po co to?", [c.max_words(90), c.max_headings(1), c.at_most(1, r"Classic"), PL, *QUIET])]),
-    Scenario("mark_again", "\"oznacz jeszcze raz\" came 5 times: the marks are gone after a /reload or a break.", [
-        Turn("oznacz jeszcze raz bo bylem afk", [c.calls("mark_on_map", 3, 4), c.marks(56.7, 59.5), c.marks(37.5, 36.8),
-                                                 c.max_words(70), c.never_says(r"PvP")])],
+    Scenario("mark_again", "\"oznacz jeszcze raz\" came 5 times; here the player cleared the marks and wants them back.", [
+        Turn("wyczyscilem znaczniki, oznacz trase jeszcze raz", [c.marked(3, 8), c.marks(56.7, 59.5), c.marks(37.5, 36.8),
+                                                                 c.max_words(120), c.never_says(r"PvP")])],
         history=[ROUTE]),
     Scenario("advice_did_not_work", "The ammunition slot: four answers of guesses, up to \"disable Baganator and "
                                     "/reload\".", [

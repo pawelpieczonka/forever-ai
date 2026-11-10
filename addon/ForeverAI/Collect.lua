@@ -1452,7 +1452,7 @@ for _, ev in ipairs({ "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_PARTY", "CHAT_M
 end
 
 ------------------------------------------------------------------------ snapshot
-local ORDER = { "game", "player", "progress", "stats", "gearTotals", "equipment", "talents", "quests", "nearbyQuests",
+local ORDER = { "game", "player", "progress", "stats", "gearTotals", "equipment", "talents", "quests", "marks", "nearbyQuests",
   "zoneNPCs", "nearbyMobs", "around", "recentEvents", "actionBars", "target", "mouseover", "pet", "tooltip", "group",
   "nearby", "auras", "windows", "bags", "bank", "spells", "skills", "professions", "reputations", "addons",
   "addonChanges", "chat" }
