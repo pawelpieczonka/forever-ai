@@ -180,3 +180,40 @@ def test_open_terminal_runs_the_sign_in_in_a_terminal(monkeypatch):
     assert osutil.open_terminal(["claude", "auth", "login"]) and started[1][:2] == ["/usr/bin/kitty", "sh"]
     monkeypatch.setattr(osutil.shutil, "which", lambda n: None)
     assert not osutil.open_terminal(["claude", "auth", "login"])
+
+
+def test_thread_error_goes_to_the_log(caplog):
+    import threading
+
+    from foreverai import app
+
+    def crash():
+        raise RuntimeError("boom")
+    old = threading.excepthook
+    threading.excepthook = app._log_thread_error
+    try:
+        t = threading.Thread(target=crash, name="screenshot-watcher")
+        t.start()
+        t.join()
+    finally:
+        threading.excepthook = old
+    rec = next(r for r in caplog.records if "screenshot-watcher stopped" in r.getMessage())
+    assert rec.levelname == "ERROR" and "RuntimeError: boom" in rec.getMessage() and rec.exc_info
+
+
+def test_replaced_app_files_ask_for_a_restart(tmp_path, monkeypatch):
+    """A new build or version unpacked over the running app: the window asks for a restart."""
+    from types import SimpleNamespace
+
+    from foreverai import app
+    exe = tmp_path / "ForeverAI-Linux"
+    exe.write_bytes(b"old")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe))
+    comp = SimpleNamespace(_exe=app._exe_id(), _replaced=False)
+    assert app.Companion.files_replaced(comp) is False
+    exe.unlink()
+    exe.write_bytes(b"new build")  # a new file, as PyInstaller and tar write it
+    assert app.Companion.files_replaced(comp) is True
+    monkeypatch.setattr(sys, "frozen", False)
+    assert app._exe_id() is None  # from source nothing is checked

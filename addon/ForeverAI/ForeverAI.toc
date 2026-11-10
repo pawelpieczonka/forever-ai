@@ -2,7 +2,7 @@
 ## Title: |cff33ff99ForeverAI|r
 ## Notes: AI assistant for WoW Forever (Claude Code, OpenRouter or Google Gemini).
 ## Author: ForeverAI
-## Version: 0.5.1
+## Version: 0.5.2
 ## SavedVariables: ForeverAIDB
 ## SavedVariablesPerCharacter: ForeverAICharDB
 ## IconTexture: Interface\Icons\INV_Misc_Book_09

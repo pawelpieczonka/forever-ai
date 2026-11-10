@@ -146,3 +146,35 @@ def test_old_data_screenshots_are_removed_on_start(tmp_path):
     w = ScreenshotWatcher(tmp_path, frames.append)
     assert w.cleanup_old_frames() == 1
     assert not old.exists() and mine.exists() and frames == []  # not answered, the player's screenshot kept
+
+
+def test_watcher_goes_on_after_a_screenshot_it_cannot_read(tmp_path, caplog):
+    """A new build replaced the running app's files: Pillow's TGA code, imported on the first screenshot, came out
+    corrupt (zlib.error) and the watcher thread ended without a word, so no later question reached the app."""
+    import time
+    import zlib
+    data = os.urandom(3000)
+    frames = []
+    w = ScreenshotWatcher(tmp_path, frames.append, interval=0.01)
+    real = w._try_decode
+
+    def broken_once(path):
+        if path.name.endswith("_1.tga"):
+            raise zlib.error("Error -3 while decompressing data: incorrect header check")
+        return real(path)
+    w._try_decode = broken_once
+    w.start()
+    try:
+        for i in (1, 2):
+            screen = Image.new("RGB", (400, 200), (40, 40, 40))
+            screen.paste(encode_frames(data, msg_id=i)[0], (0, 0))
+            screen.save(tmp_path / "part.tmp", format="TGA")
+            os.replace(tmp_path / "part.tmp", tmp_path / f"WoWScrnShot_{i}.tga")
+        deadline = time.time() + 5
+        while not frames and time.time() < deadline:
+            time.sleep(0.01)
+    finally:
+        w.stop()
+    assert w.is_alive() or frames  # still running when the second screenshot came
+    assert [f.msg_id for f in frames] == [2]
+    assert "Cannot read the screenshot WoWScrnShot_1.tga" in caplog.text

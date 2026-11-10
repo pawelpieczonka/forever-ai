@@ -216,7 +216,8 @@ class AppWindow:
             self.log.configure(state="disabled")
         c = self.comp
         if c:
-            self.state.configure(text="● Running", fg=ACCENT)
+            replaced = c.files_replaced()
+            self.state.configure(text="● Restart ForeverAI" if replaced else "● Running", fg=WARN if replaced else ACCENT)
             s = c.store.settings
             if c.needs_key and (config.read_key("openrouter") or config.read_key("gemini")):
                 c.needs_key = False  # a key was entered in the game

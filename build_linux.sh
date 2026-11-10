@@ -11,6 +11,15 @@ py="${PYTHON:-$root/companion/.venv/bin/python}"
 [[ -x "$py" ]] || { echo "Missing companion/.venv - see the build section in README.md" >&2; exit 1; }
 "$py" -c "import tkinter" 2>/dev/null || { echo "This Python has no tkinter - install Tk (e.g. python3-tk)" >&2; exit 1; }
 name=ForeverAI-Linux
+# a running app reads its code from these files: replacing them under it breaks the parts it loads later
+exe="$root/release/linux/$name/$name"
+for p in /proc/[0-9]*/exe; do
+  if [[ "$(readlink "$p" 2>/dev/null || true)" == "$exe"* ]]; then
+    pid="${p#/proc/}"
+    echo "ForeverAI is running from $exe (pid ${pid%/exe}): close it before building" >&2
+    exit 1
+  fi
+done
 version="$("$py" -c 'import re,sys; print(re.search(r"__version__ = \"(.+?)\"", open(sys.argv[1]).read()).group(1))' \
   "$root/companion/foreverai/__init__.py")"
 
