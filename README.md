@@ -45,8 +45,11 @@ At start the app checks Claude Code first: when it is installed and signed in, i
 - **Alt+click** an item, spell or quest to add it to your question.
 - Changes in the game (add-on options, selling, repairing, abandoning a quest) happen only after you click **Accept**.
 - **Auction house:** ask e.g. "Find the best one-handed sword on the AH that is an upgrade for me, up to 100 gold". The AI searches the prices of Auctionator's last scan (open the auction house and scan in Auctionator first) and, with Pawn, checks which items are upgrades. **Search on the AH** under the answer shows the recommended items in Auctionator's Shopping tab while the auction house is open. ForeverAI only reads the other add-ons' data and never changes them; buying stays with you.
+- **Routes and marks:** ask e.g. "Plan a route through my quests" or "Where do I find Befouled Webwood? Mark it". The stops go on the map (TomTom when it is installed, the game's map pin otherwise), stay there after a `/reload`, and each one comes off when you reach it. Tell the AI what to leave out or do last and the route follows.
+- **Tracking creatures:** when a mark is where a creature is to be found, the add-on watches for it: a living one in sight gets a marker over its nameplate, a sound and a line in the chat. Every creature that counts for the same quest objective is watched for, and tracking ends by itself when the objective is done. While something is tracked the game shows the nameplates of all enemies; your own settings come back when it ends.
+- The strip above the text field shows what is tracked and how many stops are marked; **x** ends either. `/fai stop` ends both.
 - **Settings** tab: which game data is sent, font size, the AI button; it also shows the AI in use (chosen in the app window).
-- Commands: `/fai`, `/fai <question>`, `/fai new`, `/fai debug`.
+- Commands: `/fai`, `/fai <question>`, `/fai new`, `/fai stop`, `/fai track`, `/fai debug`.
 
 ## Run from source
 

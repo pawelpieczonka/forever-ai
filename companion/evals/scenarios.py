@@ -194,8 +194,9 @@ SCENARIOS = [
                                          "Zaznacz go i użyj [Taming Rod] (**F11**)."}]),
     Scenario("tame_is_not_kill", "The quest data said \"kill Strigid Screecher\" for a creature that has to be tamed, and a "
                                  "route told the player to kill it.", [
-        Turn("jak zrobic tego questa z sowa?", [c.says(r"Taming Rod"), c.never_says(r"\bzabij", r"\bzabić"), c.max_words(180), PL,
-                                               *QUIET])]),
+        Turn("jak zrobic tego questa z sowa?", [c.says(r"Taming Rod"), c.never_says(r"(?<!nie )\bzabij", r"(?<!nie )\bzabić"), c.max_words(180), PL,
+                                               # with nothing on the map the owl may be marked, so that it is tracked
+                                               c.calls("mark_on_map", 0, 1), c.never_says(r"PvP")])]),
     Scenario("long_conversation", "\"ile razy mam sie o to samo pytac\": what was agreed ten questions ago was gone "
                                   "(six turns of history).", [
         Turn("to kiedy robimy tego elite?", [c.says(r"21|Bartek"), c.max_words(150), PL, *QUIET])],
