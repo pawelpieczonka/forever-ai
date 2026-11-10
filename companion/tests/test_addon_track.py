@@ -154,3 +154,59 @@ def test_new_marks_without_a_creature_end_the_tracking(sim):
     sim.slash("/fai stop")
     sim.run(1)
     assert "Tracking Strigid" not in shown(sim) and "Route ·" not in shown(sim)
+
+
+# The player's real game showed nameplates only for the target and for units in a fight (nameplateShowAll = 0): the
+# creature stood next to them, the add-on saw nothing and the answer said "none nearby".
+LOOK_AT = r"""
+local exists, name, dead = UnitExists, UnitName, UnitIsDead
+local seen = {}
+function TEST_unit(token, unit) seen[token] = unit end
+UnitExists = function(u) if seen[u] ~= nil then return seen[u] and true or false end return exists and exists(u) end
+UnitName = function(u) if seen[u] then return seen[u].name end return name(u) end
+UnitIsDead = function(u) if seen[u] then return seen[u].dead or false end return dead and dead(u) end
+"""
+
+
+def test_without_nameplates_the_addon_says_it_cannot_see(sim):
+    sim.lua('SetCVar("nameplateShowEnemies", "1") SetCVar("nameplateShowAll", "0")')
+    sim.lua(TRACK)
+    sim.run(1)
+    assert text(sim.lua(SECTION)) == (
+        "Strigid Screecher: not seen, but the game shows nameplates only for the target and for units in a fight "
+        "(nameplates of all enemies are off), so one can be near without being seen")
+    assert text(sim.lua("local s = ForeverAI.Track.State()[1] return s.name .. '|' .. s.alive .. '|' .. tostring(s.blind)")) == \
+        "Strigid Screecher|0|true"
+
+
+def test_the_target_and_the_mouseover_are_seen_without_nameplates(sim):
+    sim.lua('SetCVar("nameplateShowAll", "0")')
+    sim.lua(LOOK_AT)
+    sim.lua(TRACK)
+    sim.lua('TEST_unit("mouseover", { name = "Strigid Screecher" })')
+    sim._wow.fire(b"UPDATE_MOUSEOVER_UNIT")
+    assert text(sim.lua(SECTION)) == "Strigid Screecher: 1 alive in sight now, marked with the skull raid icon"
+    assert sim.lua('return GetRaidTargetIndex("mouseover")') == 8
+    sim.lua('TEST_unit("mouseover", false) TEST_unit("target", { name = "Strigid Screecher", dead = true })')
+    sim.run(1)
+    assert text(sim.lua(SECTION)).startswith("Strigid Screecher: not seen, but the game shows nameplates only")
+    assert "last seen alive moments ago" in text(sim.lua(SECTION))
+
+
+def test_the_strip_offers_to_show_nameplates_and_puts_the_setting_back(sim):
+    sim.slash("/fai")
+    sim.lua('SetCVar("nameplateShowEnemies", "1") SetCVar("nameplateShowAll", "0")')
+    sim.lua(ANSWER)
+    sim.run(1)
+    assert "Tracking Strigid Screecher · nameplates off" in shown(sim) and "Show them" in shown(sim)
+    sim.click("Show them")
+    sim.run(1)
+    assert text(sim.lua('return GetCVar("nameplateShowAll")')) == "1"
+    assert "Tracking Strigid Screecher · none in sight" in shown(sim) and "Show them" not in shown(sim)
+    sim.lua('TEST_show({ { name = "Strigid Screecher" } })')
+    sim.run(1)
+    assert "Tracking Strigid Screecher · 1 in sight" in shown(sim)
+    sim.slash("/fai stop")  # tracking over: the player's own setting is back
+    sim.run(1)
+    assert text(sim.lua('return GetCVar("nameplateShowAll")')) == "0"
+    assert sim.errors == []

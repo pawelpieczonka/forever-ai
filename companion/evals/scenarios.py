@@ -217,6 +217,17 @@ SCENARIOS = [
              patch={"target": None, "windows": None, "marks": ["1. Strigid Screecher — Teldrassil 64.2, 69.2 (24 m)"],
                     "tracked": ["Strigid Screecher: 1 alive in sight now, marked with the skull raid icon"],
                     "around": ["Strigid Screecher, level 8, neutral, Beast", "Strigid Owl, level 5, neutral, Beast"]})]),
+    Scenario("cannot_see_without_nameplates", "The player's game showed nameplates only in a fight: a creature stood "
+                                              "next to them, the add-on saw nothing and the answer said none was near.", [
+        Turn("jest gdzies ten screecher w poblizu?",
+             [c.never_says(r"nie ma (go |żadnego |zadnego )?(teraz )?w pobli[żz]u", r"[żz]adnego .{0,30}w zasi[ęe]gu"),
+              c.says(r"nameplate|Show them|najed[źz]|nakieruj|namierz|zaznacz"), c.max_words(150), PL],
+             patch={"target": None, "windows": None, "around": None,
+                    "game": {"nameplates": "only for the target and units in a fight (the add-on does not see creatures "
+                                           "that just stand there)"},
+                    "marks": ["1. Strigid Screecher — Teldrassil 64.2, 69.2 (24 m)"],
+                    "tracked": ["Strigid Screecher: not seen, but the game shows nameplates only for the target and for "
+                                "units in a fight (nameplates of all enemies are off), so one can be near without being seen"]})]),
     Scenario("mark_a_creature", "Asked where a creature is: the mark comes with a watch for it.", [
         Turn("gdzie znajde befouled webwood? oznacz",
              [c.calls("mark_on_map", 1, 1), c.marks(51.5, 56.4), c.did(r"watching for: .*Befouled Webwood"), c.max_words(150), PL])]),

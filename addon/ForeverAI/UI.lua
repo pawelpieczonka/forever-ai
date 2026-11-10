@@ -856,6 +856,9 @@ local function Chip(parent)
   if c.text.SetMaxLines then c.text:SetMaxLines(1) end
   c.close = Btn(c, "x", 20, 20, function(self) if c.onClose then c.onClose() end end, "ghost")
   c.close:SetPoint("RIGHT", -1, 0)
+  c.act = Btn(c, "", 78, 18, function(self) if c.onAct then c.onAct() end end)
+  c.act:SetPoint("RIGHT", c.close, "LEFT", -2, 0)
+  c.act:Hide()
   return c
 end
 
@@ -869,9 +872,15 @@ local function layoutChips(items, width)
     c.text:SetWidth(0)
     c.text:SetText(it.text)
     c.close.tip, c.onClose = it.tip, it.close
+    c.act:SetShown(it.act ~= nil)
+    if it.act then
+      c.act:SetText(it.act[1])
+      c.act.tip, c.onAct = it.act[2], it.act[3]
+    end
+    local fixed = 8 + 6 + 6 + 6 + 22 + (it.act and (c.act:GetWidth() + 4) or 0)
     local textW = math.ceil(c.text.GetUnboundedStringWidth and c.text:GetUnboundedStringWidth() or c.text:GetStringWidth())
-    local w = math.min(width, textW + 8 + 6 + 6 + 6 + 22)
-    c.text:SetWidth(w - (8 + 6 + 6 + 6 + 22))
+    local w = math.min(width, textW + fixed)
+    c.text:SetWidth(w - fixed)
     if x > 0 and x + w > width then x, row = 0, row + 1 end
     c:ClearAllPoints()
     c:SetPoint("TOPLEFT", strip, "TOPLEFT", x, -row * (STRIP_ROW + STRIP_GAP))
@@ -912,9 +921,14 @@ function UI.UpdateStrip()
     items[#items + 1] = {
       color = seen and { 0.36, 1, 0.62, 1 } or { 0.85, 0.64, 0.26, 1 },
       text = string.format("|cff9aa3adTracking|r %s |cff%s· %s|r", esc(t.name), seen and "5dff9d" or "d9a441",
-        seen and (t.alive .. " in sight") or "none in sight"),
+        seen and (t.alive .. " in sight") or (t.blind and "nameplates off" or "none in sight")),
       tip = "Stop tracking " .. t.name,
       close = function() ns.Track.Stop(t.name) end,
+      -- the game shows nameplates only in a fight: the add-on then sees a creature only when it is targeted or pointed at
+      act = t.blind and { "Show them", "Your game shows nameplates only for your target and in a fight, so a creature "
+        .. "standing next to you is not seen. This turns on the nameplates of all enemies while something is tracked; "
+        .. "your own setting comes back when tracking ends. Without it, point at the creature or target it.",
+        function() ns.Track.ShowNameplates() end } or nil,
     }
   end
   local stops = ns.Map and ns.Map.Count and ns.Map.Count() or 0
