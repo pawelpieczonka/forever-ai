@@ -60,6 +60,8 @@ cd companion && .venv/bin/python -m foreverai
 
 Tests: `.venv/bin/python -m pytest -q` (Linux) or `.venv\Scripts\python.exe -m pytest -q` (Windows), in `companion`.
 
+The add-on simulator runs the add-on outside the game, connected to the app, and saves pictures of its window: `.venv/bin/python -m addonsim --help`, in `companion`.
+
 ## Build
 
 The apps are not committed: GitHub Actions (`.github/workflows/release.yml`) builds the Windows and the Linux app from the same commit for every pull request (as workflow artifacts) and publishes both as a GitHub Release when a new version reaches `main`. Local builds go to `release/` (ignored by git).
