@@ -114,6 +114,90 @@ class InboxWriter:
             self.send(dict(self.last))
 
 
+# a line of the "marks" section: "2. Sentinel Arynia Cloudsbreak — Teldrassil 38.3, 34.4 (115 m)"
+_MARK_LINE = re.compile(r"^\d+\. (.+) — .*? (\d+(?:\.\d+)?), (\d+(?:\.\d+)?)(?: \(\d+ m\))?$")
+
+
+def edit_route(ctx: "TurnContext", args: dict) -> tuple[str, bool]:
+    """The edit_route tool: change the route that is on the player's map (the snapshot's marks and tracked sections)
+    without marking it again. Either everything asked for fits, or nothing changes. A later call in the same answer
+    takes the place of an earlier one for the route; creatures to stop watching for add up."""
+    def names(value) -> list[str]:
+        value = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+        return [str(v).strip() for v in value if str(v).strip()]
+
+    def bare(title: str) -> str:
+        return re.sub(r"^\d+[.)]\s*", "", title).strip("[] ").lower()
+
+    stops = [{"title": m.group(1), "x": float(m.group(2)), "y": float(m.group(3))}
+             for m in (_MARK_LINE.match(str(line)) for line in ctx.snapshot.get("marks") or []) if m]
+    tracked = [re.split(r" \(also counts|: ", str(line))[0] for line in ctx.snapshot.get("tracked") or []]
+    remove, order, stop = names(args.get("remove")), names(args.get("order")), names(args.get("stop_tracking"))
+    clear = args.get("clear") is True
+    if not (remove or order or stop or clear):
+        return "Nothing changed: say what to change (remove, order, clear or stop_tracking).", True
+    if (remove or order or clear) and not stops:
+        return "Nothing changed: nothing of yours is marked on the map.", True
+
+    def numbered(some: list[dict]) -> str:
+        return ", ".join(f"{n}. {s['title']}" for n, s in enumerate(some, 1))
+
+    def pick(wanted: list[str]) -> list[dict] | str:
+        """The stops named by their number in the marks section or by their title; a name when one fits no stop."""
+        found: list[dict] = []
+        for name in wanted:
+            key = name.rstrip(".")
+            if key.isdigit():
+                hit = stops[int(key) - 1] if 1 <= int(key) <= len(stops) else None
+            else:
+                hit = next((s for s in stops if s["title"].lower() == bare(name) and s not in found), None)
+            if hit is None:
+                return name
+            if hit not in found:
+                found.append(hit)
+        return found
+
+    gone, first = pick(remove), pick(order)
+    for missing in (gone, first):
+        if isinstance(missing, str):
+            return f"Nothing changed: no stop called {missing}. The stops on the map: {numbered(stops)}.", True
+    if stop and stop[0].lower() == "all":
+        unwatched = tracked
+    else:
+        unwatched = []
+        for name in stop:
+            hit = next((t for t in tracked if t.lower() == name.strip("[] ").lower()), None)
+            if hit is None:
+                return (f"Nothing changed: nothing called {name} is watched for. "
+                        + ("Watched for: " + ", ".join(tracked) + "." if tracked else "Nothing is watched for.")), True
+            unwatched.append(hit)
+
+    said, notes, edit = [], [], {}
+    if clear:
+        edit = {"clear": True}
+        said.append("The route is cleared: no marks of yours are on the map.")
+        notes.append("cleared the route")
+    elif gone or first:
+        gone = [s for s in stops if s in gone]  # in the order of the route
+        first = [s for s in first if s not in gone]
+        left = first + [s for s in stops if s not in gone and s not in first]
+        if gone:
+            edit["remove"] = gone
+            said.append("Taken off the route: " + ", ".join(s["title"] for s in gone) + ".")
+            notes.append("took off the route: " + ", ".join(s["title"] for s in gone))
+        if first:
+            edit["order"] = left
+            notes.append("put the route in another order")
+        said.append("The route now: " + (numbered(left) if left else "no stops left") + ".")
+    if edit:
+        ctx.route_edit, ctx.edit_notes["route"] = edit, notes
+    if unwatched:
+        ctx.untrack += [name for name in unwatched if name not in ctx.untrack]
+        ctx.edit_notes["untrack"] = ["stopped watching for: " + ", ".join(ctx.untrack)]
+        said.append("No longer watched for: " + ", ".join(unwatched) + ".")
+    return " ".join(said), False
+
+
 class TurnContext:
     """Everything the tools of one answer work on."""
 
@@ -129,6 +213,9 @@ class TurnContext:
         self.mark_adds: list[bool] = []  # per mark_on_map call: the model asked to keep the earlier marks
         self.route_marked = False  # the marks so far are plan_route's own
         self.track: list[dict] = []  # creatures the game watches for with these marks: {"name", "quest"}
+        self.route_edit: dict | None = None  # edit_route: what the game changes in the route that is on the map
+        self.untrack: list[str] = []  # edit_route: creatures the game stops watching for
+        self.edit_notes: dict[str, list[str]] = {}  # what edit_route did, for did()
         self.phase_cb: Callable[[str], None] = lambda p: None
         self.pre_urls: set[str] = set()
         self.known: dict = {}  # addon options the game reported in this answer (validates proposals)
@@ -141,7 +228,7 @@ class TurnContext:
 
     def did(self) -> list[str]:
         """What this answer did besides its text, in words the model reads in the following turns."""
-        out = []
+        out = [note for kind in ("route", "untrack") for note in self.edit_notes.get(kind, [])]  # the game edits first
         for i, m in enumerate(self.marks):
             how = "added to the marks on the map"
             if self.replaces_marks:
@@ -680,7 +767,8 @@ class Service:
         final_text = md_to_wow(text) if text else "(no answer)"
         writer.send({"kind": "answer", "final": True, "msgId": msg_id, "text": final_text, "sources": ctx.used_sources(text),
                      "actions": ctx.actions, "marks": ctx.marks, "marksReplace": ctx.replaces_marks,
-                     "track": ctx.track, "cost": self.last_cost, "model": model,
+                     "track": ctx.track, "route": ctx.route_edit, "untrack": ctx.untrack,
+                     "cost": self.last_cost, "model": model,
                      **({"costNote": "Gemini API"} if is_gemini else {}),
                      "links": self.links(text, ctx), "auction": ctx.auction_card(text),
                      "secs": round(time.monotonic() - started, 1),
@@ -745,7 +833,8 @@ class Service:
             return text, action is None
         if name == "mark_on_map":
             mark, text = validate_mark(args)
-            add = args.get("add") is True
+            # after edit_route a mark is an extra stop: replacing the route would undo the edit
+            add = args.get("add") is True or ctx.route_edit is not None
             if mark and ctx.route_marked and not add:  # the model marks its own choice of the route's stops
                 del ctx.marks[:], ctx.mark_adds[:], ctx.track[:]
             if mark:
@@ -760,10 +849,15 @@ class Service:
                 mob = str(args.get("mob") or "").strip("[] ")[:60]
                 if mob:
                     watched = ctx.watch(mob)
+                    if watched:
+                        mark["mob"] = watched  # the stop knows its creature: taken off the route, the watch ends
                     text += (f" The game watches for {watched}: a living one in sight is marked on the screen and announced."
                              if watched else f" {mob} is not watched for: the game watches for at most {MAX_TRACKED} "
                                              "creatures at once.")
             return text, mark is None
+        if name == "edit_route":
+            ctx.phase_cb("Changing the route…")
+            return edit_route(ctx, args)
         if name == "plan_route":
             from .route import plan_route
             ctx.phase_cb("Planning the route…")
@@ -780,12 +874,15 @@ class Service:
             text = route["text"]
             if args.get("mark") is not False and route["stops"]:
                 del ctx.marks[:], ctx.mark_adds[:], ctx.track[:]  # the route is the whole set of marks of this answer
+                ctx.route_edit = None  # and takes the place of the route that was edited
+                ctx.edit_notes.pop("route", None)
                 for stop in route["stops"][:MAX_MARKS]:
                     if stop.get("mob"):
                         ctx.watch(stop["mob"], stop.get("quest"))
                 for n, stop in enumerate(route["stops"][:MAX_MARKS], 1):
                     ctx.marks.append({"title": f"{n}. {stop['title']}"[:60], "x": round(stop["x"], 1),
-                                      "y": round(stop["y"], 1), "zone": stop["zone"]})
+                                      "y": round(stop["y"], 1), "zone": stop["zone"],
+                                      **({"mob": stop["mob"]} if stop.get("mob") else {})})
                     ctx.mark_adds.append(False)
                 ctx.route_marked = True
                 count = len(ctx.marks)
@@ -958,7 +1055,7 @@ class Service:
     def _claude_system(self, system: str) -> str:
         s = self.store.settings
         system += ("\n\nThe foreverai MCP server provides: search_knowledge_base, search_auction_house, addon_options, "
-                   "propose_addon_change, propose_quest_abandon, propose_vendor_action, mark_on_map, plan_route, "
+                   "propose_addon_change, propose_quest_abandon, propose_vendor_action, mark_on_map, plan_route, edit_route, "
                    "save_memory, delete_memory, fetch_url. Read web pages (e.g. build links) only with fetch_url — it gets "
                    "past bot blocking.")
         if s.search_mode == "always":
@@ -1101,6 +1198,7 @@ class Service:
                      "text": md_to_wow(text) if text else "(no answer)", "links": self.links(text, ctx),
                      "auction": ctx.auction_card(text),
                      "marks": ctx.marks, "marksReplace": ctx.replaces_marks, "track": ctx.track,
+                     "route": ctx.route_edit, "untrack": ctx.untrack,
                      "sources": ctx.used_sources(text), "actions": ctx.actions,
                      "model": model_name(s.claude_model),
                      "costNote": "Claude subscription", "secs": round(time.monotonic() - started, 1),

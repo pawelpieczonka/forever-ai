@@ -41,7 +41,7 @@ function M.FindMap(zone)
   return found
 end
 
--- the marks on the map now, in walking order: { title, x, y (0-100), mapID, zone }
+-- the marks on the map now, in walking order: { title, x, y (0-100), mapID, zone, mob (the creature to find there) }
 local function list()
   if not ns.char then return {} end
   ns.char.marks = ns.char.marks or {}
@@ -96,7 +96,7 @@ function M.Apply(marks)
     if mapID then
       local info = C_Map.GetMapInfo(mapID)
       local e = { title = tostring(mk.title), x = tonumber(mk.x) or 0, y = tonumber(mk.y) or 0, mapID = mapID,
-        zone = info and info.name or mk.zone }
+        zone = info and info.name or mk.zone, mob = type(mk.mob) == "string" and mk.mob or nil }
       saved[#saved + 1] = e
       place(e, #saved == 1)
       placed[#placed + 1] = e
@@ -110,7 +110,7 @@ end
 function M.Clear()
   for _, mk in ipairs(list()) do unplace(mk) end
   wipe(M.uids)
-  if ns.char then ns.char.marks = {} end
+  if ns.char then ns.char.marks, ns.char.marksRemoved = {}, nil end
   if C_Map.ClearUserWaypoint then pcall(C_Map.ClearUserWaypoint) end
   changed()
 end
@@ -157,7 +157,102 @@ function M.Check()
   end
 end
 
--- for the AI: what is marked now, in order, with the distance when the stop is in the player's zone
+------------------------------------------------------------------------ changing the route
+-- The stops are numbered as they stand now, whatever number their title was given when they were marked.
+local function bare(title) return (tostring(title):gsub("^%d+[%.%)]%s*", "")) end
+
+-- after a change the waypoints and the arrow follow the list
+local function refresh()
+  M.Restore()
+  if #list() == 0 and not usesTomTom() and C_Map.ClearUserWaypoint then pcall(C_Map.ClearUserWaypoint) end
+  changed()
+end
+
+-- a stop that is gone takes the watch for its creature with it, unless another stop is for the same creature
+local function untrack(mk)
+  if not ns.Track then return end
+  local name = (mk.mob or bare(mk.title)):lower()
+  for _, other in ipairs(list()) do
+    if (other.mob or bare(other.title)):lower() == name then return end
+  end
+  ns.Track.Stop(name)
+end
+
+-- the stop with this title (its number does not count) and, when given, this place; looked for from ``from`` on
+local function find(saved, want, from)
+  if type(want) ~= "table" then return nil end
+  local key, x, y = bare(want.title or ""):lower(), tonumber(want.x), tonumber(want.y)
+  for i = from or 1, #saved do
+    local mk = saved[i]
+    if bare(mk.title):lower() == key and (not x or not y or (math.abs(mk.x - x) < 0.06 and math.abs(mk.y - y) < 0.06)) then
+      return i
+    end
+  end
+end
+
+-- Take stop i off the route. by == "player": the AI is told (section "marks"), so that it does not put it back.
+function M.Remove(i, by)
+  local saved = list()
+  local mk = saved[i]
+  if not mk then return end
+  unplace(mk)
+  table.remove(saved, i)
+  if by == "player" then
+    local gone = ns.char.marksRemoved or {}
+    gone[#gone + 1] = bare(mk.title)
+    while #gone > 10 do table.remove(gone, 1) end
+    ns.char.marksRemoved = gone
+  end
+  untrack(mk)
+  refresh()
+end
+
+-- the player goes to stop i next: it moves to the top, the others keep their order
+function M.Next(i)
+  local saved = list()
+  if not saved[i] or i <= 1 then return end
+  table.insert(saved, 1, table.remove(saved, i))
+  refresh()
+end
+
+-- The AI's change to the route (its edit_route tool): { clear = true }, or { remove = { { title, x, y } ... },
+-- order = { { title, x, y } ... } } with the stops as the "marks" section named them. Stops not named in ``order``
+-- follow in the order they had.
+function M.Edit(edit)
+  if type(edit) ~= "table" then return end
+  if edit.clear then M.Clear() return end
+  local saved = list()
+  for _, want in ipairs(type(edit.remove) == "table" and edit.remove or {}) do
+    local i = find(saved, want)
+    if i then
+      local mk = table.remove(saved, i)
+      unplace(mk)
+      untrack(mk)
+    end
+  end
+  local at = 1
+  for _, want in ipairs(type(edit.order) == "table" and edit.order or {}) do
+    local i = find(saved, want, at)
+    if i then
+      table.insert(saved, at, table.remove(saved, i))
+      at = at + 1
+    end
+  end
+  refresh()
+end
+
+-- for the window: the stops in order, { title, zone, x, y, meters (nil in another zone) }
+function M.List()
+  local out = {}
+  local mapID, px, py = playerSpot()
+  for i, mk in ipairs(list()) do
+    out[i] = { title = bare(mk.title), zone = mk.zone, x = mk.x, y = mk.y, meters = metersTo(mk, mapID, px, py) }
+  end
+  return out
+end
+
+-- for the AI: what is marked now, in order, with the distance when the stop is in the player's zone, and the stops
+-- the player took off themselves
 function M.Section()
   local saved = list()
   if #saved == 0 then return nil end
@@ -165,9 +260,11 @@ function M.Section()
   local mapID, px, py = playerSpot()
   for i, mk in ipairs(saved) do
     local d = metersTo(mk, mapID, px, py)
-    out[i] = string.format("%d. %s — %s %.1f, %.1f%s", i, (tostring(mk.title):gsub("^%d+[%.%)]%s*", "")),
-      tostring(mk.zone or "?"), mk.x, mk.y, d and string.format(" (%d m)", d) or "")
+    out[i] = string.format("%d. %s — %s %.1f, %.1f%s", i, bare(mk.title), tostring(mk.zone or "?"), mk.x, mk.y,
+      d and string.format(" (%d m)", d) or "")
   end
+  local gone = ns.char and ns.char.marksRemoved
+  if gone and #gone > 0 then out[#out + 1] = "Taken off the route by the player: " .. table.concat(gone, ", ") end
   return out
 end
 

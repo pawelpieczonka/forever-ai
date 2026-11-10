@@ -136,6 +136,33 @@ TOOLS.append({
 TOOLS.append({
     "type": "function",
     "function": {
+        "name": "edit_route",
+        "description": "Change the route that is on the player's map (the marks section) without marking it again: "
+                       "take stops off, put them in another order, clear it, or stop watching for a creature (the "
+                       "tracked section). Name a stop by its title or by its number in the marks section. Put "
+                       "everything into one call. The player sees the change on the map and in the add-on's window at "
+                       "once. To add a stop, call mark_on_map with add=true; for a whole new route, plan_route.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "remove": {"type": "array", "items": {"type": "string"}, "description": "Stops to take off the route"},
+                "order": {"type": "array", "items": {"type": "string"},
+                          "description": "Stops in the order to walk them; the stops you do not name follow in the "
+                                         "order they had"},
+                "clear": {"type": "boolean", "description": "true: take every stop off the map"},
+                "stop_tracking": {"type": "array", "items": {"type": "string"},
+                                  "description": "Creatures to stop watching for, by the name that starts their line "
+                                                 "in the tracked section; [\"all\"] for every one. A stop taken off "
+                                                 "the route takes the watch for its creature with it"},
+            },
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
         "name": "plan_route",
         "description": "The walking route through the player's quest log in their current zone: every objective and "
                        "turn-in with a known place, in the order with the shortest way, each turn-in after its own "

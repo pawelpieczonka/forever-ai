@@ -296,7 +296,7 @@ def test_mcp_server_protocol():
     assert init["result"]["capabilities"] == {"tools": {}}
     names = [t["name"] for t in srv.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]]
     assert names == ["search_knowledge_base", "propose_addon_change", "save_memory", "delete_memory", "fetch_url",
-                     "mark_on_map", "plan_route", "addon_options", "propose_quest_abandon", "propose_vendor_action",
+                     "mark_on_map", "edit_route", "plan_route", "addon_options", "propose_quest_abandon", "propose_vendor_action",
                      "search_auction_house"]
     res = srv.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                       "params": {"name": "addon_options", "arguments": {"addon": "Questie"}}})
@@ -712,7 +712,7 @@ def test_plan_route_marks_its_stops(env):
     d = _wait_final(addons, 3)
     assert "plan_route" in Client.tools
     assert d["marks"] == [{"title": "1. Postman", "x": 65.0, "y": 50.0, "zone": "Teldrassil"},
-                          {"title": "2. Boar", "x": 80.0, "y": 50.0, "zone": "Teldrassil"},
+                          {"title": "2. Boar", "x": 80.0, "y": 50.0, "zone": "Teldrassil", "mob": "Boar"},
                           {"title": "3. Giver", "x": 50.0, "y": 60.0, "zone": "Teldrassil"}]
     assert d["marksReplace"] is True
     assert Client.result.startswith("Route from 50, 50 (Teldrassil): 3 stops, about 4.9 km.")
@@ -856,3 +856,94 @@ def test_a_watch_that_cannot_be_added_is_not_claimed(env):
     assert "Creature 5 is not watched for: the game watches for at most 5 creatures at once" in text
     text, _ = svc.run_tool(ctx, "mark_on_map", {"title": "Again", "x": 31, "y": 10, "mob": "creature 0", "add": True})
     assert "The game watches for Creature 0:" in text and len(ctx.track) == 5  # watched already
+
+
+ROUTE_ON_THE_MAP = {"marks": ["1. Bloodfeather Rogue — Teldrassil 37.3, 37.8 (97 m)",
+                              "2. Sentinel Arynia Cloudsbreak — Teldrassil 38.3, 34.4 (115 m)",
+                              "3. Oracle Glade Moonwell — Teldrassil 38.4, 34.1",
+                              "4. Byancie — Teldrassil 55.3, 56.8",
+                              "Taken off the route by the player: Dazalar"],
+                    "tracked": ["Bloodfeather Rogue: none in sight now; not seen since it is tracked",
+                                "Windmistress Gaedress (also counts for Amulet: Hatescreech): none in sight now"]}
+
+
+def test_the_model_edits_the_route_on_the_map(env):
+    """"I have no tool that removes marks" was the answer when the player wanted two stops gone."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_ON_THE_MAP)
+    text, err = svc.run_tool(ctx, "edit_route", {"remove": ["3. Oracle Glade Moonwell", "bloodfeather rogue"]})
+    assert not err
+    assert ctx.route_edit == {"remove": [{"title": "Bloodfeather Rogue", "x": 37.3, "y": 37.8},
+                                         {"title": "Oracle Glade Moonwell", "x": 38.4, "y": 34.1}]}
+    assert text == ("Taken off the route: Bloodfeather Rogue, Oracle Glade Moonwell. "
+                    "The route now: 1. Sentinel Arynia Cloudsbreak, 2. Byancie.")
+    assert ctx.did() == ["took off the route: Bloodfeather Rogue, Oracle Glade Moonwell"]
+
+    ctx = _ctx(svc, addons, ROUTE_ON_THE_MAP)
+    text, err = svc.run_tool(ctx, "edit_route", {"remove": ["2"], "order": ["Byancie"], "stop_tracking": ["windmistress gaedress"]})
+    assert not err and ctx.untrack == ["Windmistress Gaedress"]
+    assert ctx.route_edit == {"remove": [{"title": "Sentinel Arynia Cloudsbreak", "x": 38.3, "y": 34.4}],
+                              "order": [{"title": "Byancie", "x": 55.3, "y": 56.8},
+                                        {"title": "Bloodfeather Rogue", "x": 37.3, "y": 37.8},
+                                        {"title": "Oracle Glade Moonwell", "x": 38.4, "y": 34.1}]}
+    assert text == ("Taken off the route: Sentinel Arynia Cloudsbreak. The route now: 1. Byancie, 2. Bloodfeather Rogue, "
+                    "3. Oracle Glade Moonwell. No longer watched for: Windmistress Gaedress.")
+    assert ctx.did() == ["took off the route: Sentinel Arynia Cloudsbreak", "put the route in another order",
+                         "stopped watching for: Windmistress Gaedress"]
+
+    ctx = _ctx(svc, addons, ROUTE_ON_THE_MAP)
+    text, err = svc.run_tool(ctx, "edit_route", {"clear": True, "stop_tracking": ["all"]})
+    assert not err and ctx.route_edit == {"clear": True} and ctx.untrack == ["Bloodfeather Rogue", "Windmistress Gaedress"]
+    assert ctx.did() == ["cleared the route", "stopped watching for: Bloodfeather Rogue, Windmistress Gaedress"]
+
+
+def test_an_edit_that_fits_nothing_changes_nothing(env):
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_ON_THE_MAP)
+    text, err = svc.run_tool(ctx, "edit_route", {"remove": ["Dazalar", "Byancie"]})
+    assert err and ctx.route_edit is None
+    assert text == ("Nothing changed: no stop called Dazalar. The stops on the map: 1. Bloodfeather Rogue, "
+                    "2. Sentinel Arynia Cloudsbreak, 3. Oracle Glade Moonwell, 4. Byancie.")
+    text, err = svc.run_tool(ctx, "edit_route", {"stop_tracking": ["Strigid Owl"]})
+    assert err and ctx.untrack == [] and "nothing called Strigid Owl is watched for" in text
+    text, err = svc.run_tool(ctx, "edit_route", {})
+    assert err and "say what to change" in text
+    text, err = svc.run_tool(_ctx(svc, addons, {}), "edit_route", {"remove": ["Byancie"]})
+    assert err and text == "Nothing changed: nothing of yours is marked on the map."
+
+
+def test_marks_after_an_edit_are_added_to_the_edited_route(env):
+    """Replacing the route would undo the edit: a mark set after edit_route is an extra stop."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_ON_THE_MAP)
+    svc.run_tool(ctx, "edit_route", {"remove": ["Byancie"]})
+    svc.run_tool(ctx, "mark_on_map", {"title": "Dazalar", "x": 56.7, "y": 59.5})
+    assert ctx.replaces_marks is False and ctx.did()[-1] == "added to the marks on the map: Dazalar (56.7, 59.5)"
+    # a whole new route takes the place of the old one, edited or not
+    ctx.snapshot.update({"player": {"coords": "50.0, 50.0", "map": "Teldrassil", "level": 10}, "quests": [
+        {"id": 1, "title": "Far Hunt", "status": "in progress", "turnIn": "Giver (Teldrassil 50.0, 60.0)",
+         "whereToGet": ["Boar: kill Boar (level 5) — Teldrassil 80.0, 50.0 (2400 m, 9 spawn points in your zone)"]}]})
+    svc.run_tool(ctx, "plan_route", {})
+    assert ctx.route_edit is None and ctx.replaces_marks is True
+    assert ctx.marks[0] == {"title": "1. Boar", "x": 80.0, "y": 50.0, "zone": "Teldrassil", "mob": "Boar"}
+    assert "took off the route: Byancie" not in ctx.did()
+
+
+def test_the_reply_tells_the_game_how_to_change_the_route(env):
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            if not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall("c1", "edit_route", '{"remove": ["Byancie"], "stop_tracking": ["Bloodfeather Rogue"]}'),
+                                     ToolCall("c2", "mark_on_map", '{"title": "Owl", "x": 64.2, "y": 69.2, "mob": "Strigid Owl"}')]
+                return
+            yield "text", "Done."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "drop Byancie",
+                "snapshot": ROUTE_ON_THE_MAP})
+    d = _wait_final(addons, 3)
+    assert d["route"] == {"remove": [{"title": "Byancie", "x": 55.3, "y": 56.8}]} and d["untrack"] == ["Bloodfeather Rogue"]
+    assert d["marks"] == [{"title": "Owl", "x": 64.2, "y": 69.2, "zone": "", "mob": "Strigid Owl"}]  # the stop knows its creature
+    assert d["marksReplace"] is False

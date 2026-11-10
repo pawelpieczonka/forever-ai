@@ -350,6 +350,11 @@ function UI.UpdateAnswer(data)
     if metaText ~= "" then bubble("meta", metaText) end
     ns.RecordEntry({ k = "a", t = data.text or "", links = data.links, meta = metaText ~= "" and metaText or nil })
     for _, a in ipairs(data.actions or {}) do UI.ActionCard(a) end
+    -- the AI's changes to the route that is on the map come first; marks of the same answer are added to the result
+    if type(data.route) == "table" and ns.Map then ns.Map.Edit(data.route) end
+    if type(data.untrack) == "table" and ns.Track then
+      for _, name in ipairs(data.untrack) do ns.Track.Stop(tostring(name)) end
+    end
     local marked = data.marks and #data.marks > 0
     -- the creatures to watch for belong to the marks: a new set of marks brings its own (or none)
     if ns.Track and (marked or (type(data.track) == "table" and #data.track > 0)) then
@@ -842,7 +847,7 @@ local SUGGESTIONS = {
 ------------------------------------------------------------------------ status strip
 -- What the add-on keeps doing after the answer has scrolled away: a creature it watches for, the marked route. One
 -- chip each, above the text field, with a button that ends it. The strip slides open and closed.
-local STRIP_ROW, STRIP_GAP = 22, 4
+local STRIP_ROW, STRIP_GAP, CHIP_ACTION_W = 22, 4, 34
 local chips = {}
 
 local function Chip(parent)
@@ -859,6 +864,9 @@ local function Chip(parent)
   if c.text.SetMaxLines then c.text:SetMaxLines(1) end
   c.close = Btn(c, "x", 20, 20, function(self) if c.onClose then c.onClose() end end, "ghost")
   c.close:SetPoint("RIGHT", -1, 0)
+  c.action = Btn(c, "", CHIP_ACTION_W, 20, function(self) if c.onAction then c.onAction() end end, "ghost")
+  c.action:SetPoint("RIGHT", c.close, "LEFT", -2, 0)
+  c.action:Hide()
   return c
 end
 
@@ -872,7 +880,15 @@ local function layoutChips(items, width)
     c.text:SetWidth(0)
     c.text:SetText(it.text)
     c.close.tip, c.onClose = it.tip, it.close
-    local fixed = 8 + 6 + 6 + 6 + 22
+    c.onAction = it.action and it.action.fn or nil
+    if it.action then
+      c.action:SetText(it.action.label)
+      c.action.tip = it.action.tip
+      c.action:Show()
+    else
+      c.action:Hide()
+    end
+    local fixed = 8 + 6 + 6 + 6 + 22 + (it.action and CHIP_ACTION_W + 2 or 0)
     local textW = math.ceil(c.text.GetUnboundedStringWidth and c.text:GetUnboundedStringWidth() or c.text:GetStringWidth())
     local w = math.min(width, textW + fixed)
     c.text:SetWidth(w - fixed)
@@ -908,6 +924,52 @@ local function slideStrip(target)
   end)
 end
 
+------------------------------------------------------------------------ the stops of the route
+-- Opened from the route's chip: every stop in order with its distance, a button that takes it off the route and one
+-- that makes it the next stop.
+local routeList, routeOpen
+local routeRows = {}
+local ROUTE_ROW = 20
+
+local function RouteRow(parent)
+  local r = CreateFrame("Frame", nil, parent)
+  r:SetHeight(ROUTE_ROW)
+  r.remove = Btn(r, "x", 20, 18, function() ns.Map.Remove(r.index, "player") end, "ghost", "Take this stop off the route")
+  r.remove:SetPoint("RIGHT", -1, 0)
+  r.next = Btn(r, "next", 36, 18, function() ns.Map.Next(r.index) end, "ghost", "Go here next")
+  r.next:SetPoint("RIGHT", r.remove, "LEFT", -2, 0)
+  r.text = label(r, "", F.small)
+  r.text:SetPoint("LEFT", 8, 0)
+  r.text:SetPoint("RIGHT", r.next, "LEFT", -6, 0)
+  r.text:SetJustifyH("LEFT")
+  r.text:SetJustifyV("MIDDLE")
+  if r.text.SetWordWrap then r.text:SetWordWrap(false) end
+  if r.text.SetMaxLines then r.text:SetMaxLines(1) end
+  return r
+end
+
+local function updateRoute()
+  if not routeList then return end
+  local stops = routeOpen and ns.Map and ns.Map.List() or {}
+  if #stops == 0 then routeOpen = false end -- the route is gone: the list closes with it
+  for i, s in ipairs(stops) do
+    local r = routeRows[i] or RouteRow(routeList)
+    routeRows[i] = r
+    r.index = i
+    r:ClearAllPoints()
+    r:SetPoint("TOPLEFT", routeList, "TOPLEFT", 0, -4 - (i - 1) * ROUTE_ROW)
+    r:SetPoint("RIGHT", routeList, "RIGHT", 0, 0)
+    local where = s.meters and (s.meters .. " m") or string.format("%s %.1f, %.1f", tostring(s.zone or ""), s.x, s.y)
+    -- the next stop, the one the arrow points at, stands out
+    r.text:SetText(string.format("|cff%s%d. %s|r |cff9aa3ad· %s|r", i == 1 and "7fd6ff" or "d8dee6", i, esc(s.title), where))
+    if i > 1 then r.next:Show() else r.next:Hide() end
+    r:Show()
+  end
+  for i = #stops + 1, #routeRows do routeRows[i]:Hide() end
+  routeList:SetHeight(#stops > 0 and (#stops * ROUTE_ROW + 8) or 0.001)
+  if #stops > 0 then routeList:Show() else routeList:Hide() end
+end
+
 function UI.UpdateStrip()
   if not strip then return end
   local items = {}
@@ -932,8 +994,17 @@ function UI.UpdateStrip()
       text = string.format("|cff9aa3adRoute|r · %d stop%s", stops, stops == 1 and "" or "s"),
       tip = "Clear the marks on the map",
       close = function() ns.Map.Clear() end,
+      action = {
+        label = routeOpen and "hide" or "list",
+        tip = routeOpen and "Hide the stops" or "Show the stops: take one off, or go to one next",
+        fn = function()
+          routeOpen = not routeOpen
+          UI.UpdateStrip()
+        end,
+      },
     }
   end
+  updateRoute()
   local h = layoutChips(items, math.max(100, strip:GetWidth()))
   if h > 0 then strip.full = h end
   slideStrip(h)
@@ -1071,9 +1142,22 @@ local function build()
   strip:SetScript("OnSizeChanged", function(self, w)
     if self.lastW ~= w then self.lastW = w C_Timer.After(0, UI.UpdateStrip) end -- chips wrap in a narrow window
   end)
+  routeList = CreateFrame("Frame", nil, pc, "BackdropTemplate")
+  routeList:SetPoint("BOTTOMLEFT", strip, "TOPLEFT", 0, 0)
+  routeList:SetPoint("BOTTOMRIGHT", strip, "TOPRIGHT", 0, 0)
+  routeList:SetHeight(0.001)
+  backdrop(routeList, { 1, 1, 1, 0.03 }, { 1, 1, 1, 0.08 })
+  routeList:Hide()
+  do -- the distances follow the player while the list is open
+    local since = 0
+    routeList:SetScript("OnUpdate", function(_, dt)
+      since = since + (dt or 0)
+      if since >= 1 then since = 0 updateRoute() end
+    end)
+  end
   chat = Scroll(pc)
   chat:SetPoint("TOPLEFT", 10, -6)
-  chat:SetPoint("BOTTOMRIGHT", strip, "TOPRIGHT", 0, 6)
+  chat:SetPoint("BOTTOMRIGHT", routeList, "TOPRIGHT", 0, 6)
   chat:HookScript("OnSizeChanged", function() C_Timer.After(0, relayout) end)
   emptyState = CreateFrame("Frame", nil, pc)
   emptyState:SetPoint("CENTER", chat, "CENTER", 0, 20)
