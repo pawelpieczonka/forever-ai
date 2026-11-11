@@ -32,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--ai", choices=("scripted", "live"), default="scripted",
                     help="scripted (default): replies from --reply / reply steps; live: the real provider (costs)")
     ap.add_argument("--reply", action="append", default=[], help="a scripted answer (repeatable, used in order)")
+    ap.add_argument("--model", default="sim/scripted-ai",
+                    help="the scripted AI's OpenRouter model id (sim/scripted-ai:free: a free model)")
     ap.add_argument("--screen", default="1920x1080", help="physical screen size (default 1920x1080)")
     ap.add_argument("--clock", help="the game clock at the start, YYYY-MM-DD HH:MM (default: now)")
     ap.add_argument("--game-dir", help="stand-in game folder to use and keep (saved variables stay between runs)")
@@ -79,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
             install_game(game, addon)
         else:
             from .app import App
-            app = App(game, data, ai=args.ai, replies=args.reply, addon_dir=addon).start()
+            app = App(game, data, ai=args.ai, replies=args.reply, addon_dir=addon, model=args.model).start()
             runner.app = app
         sim.start()
         failed = runner.run(steps)

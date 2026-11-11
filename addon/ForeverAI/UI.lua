@@ -732,7 +732,16 @@ function UI.UpdateHeader()
   end
   local left = ns.Transport.InboxLeft()
   local parts = {}
-  if (s.provider == nil or s.provider == "openrouter") and s.balance then
+  if (s.provider == nil or s.provider == "openrouter") and type(s.free) == "table" then
+    -- a free model: OpenRouter's requests of the day count, not the balance
+    local f = s.free
+    if tonumber(f.left) and tonumber(f.limit) then
+      parts[#parts + 1] = string.format("%sfree: %d of %d left today|r",
+        tonumber(f.left) < 5 and "|cffff5555" or "|cff5dff9d", f.left, f.limit)
+    else
+      parts[#parts + 1] = "|cff5dff9dfree|r"
+    end
+  elseif (s.provider == nil or s.provider == "openrouter") and s.balance then
     local low = s.lowBalance and s.balance < s.lowBalance
     parts[#parts + 1] = string.format("%s$%.2f|r", low and "|cffff5555" or "|cff5dff9d", s.balance)
   elseif s.provider == "claude_code" then

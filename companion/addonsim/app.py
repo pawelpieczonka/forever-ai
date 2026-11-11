@@ -25,6 +25,7 @@ from foreverai.openrouter import ToolCall
 from foreverai.setup_game import prepare_game
 
 SCRIPTED_MODEL = "sim/scripted-ai"
+SCRIPTED_FREE_MODEL = "sim/scripted-ai:free"  # answers like the other one, as a free OpenRouter model (model=...)
 
 
 class MemoryKeyring:
@@ -51,10 +52,12 @@ class ScriptedAI:
         return 5.0
 
     def models(self) -> list[dict]:
-        return [{"id": SCRIPTED_MODEL, "name": "Scripted AI (simulator)", "in": 0.0, "out": 0.0}]
+        return [{"id": SCRIPTED_MODEL, "name": "Scripted AI (simulator)", "in": 0.0, "out": 0.0},
+                {"id": SCRIPTED_FREE_MODEL, "name": "Scripted AI (simulator, free)", "in": 0.0, "out": 0.0,
+                 "free": True, "tools": True}]
 
     def key_info(self) -> dict:
-        return {"label": "simulator"}
+        return {"label": "simulator", "free_model_daily_requests": {"used": 13, "limit": 50, "remaining": 37}}
 
     def chat_stream(self, model, messages, tools=None, search_mode="auto", max_tokens=1800):
         last_user = max(i for i, m in enumerate(messages) if m["role"] == "user")
@@ -88,9 +91,11 @@ def default_reply(question: str) -> dict:
 
 class App:
     def __init__(self, game_dir: Path, data_dir: Path, *, ai: str = "scripted", replies=(),
-                 addon_dir: Path | None = None, kb: bool = True, pool: int = 300, stream_delay: float = 0.03):
+                 addon_dir: Path | None = None, kb: bool = True, pool: int = 300, stream_delay: float = 0.03,
+                 model: str = SCRIPTED_MODEL):
         if ai not in ("scripted", "live"):
             raise ValueError("ai: scripted or live")
+        self.model = model  # the scripted AI's model id (ai="scripted")
         self.game_dir, self.data_dir = Path(game_dir), Path(data_dir)
         self.ai = ai
         self.addon_dir = Path(addon_dir) if addon_dir else None
@@ -173,7 +178,7 @@ class App:
         if self.ai == "scripted":
             self._patch(claude_code, "detect", lambda force=False: None)
             env_file.write_text("OPENROUTER_API_KEY=sim-scripted-ai\n", encoding="utf-8")
-            store.update(provider="openrouter", model=SCRIPTED_MODEL, fallback_model=SCRIPTED_MODEL)
+            store.update(provider="openrouter", model=self.model, fallback_model=SCRIPTED_MODEL)
             factory = lambda key: ScriptedAI(key, self)  # noqa: E731
         else:
             provider = config.choose_provider(store.settings, claude_code.detect(force=True))

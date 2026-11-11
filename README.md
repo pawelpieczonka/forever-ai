@@ -141,13 +141,14 @@ The app finds Claude Code on `PATH`, in `~/.local/bin`, in npm/nvm installs and 
 | | Claude Code | OpenRouter | Google Gemini |
 |---|---|---|---|
 | **You need** | a Claude subscription, Claude Code installed and signed in | an [OpenRouter key](https://openrouter.ai/keys) | a [Gemini API key](https://aistudio.google.com/apikey) |
-| **Cost** | included in the subscription | per question, from your OpenRouter credit | Google's API prices for your key |
-| **Models** | Haiku, Sonnet or Opus, with a thinking level | a list, or any model by its ID | a list, or any model by its ID |
-| **When the model cannot answer** | — | a second model answers | `gemini-flash-lite-latest` answers within seconds |
+| **Cost** | included in the subscription | per question, from your OpenRouter credit; free models cost nothing | Google's API prices for your key |
+| **Models** | Haiku, Sonnet or Opus, with a thinking level | a list with the free models, or any model by its ID | a list, or any model by its ID |
+| **When the model cannot answer** | — | a second model answers (for a free model, another free one) | `gemini-flash-lite-latest` answers within seconds |
 
 - At start the app uses Claude Code when it is installed and signed in. Otherwise its window asks for a key and checks it with the provider before saving it.
 - **AI settings** in the app window change the provider, the model, the thinking level and web search (Auto, Always or Off). **Keys & sign-in…** adds a key or signs in to Claude Code. Changes apply to the next question. **Route updates** picks another model for the updates the add-on asks for by itself (and, with Claude Code, another thinking level next to it), so that they can be faster or cheaper than your questions.
 - Keys stay on your computer, in Windows Credential Manager or the Linux Secret Service (GNOME Keyring, KWallet, KeePassXC). Without one, the key is kept in `.env` in the data folder, readable only by you, and moves to the credential store once there is one.
+- **Free OpenRouter models** (IDs ending in `:free`, and `openrouter/free`, which picks one) are at the end of the model list. OpenRouter allows 50 requests a day (1000 once you have bought 10 credits) and 20 a minute; each tool round of an answer is a request. The app window and the game's header show how many are left today. If a free model is busy, another free one answers, never a paid one. Web search is still paid per search, so with a free model it is used only while your balance is at least $0.10.
 - When a Gemini answer has not started after 10 seconds, a short test tells an overloaded model from a busy one, so the switch to `gemini-flash-lite-latest` takes seconds instead of a long timeout. The app checks the chosen model again every few minutes and goes back to it once it answers.
 
 ## Other add-ons

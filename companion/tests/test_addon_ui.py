@@ -4,6 +4,7 @@ sends no AI settings (they are chosen in the app window) and shows the AI the ap
 from datetime import datetime
 
 from addonsim import Sim, install_game
+from addonsim.sim import _s
 
 # every Button and CheckButton on the Settings tab, in the order they were made, by their label
 CONTROLS = r"""
@@ -216,3 +217,31 @@ def test_data_check_boxes_fit_the_window(tmp_path):
     assert seen[(300, 15)] < 3  # how many fit at 380 depends on the font (the simulator uses an installed one)
     assert sim.errors == []
     sim.close()
+
+
+def test_the_header_shows_the_free_requests_of_a_free_model(tmp_path):
+    """A free OpenRouter model costs nothing: the header shows the free requests left today, not the balance (and no
+    low-balance warning); a paid model shows the balance as before."""
+    install_game(tmp_path / "game", pool=40)
+    sim = Sim(tmp_path / "game", clock=datetime(2026, 11, 10, 12, 0)).start()
+    sim.slash("/fai")
+    sim.run(1)
+    base = {"provider": "openrouter", "model": "google/gemma-4-31b-it:free", "searchMode": "never",
+            "balance": 0.0, "lowBalance": 1.0}
+
+    def header(status):  # the footer line, with its colour codes
+        sim.lua("ForeverAIDB.status = ...; ForeverAI.UI.UpdateHeader()", status)
+        texts = [_s(item.text) for item in sim._wow.visibleTexts().values()]
+        return [t for t in texts if "web search:" in t and "In use" not in t]
+
+    assert header({**base, "free": {"left": 37, "limit": 50}}) == [
+        "|cff5dff9dfree: 37 of 50 left today|r   web search: off"]
+    assert "OpenRouter  gemma-4-31b-it:free" in " ".join(sim.texts())
+    # few left: red, as a low balance is
+    assert header({**base, "free": {"left": 3, "limit": 50}})[0].startswith("|cffff5555free: 3 of 50 left today|r")
+    # not known yet (an empty table from the app)
+    assert header({**base, "free": {}})[0].startswith("|cff5dff9dfree|r   ")
+    # a paid model: the balance, red below the low-balance mark
+    paid = {**base, "model": "openai/gpt-6-luna", "searchMode": "auto"}
+    assert header(paid) == ["|cffff5555$0.00|r   web search: auto"]
+    assert header({**paid, "balance": 6.17}) == ["|cff5dff9d$6.17|r   web search: auto"]
