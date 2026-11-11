@@ -82,7 +82,7 @@ The route on the map changes. Nothing is planned from scratch.
 
 ```mermaid
 flowchart LR
-    addon["<b>ForeverAI add-on</b><br/>in the game"] <-->|"question, game data<br/>answer, marks"| app["<b>ForeverAI app</b><br/>with the knowledge base"]
+    addon["<b>The add-on</b><br/>in the game"] <-->|"question, game data<br/>answer, marks"| app["<b>ForeverAI app</b><br/>with the knowledge base"]
     app <-->|"question<br/>answer"| ai["<b>AI model</b><br/>Claude Code, OpenRouter<br/>or Gemini"]
 ```
 
