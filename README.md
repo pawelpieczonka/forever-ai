@@ -82,10 +82,8 @@ The route on the map changes. Nothing is planned from scratch.
 
 ```mermaid
 flowchart LR
-    addon["<b>ForeverAI add-on</b><br/>in the game"] -- "question +<br/>game data" --> app["<b>ForeverAI app</b><br/>on your computer"]
-    app -- "answer, marks,<br/>proposals" --> addon
-    app <--> ai["<b>AI model</b><br/>Claude Code, OpenRouter<br/>or Gemini"]
-    app --- kb[("<b>Knowledge base</b><br/>Forever wiki pages,<br/>Blizzard news")]
+    addon["<b>ForeverAI add-on</b><br/>in the game"] <-->|"question, game data<br/>answer, marks"| app["<b>ForeverAI app</b><br/>with the knowledge base"]
+    app <-->|"question<br/>answer"| ai["<b>AI model</b><br/>Claude Code, OpenRouter<br/>or Gemini"]
 ```
 
 Add-ons cannot reach the internet or other programs. So the add-on puts its question into a screenshot, which the app reads, and the app writes the answer into small helper add-ons (`ForeverAI_Inbox…`) that the add-on loads. That is why the app has to run while you play, and why the game needs one `/reload` after the add-on is installed.
