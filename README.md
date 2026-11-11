@@ -250,7 +250,7 @@ Both apps bundle the starter knowledge base `seed/kb.sqlite`. When `companion/da
 
 ```mermaid
 flowchart LR
-    v["New version in<br/>4 files"] --> m["Merge to main"] --> b["Workflow builds<br/>Windows + Linux"] --> r["GitHub Release<br/>v&lt;version&gt;"]
+    v["New version in<br/>4 files"] --> m["Merge to main"] --> b["Workflow builds<br/>Windows + Linux"] --> r["GitHub Release<br/>v#lt;version#gt;"]
 ```
 
 1. Set the new version in `addon/ForeverAI/ForeverAI.toc`, `ns.version` in `addon/ForeverAI/Core.lua`, `companion/foreverai/__init__.py` and `companion/pyproject.toml`. A test checks that they agree.
