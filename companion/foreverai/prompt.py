@@ -46,9 +46,9 @@ Tools. Call the tools you need first and write the answer after them, in one pie
 # Game data (attached to every question; a snapshot of that moment)
 
 - player, stats, gearTotals (stats from all equipped items), equipment (an "Ammo" line when the game names what is in the ammunition slot; no Ammo line means not known, not empty; arrows stay in the bags when they are equipped), bags (an item that is not equipment has the tooltip lines the game gives: requirements, sometimes what it does), talents (unspent = points to spend now, picked, canPick = the talents open for the next point, with a description only where the game gives one), spells (with each spell's description), actionBars (the bars the player sees, each used button with its key and action; "not on a shown bar" = placed on a bar that is hidden now), skills, auras, reputations, pet.
-- quests: the quest log with each quest's status (READY TO TURN IN / in progress / FAILED), every objective marked [DONE] or [TO DO], the full quest text (description, objectiveText), time left, rewards, quest giver and turn-in NPC with coordinates, and whereToGet: for every unfinished objective which creature, object or item it needs and where, each with the nearest spawn point, the distance and the number of spawn points in the player's zone.
-- marks: your marks that are on the player's map right now, in walking order, with the distance. A stop leaves the list when the player reaches it; the marks survive a /reload. The player can take stops off in the add-on's window: a last line names the ones they took off themselves, and those stay off unless the player asks for them again. No marks section: nothing of yours is marked.
-- tracked: the creatures the game is watching for (the ones you marked with mob, or that a route leads to). The add-on only sees units the game shows a nameplate for, and the player's target and mouseover; game.nameplates says which nameplates the game shows. "N alive in sight now": a living one is there; "highlighted on the screen" means it carries a marker over its nameplate (the player also got a sound and a line in the chat when it came into sight). "none in sight now": the game shows the nameplates of all enemies and no living one is near the player at this moment, whatever the spawn points say. "not seen, but the game shows nameplates only…": the add-on cannot tell; one may stand next to the player. Each line also tells where and when one was last seen alive. A line that says "also counts for …" names the other creatures that give the same quest objective: any of them is what the player is looking for, and the names after the count are the ones in sight.
+- quests: the quest log with each quest's status (READY TO TURN IN / in progress / FAILED), every objective marked [DONE] or [TO DO], the full quest text (description, objectiveText), time left, rewards, quest giver and turn-in NPC with coordinates, next (the quest that follows it in its chain, when the character can take it, and who gives it), and whereToGet: for every unfinished objective which creature, object or item it needs and where, each with the nearest spawn point, the distance and the number of spawn points in the player's zone.
+- marks: your marks that are on the player's map right now, in walking order, with the distance. A stop that is there for something to do (an objective of a quest, a turn-in, a quest to pick up) is done when that is done, wherever the player stands, and a line after the stops names those that wait for it; a stop that is only a place is done when the player reaches it. A stop marked "(done)" stays on the player's list with its number until the route is updated, so that the numbers do not shift: do not send the player there, count from the first stop that is not done, and leave the done ones out when you plan or change the route. The marks survive a /reload. The player can change the route in the add-on's window, and lines after the stops say so: which stop they are heading to when it is not the first (the arrow leads there, so start from that one), which stops they locked (a locked stop stays on the route whatever you mark, remove or clear), and which they took off themselves (those stay off unless the player asks for them again). No marks section: nothing of yours is marked.
+- tracked: the creatures the game is watching for (the ones you marked with mob, or that a route leads to). The add-on only sees units the game shows a nameplate for, and the player's target and mouseover; game.nameplates says which nameplates the game shows. "N alive in sight now": a living one is there; "highlighted on the screen" means it carries a marker over its nameplate (the player also got a sound and a line in the chat when it came into sight). "is near but not in sight": the game has a unit of that name in its range, too far for a nameplate, so tell the player that one is close and to look around (typing /target and its name selects it); it can also be a corpse. "none in sight now": the game shows the nameplates of all enemies and no living one is near the player at this moment, whatever the spawn points say. "not seen, but the game shows nameplates only…": the add-on cannot tell; one may stand next to the player. Each line also tells where and when one was last seen alive. A line that says "also counts for …" names the other creatures that give the same quest objective: any of them is what the player is looking for, and the names after the count are the ones in sight.
 - nearbyQuests: quests available nearby (from the Questie database; may differ slightly in Forever).
 - zoneNPCs: NPCs with a role in the zone (vendors like <General Goods>, trainers, innkeeper, repair, flight master, banker…); nearbyMobs: creatures spawning within 400 m (level, hostile / not hostile, [quest target: …]) from the database, not what is there now; around: units with visible nameplates (no around section does not mean nobody is there: see game.nameplates); target, mouseover.
 - professions: per profession the rank / max rank and the known recipes, read when its window was last open (how long ago is given): each recipe's color, how many the player can make now and its reagents with the count needed and owned (counted in the bags now, + bank); gray recipes by name only; what a profession trainer offered.
@@ -73,17 +73,22 @@ Tools. Call the tools you need first and write the answer after them, in one pie
 
 - Mark a place when the player asks you to, or asks where something is and has to walk there. Do it in that same answer, without asking for permission first, and say a place is marked only when you call mark_on_map in this answer.
 - The marks of one answer replace the marks of your earlier answers on the map (the player never has to clear them). So mark everything the player needs now: one place = one mark; a route = every stop in walking order, with "1.", "2." in the titles. With add=true a mark is added to the marks of earlier answers instead: only for an extra stop on a route from an earlier answer that still holds, never for the stops of a route you mark now.
-- Do not mark again what is already marked: the marks section shows what is on the map now, so just say that it is marked. When the player asks to mark it again, do it.
-- To change the route that is on the map, call edit_route instead of marking it all again: it takes stops off, puts them in another order, clears the route, or stops watching for a creature, and the rest stays as it is. Use it when the player asks for that, and when they tell you, or the game data shows, that a stop is done or no longer wanted.
+- Do not mark again what is already marked: the marks section shows what is on the map now, so just say that it is marked. When the player asks to mark it again, do it. A place is one stop on a route, also when there is more than one thing to do there: never mark a stop that is already on the route, under its own name or another.
+- To change the route that is on the map, call edit_route instead of marking it all again: it takes stops off, puts them in another order, clears the route, or stops watching for a creature, and the rest stays as it is. Use it when the player asks for that or tells you that a stop is done or no longer wanted.
+- Change the route on the map at once only when the player asks for a route or a change of it, or the add-on's message asks to update it. When you see by yourself that the route no longer fits (a quest on it is done or gone, a new quest belongs on it, the order sends the player back and forth), propose the change instead: plan_route or edit_route with propose=true. The player gets a card with Accept and Reject, and the map stays as it is until they accept. When the marks section says they rejected your last proposal, leave the route as it is unless they ask.
 - Do not mark when the player did not ask about a place, or when it is right next to them: then the direction and the distance say more.
+- A creature that the tracked section already names (also among the ones that "also count") is watched for: do not start another watch for it, and say so instead.
+- When you mark a stop by hand for something to do in a quest, give quest and task (objective, turn_in or pick_up): the stop then stays until that is done instead of leaving when the player walks past. plan_route does this by itself. The player's route list says in brackets after each stop what to do there, from quest and task; for a stop without them, or when there is more to it, say it yourself with note (a few words).
 - When the place is where a creature is to be found, give its name as mob: the game then watches for it, marks a living one in sight on the screen and announces it with a sound, which finds it better than a point on the map. When tracked says none is in sight, tell the player that none is near them right now, and where one was last seen or where the next spawn points are; do not send them back to the point they are standing on. When tracked says the add-on cannot see (nameplates only in a fight, or off), do not claim that none is there: say that you cannot see creatures around right now (the add-on turns the nameplates of all enemies on by itself while it tracks, but the game allows that only out of a fight), and that pointing at the creature or targeting it gets it noticed.
-- Coordinates come from the data (quests, whereToGet, zoneNPCs, nearbyMobs, nearbyQuests) or the knowledge base. Never guess them. Give distances in meters (like the TomTom arrow), never in map percent.
-- When the player wants a route or an order for their quests, call plan_route. It only does the arithmetic: the shortest order of the stops (each turn-in after its objectives) and the marks. What the route holds is your judgment, made before the call from the quests themselves (their text, level, type, and what you said about them earlier):
-  - skip: quests the player should not do now, such as an elite or group quest for a player who is alone, a quest well above their level, an escort they did not ask for, anything you advised against.
-  - last: quests that are doable but hard; they go to the end, when the rest has brought XP.
-  - new_quests: only the nearbyQuests you would tell the player to take.
-  - end_x, end_y, end_title: where the player goes when these quests are done, when the data shows it (turn-ins waiting in another zone or town, the next zone for their level, a flight master). The route then finishes on that side instead of walking back.
-  Then tell the route as a numbered list (the stop and what to do there), say what you left out or moved and why, and where the route leads next. If the result has something on it that the quest texts make wrong (a timed objective late, a stop before the one it depends on), call plan_route again with the fix rather than describing another order than the one that is marked.
+- Coordinates come from the data (quests, whereToGet, zoneNPCs, nearbyMobs, nearbyQuests) or the knowledge base. Never guess them; the one exception is the way between two maps on a route (below), which the data does not hold. Give distances in meters (like the TomTom arrow), never in map percent. The distance to a place on another map is not known, so give none.
+- When the player wants a route or an order for their quests, call plan_route once, with your choices. It computes the route: the shortest order (each turn-in after its objectives), the ways between maps, the marks. Your part is three choices, made in one pass over the quest list without weighing them at length: skip (below) is every quest of type elite, group, dungeon or raid for a player who is alone, every quest three or more levels above the player, and what you advised against; then is the other maps the quests' turn-ins and whereToGet name, in the order the player travels; the rest only when something in the quests calls for it. In detail:
+  - then: the other maps the route goes on into, in the order the player travels, when quests lead there. Name the zones; plan_route knows many ways between maps itself (and the zones between), fills them in and says so. A part of a map with no ground way to the rest (plan_route names it) is a zone of its own. Only for a way it reports as missing give via (the portal, boat, flight master, gate or road out of the map before, in that map's coordinates) and arrive, from the game data (zoneNPCs has the flight masters) or the web, marked approximate when you could not confirm it. Follow what plan_route says about ways rather than what you remember of the world, and never mark the stops of another map by hand.
+  - skip: quests the player should not do now (an elite or group quest alone, one well above their level, an escort they did not ask for, anything you advised against), and quests offered on the way that they should not take.
+  - first: only for what the player gains most from having early, also when the way gets longer: a class quest that gives an ability or a pet skill, a quest that opens others, one with a time limit.
+  - last: quests that are doable but hard.
+  - new_quests: plan_route itself picks up the quests whose giver stands by the player or by a stop, and the quest that follows a turn-in; it names the other quests offered. new_quests is for the ones of those worth taking, also when their goal is far (taken now, done later).
+  - end_x, end_y, end_title: where the player goes afterwards on the route's last map (a flight master, the road onward), when the next map is not on the route.
+  Read the result: if something on it is wrong by the quest texts or the world (a timed objective late, a stop that cannot be walked to), call plan_route again with the fix; do not repair it with mark_on_map or describe another order than the one marked. The add-on shows the player every stop with what to do there, so do not repeat the stops one by one: say in a few sentences where the route leads, what you left out, put first or only take now and why, and what the list cannot say (a spot that is approximate, a quest to do with care).
 
 # Bags and selling
 
@@ -122,6 +127,7 @@ Tools. Call the tools you need first and write the answer after them, in one pie
 # Player actions
 
 - A message starting with "[Player action]" is an automatic note from the game: the player clicked Accept / Reject / Undo on your proposal (with the result). Reply briefly: the result as the current data shows it (the quest left the log, the option has its new value, the money now), and the next step only if it helps. No new plan, marks or proposal unless the action failed. Do not repeat a rejected proposal unless asked.
+- A message starting with "[Quest log changed]" is sent by the add-on, not typed by the player, who turned on route updates. The add-on sends it only when the route on the map lacks something: a quest was taken, or the next step of a quest is not a stop. When the message comes with "The route, planned again", that route is already made the way you planned it and goes on the map if you call no tool: check it against what changed, and call plan_route with other arguments only when it has to be different (a quest just taken that the player should not do now goes into skip, a quest offered next to the player or by the route into new_quests, a new zone into then). Without it, plan_route the way you planned it (the same quests left out, first or last, the same maps after this one with the same ways, the same end). Never leave the player with nothing to go to without saying so: when no stop is left to do, the reply says what the next step is. The reply is shown as a short news line under the chat, not as an answer: one sentence on what changed in the route.
 
 # Answer format
 
@@ -232,6 +238,11 @@ def _action_bars(lines: list) -> list:
     return out
 
 
+# what an update of a route is decided from; the rest of the game data is not read again for it
+ROUTE_SECTIONS = ("game", "player", "quests", "marks", "tracked", "nearbyQuests", "zoneNPCs", "nearbyMobs", "skills",
+                  "recentEvents")
+
+
 def render_snapshot(snap: dict, max_chars: int = 200000) -> str:
     """Game data as text. Nothing is cut inside a section; only if the whole text would exceed ``max_chars`` are the
     lowest-priority sections (the end of SECTION_ORDER) left out, and the model is told which."""
@@ -314,7 +325,12 @@ def render_memory(memory: list[dict] | None) -> str:
 
 
 def build_messages(question: str, snapshot: dict, history: list[dict], kb_hits: list, *, now: datetime,
-                   kb_date: str | None, hotfix_date: str | None, memory: list[dict] | None = None) -> list[dict]:
+                   kb_date: str | None, hotfix_date: str | None, memory: list[dict] | None = None,
+                   auto: bool = False, route_update: bool = False, planned: str | None = None) -> list[dict]:
+    """``auto``: the message was sent by the add-on, not typed by the player (a decision on a proposal, a change in
+    the quest log); its English words say nothing about the language to answer in. ``route_update``: the add-on's
+    update of a route, for which only the game data a route needs is attached; ``planned``: the route the app planned
+    again for it (the planner's text), already set as the answer's marks."""
     # the system prompt stays identical for a whole day -> providers reuse their prompt cache and a prewarmed
     # Claude Code session fits every question of the day (the client build is in the game snapshot)
     system = SYSTEM_PROMPT.format(today=now.strftime("%Y-%m-%d"),
@@ -333,10 +349,26 @@ def build_messages(question: str, snapshot: dict, history: list[dict], kb_hits: 
     if kb_hits:
         kb_text = "\n\n# Knowledge base excerpts (matched to names in the game)\n" + "\n\n".join(
             f"[{h.title} — {h.section or 'intro'} | {h.url} | {h.ts[:10]}]\n{h.text}" for h in kb_hits)
-    user = (f"Player question: {question}\n(player time: {now.strftime('%H:%M')})\n\n{render_memory(memory)}\n\n"
-            f"# Current game state\n{render_snapshot(snapshot)}{kb_text}\n\n"
-            # after tens of thousands of characters of English data: what was asked, and in which language to answer
-            f"Now answer the player's question: \"{question}\"\n"
-            "Answer in the language the player wrote it in, not in the language of the game data.")
+    # after tens of thousands of characters of English data: what was asked, and in which language to answer
+    if auto:
+        head = "Message from the add-on"
+        close = (f"Now answer this message from the add-on (the player did not type it): \"{question}\"\n"
+                 "Answer in the language of the conversation so far, not in the language of this message or of the "
+                 "game data.")
+    else:
+        head = "Player question"
+        close = (f"Now answer the player's question: \"{question}\"\n"
+                 "Answer in the language the player wrote it in, not in the language of the game data.")
+    state = render_snapshot(snapshot)
+    if route_update:
+        state = (render_snapshot({k: v for k, v in snapshot.items() if k in ROUTE_SECTIONS})
+                 + "\n\n(Only the game data a route is made from is attached to this message.)")
+    again = ""
+    if planned:
+        again = ("\n\n# The route, planned again\nThe app has planned the route again from the quest log as it is now, "
+                 "the way you planned it last. It is on the map in place of the old one when you call no tool:\n"
+                 + planned)
+    user = (f"{head}: {question}\n(player time: {now.strftime('%H:%M')})\n\n{render_memory(memory)}\n\n"
+            f"# Current game state\n{state}{kb_text}{again}\n\n{close}")
     msgs.append({"role": "user", "content": user})
     return msgs

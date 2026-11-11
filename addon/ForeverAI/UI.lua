@@ -4,6 +4,11 @@ local UI = {}
 ns.UI = UI
 
 local WHITE = "Interface\\Buttons\\WHITE8x8"
+-- the add-on's own picture (media/route-auto.tga): two arrows round a circle, tinted green or red
+local ROUTE_AUTO_ICON = "Interface\\AddOns\\" .. ADDON .. "\\media\\route-auto"
+local AUTO_ON, AUTO_OFF = { 0.36, 1, 0.62, 1 }, { 1, 0.36, 0.36, 1 }
+local LOCK_ICON = "Interface\\AddOns\\" .. ADDON .. "\\media\\route-lock" -- media/route-lock.tga: a padlock
+local LOCK_ON, LOCK_OFF = { 1, 0.82, 0.2, 1 }, { 1, 1, 1, 0.28 }
 local P = {
   bg = { 0.045, 0.052, 0.066, 0.97 }, bar = { 0.07, 0.08, 0.1, 1 }, edge = { 0.2, 0.24, 0.28, 1 },
   accent = { 0.27, 0.86, 0.62, 1 }, user = { 0.12, 0.25, 0.4, 0.96 }, ai = { 0.1, 0.112, 0.138, 0.96 },
@@ -317,7 +322,54 @@ local function animate(e)
   end)
 end
 
-function UI.BeginAnswer(msgId)
+------------------------------------------------------------------------ news lines
+-- An answer the add-on asked for by itself (the update of a route) is one short line in the chat with the arrows,
+-- not a conversation: the AI's first paragraph, no model line, no card. The screen says when it starts and when it is
+-- done, unless the player turned that off in Settings.
+local function newsText(text)
+  return string.format("|T%s:14:14:0:-1:64:64:0:64:0:64:93:255:157|t %s", ROUTE_AUTO_ICON, text)
+end
+
+local function newsLine(text)
+  local line = tostring(text or ""):gsub("^%s+", ""):gsub("\n%s*\n.*$", ""):gsub("\n", " ")
+  if #line > 220 then line = line:sub(1, 220):gsub("%s+%S*$", "") .. "…" end
+  return line
+end
+
+function UI.RouteAlert(state)
+  if ns.db.routeAlerts == false or not (UIErrorsFrame and UIErrorsFrame.AddMessage) then return end
+  local text, color = "ForeverAI: updating the route…", { 0.56, 0.83, 1 }
+  if state == "done" then text, color = "ForeverAI: route updated", AUTO_ON
+  elseif state == "failed" then text, color = "ForeverAI: the route was not updated", AUTO_OFF end
+  pcall(UIErrorsFrame.AddMessage, UIErrorsFrame, text, color[1], color[2], color[3])
+end
+
+-- A stop of the route was done by what the player did (an objective, a turn-in, a zone entered): said on the screen
+-- (unless turned off in Settings) and as a line of the chat, with the stop the arrow leads to now.
+function UI.RouteProgress(done, nextStop, meters)
+  local text = "done: " .. table.concat(done, ", ") .. ". "
+    .. (nextStop and ("Next: " .. nextStop .. (meters and string.format(" (%d m)", meters) or "")) or "The route is finished.")
+  if ns.db.routeAlerts ~= false and UIErrorsFrame and UIErrorsFrame.AddMessage then
+    pcall(UIErrorsFrame.AddMessage, UIErrorsFrame, "ForeverAI: " .. text, AUTO_ON[1], AUTO_ON[2], AUTO_ON[3])
+  end
+  local line = text:gsub("^d", "D")
+  bubble("meta", newsText("|cff9aa3ad" .. esc(line) .. "|r"))
+  ns.RecordEntry({ k = "n", t = line })
+  chat:ToBottom()
+  relayout()
+end
+
+function UI.BeginAnswer(msgId, news)
+  if news then
+    -- an update asked again (a quest overtook it) goes on in the line of the one before
+    local e = UI.heldNews or bubble("meta", newsText("|cff7f8a99" .. esc(news) .. "…|r"))
+    UI.heldNews = nil
+    e.msgId, e.news, e.done = msgId, news, nil
+    currentAnswer = e
+    chat:ToBottom()
+    relayout()
+    return
+  end
   local e = bubble("ai", "|cff7f8a99Sending…|r")
   e.msgId, e.phase = msgId, "Sending"
   currentAnswer = e
@@ -339,16 +391,35 @@ function UI.UpdateAnswer(data)
     currentAnswer = e
     animate(e)
   end
+  if data.final and e.news and ns.Map and ns.Map.UpdateIsStale and ns.Map.UpdateIsStale() then
+    -- A quest was taken while this update was written: the route in it is older than the quest log. It is not put
+    -- on the map; the line stays as it is and the update that is asked now writes into it.
+    UI.heldNews = e
+    currentAnswer = nil
+    ns.Map.UpdateSuperseded()
+    return
+  end
   if data.final then
     e.done = true
     e.frame:SetScript("OnUpdate", nil)
-    local text = ns.Links.Linkify(data.text or "", data.links)
-    e.frame.fs:SetText(text)
-    local meta = metaLine(data)
-    local src = sourcesLine(data.sources)
-    local metaText = table.concat({ meta or "", src or "" }, (meta and src) and "\n" or "")
-    if metaText ~= "" then bubble("meta", metaText) end
-    ns.RecordEntry({ k = "a", t = data.text or "", links = data.links, meta = metaText ~= "" and metaText or nil })
+    if e.news and data.routeUnchanged then
+      -- looked at, nothing to change: one dim line, which the next update writes into; nothing on the screen
+      e.frame.fs:SetText(newsText("|cff7f8a99" .. esc(newsLine(data.text)) .. "|r"))
+      UI.heldNews = e
+    elseif e.news then
+      local line = newsLine(data.text)
+      e.frame.fs:SetText(newsText(ns.Links.Linkify(line, data.links)))
+      ns.RecordEntry({ k = "n", t = line, links = data.links })
+      UI.RouteAlert("done")
+    else
+      local text = ns.Links.Linkify(data.text or "", data.links)
+      e.frame.fs:SetText(text)
+      local meta = metaLine(data)
+      local src = sourcesLine(data.sources)
+      local metaText = table.concat({ meta or "", src or "" }, (meta and src) and "\n" or "")
+      if metaText ~= "" then bubble("meta", metaText) end
+      ns.RecordEntry({ k = "a", t = data.text or "", links = data.links, meta = metaText ~= "" and metaText or nil })
+    end
     for _, a in ipairs(data.actions or {}) do UI.ActionCard(a) end
     -- the AI's changes to the route that is on the map come first; marks of the same answer are added to the result
     if type(data.route) == "table" and ns.Map then ns.Map.Edit(data.route) end
@@ -360,10 +431,40 @@ function UI.UpdateAnswer(data)
     if ns.Track and (marked or (type(data.track) == "table" and #data.track > 0)) then
       ns.Track.Set(data.track or {}, data.marksReplace == false)
     end
-    if marked then UI.MarksCard(data.marks, data.marksReplace, data.track) end
+    if marked then
+      -- A route is what plan_route marked, or any two stops (the AI also marks a route stop by stop). The route on the
+      -- map keeps its switch when it is marked again, replaced or added to; with no route on the map a new one
+      -- starts as Settings say.
+      local hadRoute, wasAuto = ns.char.routePlanned and ns.Map.Count() > 0, ns.char.routeAuto
+      -- the add-on's own update marks the same route again: what the player took off it stays known to the AI
+      local tookOff = e.news and ns.char.marksRemoved or nil
+      UI.MarksCard(data.marks, data.marksReplace, data.track, e.news)
+      if tookOff then ns.char.marksRemoved = tookOff end
+      -- the order the AI gave may name the stops this answer added: it is applied again now that they are there
+      if type(data.route) == "table" and type(data.route.order) == "table" then ns.Map.Edit({ order = data.route.order }) end
+      local isRoute = data.routePlanned == true or ns.Map.Count() >= 2 or (data.marksReplace == false and hadRoute)
+      ns.char.routePlanned = isRoute or nil
+      if not isRoute then
+        ns.char.routeAuto = nil
+      elseif hadRoute then
+        ns.char.routeAuto = wasAuto
+      else
+        ns.char.routeAuto = ns.db.autoRoute == true or nil
+      end
+      if isRoute then ns.Map.RouteKnown() end -- it was made for the quest log as it is now
+      UI.UpdateStrip()
+    end
+    if marked or type(data.route) == "table" then ns.char.routeRejected = nil end -- the player asked for this one
+    -- The route was just looked at again by the AI: the stops that are done leave the list now. Unless nothing is
+    -- left to do: then the route the player finished stays in the window (all done), not an empty space where the
+    -- route was a moment ago; a new route takes its place, or the player clears it.
+    if e.news and ns.Map then
+      if ns.Map.Left() > 0 then ns.Map.DropDone() end
+      ns.Map.UpdateAnswered()
+    end
     if type(data.auction) == "table" and #data.auction > 0 then UI.AuctionCard(data.auction) end
     currentAnswer = nil
-  else
+  elseif not e.news then -- a news line waits for the whole answer
     e.body = ns.Links.Linkify(data.text or "", nil)
     if data.phase then e.phase = tostring(data.phase):gsub("…$", "") end
   end
@@ -371,6 +472,16 @@ function UI.UpdateAnswer(data)
 end
 
 function UI.FailAnswer(text)
+  if currentAnswer and currentAnswer.news then -- the news line says it, and so does the screen
+    local line = "Route not updated: " .. tostring(text)
+    currentAnswer.frame.fs:SetText(newsText("|cffff9a9a" .. esc(line) .. "|r"))
+    ns.RecordEntry({ k = "n", t = line })
+    currentAnswer = nil
+    UI.RouteAlert("failed")
+    if ns.Map and ns.Map.UpdateFailed then ns.Map.UpdateFailed() end
+    relayout()
+    return
+  end
   if currentAnswer then
     currentAnswer.frame:SetScript("OnUpdate", nil)
     currentAnswer.frame:Hide()
@@ -403,6 +514,8 @@ function UI.LoadConversation()
       bubble("error", "|cffff9a9a" .. esc(en.t) .. "|r")
     elseif en.k == "s" then
       bubble("meta", "|cff8fd3ff" .. esc(ns.stripCodes(en.t or "")) .. "|r")
+    elseif en.k == "n" then
+      bubble("meta", newsText(ns.Links.Linkify(en.t or "", en.links)))
     end
   end
   chat:ToBottom()
@@ -425,7 +538,59 @@ local function describeAction(action)
   return "command " .. tostring(action.command)
 end
 
+-- A change of the route the AI proposes by itself (the player did not ask for it): nothing changes until Accept. The
+-- decision is not sent to the AI, which would cost an answer: the marks section of the next question shows the route
+-- as it is, and says when the player rejected the proposal.
+local function applyRoute(action)
+  if action.op == "route" then
+    -- a correction of the route on the map keeps its switch; with no planned route it starts as Settings say
+    local auto = ns.char.routeAuto
+    if not ns.char.routePlanned then auto = ns.db.autoRoute == true end
+    ns.Map.Replace(action.stops or {})
+    if ns.Track then ns.Track.Set(action.track or {}) end
+    ns.char.routePlanned = true -- the AI's own route: kept up to date like any planned one
+    ns.char.routeAuto = auto and true or nil
+    ns.Map.RouteKnown()
+    UI.UpdateStrip()
+  else
+    ns.Map.Edit(action.edit or {})
+    if ns.Track then
+      for _, name in ipairs(action.untrack or {}) do ns.Track.Stop(tostring(name)) end
+    end
+  end
+  ns.char.routeRejected = nil
+end
+
+function UI.RouteCard(action)
+  local lines, head = {}, "Change the route"
+  if action.op == "route" then
+    head = "New route"
+    for _, s in ipairs(action.stops or {}) do
+      lines[#lines + 1] = string.format("• %s  |cff9aa3ad(%s%.1f, %.1f)|r", esc(s.title), s.zone and s.zone ~= "" and (esc(s.zone) .. " ") or "",
+        tonumber(s.x) or 0, tonumber(s.y) or 0)
+    end
+    local names = {}
+    for _, t in ipairs(action.track or {}) do names[#names + 1] = esc(type(t) == "table" and t.name or t) end
+    if #names > 0 then lines[#lines + 1] = "|cff9aa3adWatching for " .. table.concat(names, ", ") .. "|r" end
+  else
+    lines[1] = esc(action.summary or "")
+  end
+  card(string.format("|cff7fd6ff%s|r |cff6a7380(proposed: nothing changes until you accept)|r\n%s", head,
+    table.concat(lines, "\n")), { 0.3, 0.6, 0.9, 0.7 }, {
+    { "Accept", 96, function(self)
+      local ok, err = pcall(applyRoute, action)
+      self:Done(ok and "|cff5dff9dApplied.|r" or ("|cffff6060Failed: " .. esc(tostring(err)) .. "|r"))
+    end, "primary" },
+    { "Reject", 76, function(self)
+      if ns.char then ns.char.routeRejected = true end
+      self:Done("|cff8a93a0Rejected: the route stays as it is.|r")
+    end },
+  })
+  relayout()
+end
+
 function UI.ActionCard(action)
+  if action.op == "route" or action.op == "route_edit" then return UI.RouteCard(action) end
   local what
   if action.op == "vendor_sell" then
     local lines = {}
@@ -459,12 +624,24 @@ function UI.ActionCard(action)
   local e
   e = card(text, nil, {
     { "Accept", 96, function(self)
-      local ok, res = ns.Addons.Apply(action)
-      ns.ActionFeedback(string.format("Accepted: %s — %s.", describeAction(action),
-        ok and "done" or ("failed: " .. tostring(res))))
+      -- A sale takes a few seconds: the AI hears about it when it is over, with what was really sold. Told at once
+      -- it got the bags half sold, called the sale partial and proposed to sell what was gone a moment later.
+      local selling = action.op == "vendor_sell"
+      local ok, res = ns.Addons.Apply(action, selling and function(sold, all, gained, why)
+        local result = string.format("%d of %d stacks sold for %s", sold, all, ns.Coins(gained))
+        if self.status then self.status:SetText("|cff5dff9dSold " .. esc((result:gsub(" sold", ""))) .. ".|r") end
+        if self.undo and sold > 0 then self.undo:Show() end -- buying back is for a sale that is over
+        ns.ActionFeedback(string.format("Accepted: %s — %s.", describeAction(action),
+          why and (result .. "; " .. why) or sold < all and (result .. "; the vendor did not take the rest")
+          or ("done: " .. result)))
+      end or nil)
+      if not (ok and selling) then
+        ns.ActionFeedback(string.format("Accepted: %s — %s.", describeAction(action),
+          ok and "done" or ("failed: " .. tostring(res))))
+      end
       if ok then
         self.entry = res
-        self:Done("|cff5dff9dApplied.|r")
+        self:Done(selling and "|cff5dff9dSelling…|r" or "|cff5dff9dApplied.|r")
         if action.op == "abandon_quest" or action.op == "vendor_repair" then return end -- nothing to undo
         local undo = Btn(self.frame, "Undo", 70, 20, function(btn)
           local okU, err = ns.Addons.Undo(self.entry)
@@ -474,6 +651,10 @@ function UI.ActionCard(action)
           self.status:SetText(okU and "|cffe0d060Undone.|r" or ("|cffff6060" .. esc(err) .. "|r"))
         end)
         undo:SetPoint("TOPRIGHT", self.frame, "TOPRIGHT", -8, -(self.frame:GetHeight() - 26))
+        if selling then -- while the stacks are still being sold, buying back would undo half of it
+          undo:Hide()
+          self.undo = undo
+        end
         if action.needsReload then
           local rl = Btn(self.frame, "Reload UI", 96, 20, function() ReloadUI() end, "primary")
           rl:SetPoint("RIGHT", undo, "LEFT", -6, 0)
@@ -491,13 +672,17 @@ function UI.ActionCard(action)
 end
 
 -- replace == false: the answer adds stops to the marks of earlier answers; otherwise its marks replace them
-function UI.MarksCard(marks, replace, track)
-  if replace ~= false then ns.Map.Clear() end
-  local placed, how = ns.Map.Apply(marks)
-  if #placed == 0 then return end
+-- quiet: only the map changes (the update of a route is a news line, not a card)
+function UI.MarksCard(marks, replace, track, quiet)
+  local placed, how
+  if replace ~= false then placed, how = ns.Map.Replace(marks) else placed, how = ns.Map.Apply(marks) end
+  if #placed == 0 or quiet then return end
   local lines = {}
   for _, p in ipairs(placed) do
-    lines[#lines + 1] = string.format("• %s  |cff9aa3ad(%s %.1f, %.1f)|r", esc(p.title), esc(p.zone or ""), p.x, p.y)
+    -- what to do there, in brackets after the stop: the card is what the player sees without opening the list
+    local what = ns.Map.What(p)
+    lines[#lines + 1] = string.format("• %s%s  |cff9aa3ad(%s %.1f, %.1f)|r", esc(p.title),
+      what and (" |cffffd27a(" .. esc(what) .. ")|r") or "", esc(p.zone or ""), p.x, p.y)
   end
   local names = {}
   for _, t in ipairs(type(track) == "table" and track or {}) do
@@ -711,6 +896,7 @@ local function buildSettings(p)
   sc:SetPoint("BOTTOMRIGHT", -8, 6)
   local c = sc.child
   S.scroll = sc
+  sc.stick = false -- a page of settings starts at its top (the chat sticks to its end)
   sc:HookScript("OnSizeChanged", function() if S.built and p:IsShown() then S.Layout() end end) -- lines rewrap
   local rows = {}
   local function head(text)
@@ -762,6 +948,20 @@ local function buildSettings(p)
     grid[2] = math.ceil(#checks / cols) * 24
     data:SetSize(math.max(width, 10), grid[2])
   end
+
+  head("Routes")
+  local routeRow = CreateFrame("Frame", nil, c)
+  routeRow:SetSize(420, 26)
+  local autoRoute = Check(routeRow, "Update new routes when my quests change", function() return ns.db.autoRoute == true end,
+    function(v) ns.db.autoRoute = v end)
+  autoRoute:SetPoint("LEFT")
+  row(routeRow, 28)
+  local alertRow = CreateFrame("Frame", nil, c)
+  alertRow:SetSize(420, 26)
+  local alerts = Check(alertRow, "Show route updates on screen", function() return ns.db.routeAlerts ~= false end,
+    function(v) ns.db.routeAlerts = v end)
+  alerts:SetPoint("LEFT")
+  row(alertRow, 28)
 
   head("Appearance")
   local look = CreateFrame("Frame", nil, c)
@@ -847,7 +1047,7 @@ local SUGGESTIONS = {
 ------------------------------------------------------------------------ status strip
 -- What the add-on keeps doing after the answer has scrolled away: a creature it watches for, the marked route. One
 -- chip each, above the text field, with a button that ends it. The strip slides open and closed.
-local STRIP_ROW, STRIP_GAP, CHIP_ACTION_W = 22, 4, 34
+local STRIP_ROW, STRIP_GAP, CHIP_ACTION_W, CHIP_SWITCH_W = 22, 4, 34, 22
 local chips = {}
 
 local function Chip(parent)
@@ -867,6 +1067,13 @@ local function Chip(parent)
   c.action = Btn(c, "", CHIP_ACTION_W, 20, function(self) if c.onAction then c.onAction() end end, "ghost")
   c.action:SetPoint("RIGHT", c.close, "LEFT", -2, 0)
   c.action:Hide()
+  -- an on/off switch that shows its state (the route: kept up to date or not)
+  c.switch = Btn(c, "", CHIP_SWITCH_W, 20, function(self) if c.onSwitch then c.onSwitch() end end, "ghost")
+  c.switch.icon = c.switch:CreateTexture(nil, "OVERLAY")
+  c.switch.icon:SetSize(14, 14)
+  c.switch.icon:SetPoint("CENTER")
+  c.switch.icon:SetTexture(ROUTE_AUTO_ICON)
+  c.switch:Hide()
   return c
 end
 
@@ -888,7 +1095,17 @@ local function layoutChips(items, width)
     else
       c.action:Hide()
     end
-    local fixed = 8 + 6 + 6 + 6 + 22 + (it.action and CHIP_ACTION_W + 2 or 0)
+    c.onSwitch = it.switch and it.switch.fn or nil
+    if it.switch then
+      c.switch.icon:SetVertexColor(unpack(it.switch.on and AUTO_ON or AUTO_OFF))
+      c.switch.tip = it.switch.tip
+      c.switch:ClearAllPoints()
+      c.switch:SetPoint("RIGHT", it.action and c.action or c.close, "LEFT", -2, 0)
+      c.switch:Show()
+    else
+      c.switch:Hide()
+    end
+    local fixed = 8 + 6 + 6 + 6 + 22 + (it.action and CHIP_ACTION_W + 2 or 0) + (it.switch and CHIP_SWITCH_W + 2 or 0)
     local textW = math.ceil(c.text.GetUnboundedStringWidth and c.text:GetUnboundedStringWidth() or c.text:GetStringWidth())
     local w = math.min(width, textW + fixed)
     c.text:SetWidth(w - fixed)
@@ -931,16 +1148,52 @@ local routeList, routeOpen
 local routeRows = {}
 local ROUTE_ROW = 20
 
+-- A row is a button: a click makes its stop the one to go to (the arrow leads there). The stop the arrow leads to is
+-- lit up, with a bar at its left edge. The padlock keeps a stop on the route; x takes it off.
 local function RouteRow(parent)
-  local r = CreateFrame("Frame", nil, parent)
+  local r = CreateFrame("Button", nil, parent)
   r:SetHeight(ROUTE_ROW)
+  r.lit = r:CreateTexture(nil, "BACKGROUND")
+  r.lit:SetAllPoints()
+  r.lit:SetColorTexture(0.3, 0.6, 0.9, 0.2)
+  r.bar = r:CreateTexture(nil, "BORDER")
+  r.bar:SetPoint("TOPLEFT")
+  r.bar:SetPoint("BOTTOMLEFT")
+  r.bar:SetWidth(3)
+  r.bar:SetColorTexture(0.5, 0.84, 1, 1)
+  r.over = r:CreateTexture(nil, "BACKGROUND")
+  r.over:SetAllPoints()
+  r.over:SetColorTexture(1, 1, 1, 0.06)
+  r.over:Hide()
+  r:SetScript("OnEnter", function(self)
+    self.over:Show()
+    GameTooltip:SetOwner(self:GetParent(), "ANCHOR_TOP") -- above the list, so that it covers no stop
+    GameTooltip:SetText(self.done and "Done. Click to head here again."
+      or self.current and "You are heading here: the arrow leads to this stop."
+      or "Click to head here: the arrow will lead to this stop.", 1, 1, 1, 1, true)
+    if self.what then GameTooltip:AddLine(self.what, 1, 0.82, 0, true) end -- in full: the row cuts a long one short
+    GameTooltip:AddLine(self.done and "It leaves the list when the route is updated; x takes it off now."
+      or self.waits and ("Done when: " .. self.waits .. ".")
+      or "Done when you reach it.", 0.7, 0.7, 0.7, true)
+    GameTooltip:Show()
+    ns.ApplyTooltipFont()
+  end)
+  r:SetScript("OnLeave", function(self)
+    self.over:Hide()
+    GameTooltip:Hide()
+  end)
+  r:SetScript("OnClick", function(self) ns.Map.SetCurrent(self.index) end)
   r.remove = Btn(r, "x", 20, 18, function() ns.Map.Remove(r.index, "player") end, "ghost", "Take this stop off the route")
   r.remove:SetPoint("RIGHT", -1, 0)
-  r.next = Btn(r, "next", 36, 18, function() ns.Map.Next(r.index) end, "ghost", "Go here next")
-  r.next:SetPoint("RIGHT", r.remove, "LEFT", -2, 0)
+  r.lock = Btn(r, "", 20, 18, function() ns.Map.Lock(r.index, not r.locked) end, "ghost")
+  r.lock:SetPoint("RIGHT", r.remove, "LEFT", -2, 0)
+  r.lock.icon = r.lock:CreateTexture(nil, "OVERLAY")
+  r.lock.icon:SetSize(13, 13)
+  r.lock.icon:SetPoint("CENTER")
+  r.lock.icon:SetTexture(LOCK_ICON)
   r.text = label(r, "", F.small)
-  r.text:SetPoint("LEFT", 8, 0)
-  r.text:SetPoint("RIGHT", r.next, "LEFT", -6, 0)
+  r.text:SetPoint("LEFT", 10, 0)
+  r.text:SetPoint("RIGHT", r.lock, "LEFT", -6, 0)
   r.text:SetJustifyH("LEFT")
   r.text:SetJustifyV("MIDDLE")
   if r.text.SetWordWrap then r.text:SetWordWrap(false) end
@@ -960,9 +1213,20 @@ local function updateRoute()
     r:SetPoint("TOPLEFT", routeList, "TOPLEFT", 0, -4 - (i - 1) * ROUTE_ROW)
     r:SetPoint("RIGHT", routeList, "RIGHT", 0, 0)
     local where = s.meters and (s.meters .. " m") or string.format("%s %.1f, %.1f", tostring(s.zone or ""), s.x, s.y)
-    -- the next stop, the one the arrow points at, stands out
-    r.text:SetText(string.format("|cff%s%d. %s|r |cff9aa3ad· %s|r", i == 1 and "7fd6ff" or "d8dee6", i, esc(s.title), where))
-    if i > 1 then r.next:Show() else r.next:Hide() end
+    -- the stop the arrow leads to stands out
+    r.current, r.locked, r.waits, r.done, r.what = s.current, s.locked, s.waits, s.done, s.what
+    if s.done then -- done: greyed out, still on the list until the route is updated
+      r.text:SetText(string.format("|cff6a7380%d. %s · done|r", i, esc(s.title)))
+    else
+      -- what to do there, in brackets: the list is read without the answer that planned it
+      local what = s.what and ("(" .. esc(s.what) .. ") ") or ""
+      r.text:SetText(string.format("|cff%s%d. %s|r |cff9aa3ad%s· %s|r", s.current and "ffffff" or "c3cad3", i, esc(s.title),
+        what, where))
+    end
+    if s.current then r.lit:Show() r.bar:Show() else r.lit:Hide() r.bar:Hide() end
+    r.lock.icon:SetVertexColor(unpack(s.locked and LOCK_ON or LOCK_OFF))
+    r.lock.tip = s.locked and "Locked: this stop stays on the route, and the arrow on it, until you unlock it. Click to unlock."
+      or "Lock this stop: it stays on the route when you reach it and when the route changes."
     r:Show()
   end
   for i = #stops + 1, #routeRows do routeRows[i]:Hide() end
@@ -974,7 +1238,7 @@ function UI.UpdateStrip()
   if not strip then return end
   local items = {}
   for _, t in ipairs(ns.Track and ns.Track.State() or {}) do
-    local seen = t.alive > 0
+    local seen = t.alive > 0 or t.near ~= nil
     items[#items + 1] = {
       color = seen and { 0.36, 1, 0.62, 1 } or { 0.85, 0.64, 0.26, 1 },
       -- how many are in sight, in brackets: "(0)", "(2)"; words only when the add-on cannot see
@@ -982,26 +1246,39 @@ function UI.UpdateStrip()
         -- the add-on sees a creature only when it is targeted or pointed at: "after the fight" when the nameplates
         -- wait for the end of a fight (the game lets them be turned on only out of one), "nameplates off" when
         -- the player has turned them off
-        t.blind and (t.waiting and "· after the fight" or "· nameplates off") or string.format("(%d)", t.alive)),
+        -- "(near)": none in sight, but the game has one of that name in its range
+        t.near and "(near)" or t.blind and (t.waiting and "· after the fight" or "· nameplates off")
+          or string.format("(%d)", t.alive)),
       tip = "Stop tracking " .. t.label,
       close = function() ns.Track.Stop(t.name) end,
     }
   end
-  local stops = ns.Map and ns.Map.Count and ns.Map.Count() or 0
-  if stops > 0 then
+  local all = ns.Map and ns.Map.Count and ns.Map.Count() or 0
+  if all > 0 then
+    local stops = ns.Map.Left() -- still to do; the ones that are done stay on the list until the route is updated
     items[#items + 1] = {
       color = { 0.3, 0.6, 0.9, 1 },
-      text = string.format("|cff9aa3adRoute|r · %d stop%s", stops, stops == 1 and "" or "s"),
+      -- the stops in brackets, like the creatures in sight: "(3)", and "(1/3)" once some are done
+      text = all > stops and string.format("|cff9aa3adRoute|r |cff7fd6ff(%d/%d)|r", all - stops, all)
+        or string.format("|cff9aa3adRoute|r |cff7fd6ff(%d)|r", stops),
       tip = "Clear the marks on the map",
       close = function() ns.Map.Clear() end,
       action = {
         label = routeOpen and "hide" or "list",
-        tip = routeOpen and "Hide the stops" or "Show the stops: take one off, or go to one next",
+        tip = routeOpen and "Hide the stops" or "Show the stops: click one to head to it, lock it or take it off",
         fn = function()
           routeOpen = not routeOpen
           UI.UpdateStrip()
         end,
       },
+      -- only a route the AI planned can be kept up to date; a single mark has nothing to update
+      switch = ns.char and ns.char.routePlanned and {
+        on = ns.char.routeAuto == true,
+        tip = ns.char.routeAuto and "Auto-update: on. Taking, finishing or dropping a quest asks the AI to update "
+          .. "this route. Click to turn it off."
+          or "Auto-update: off. The route stays as it is when your quests change. Click to have the AI update it.",
+        fn = function() ns.Map.SetAuto(not ns.char.routeAuto) end,
+      } or nil,
     }
   end
   updateRoute()

@@ -164,3 +164,54 @@ def test_key_dialog_preselects_the_provider(tk_root):
     d = window.KeyDialog(tk_root, comp, "claude_code")  # no key for Claude Code: the usual choice
     assert d.provider.get() == "openrouter"
     d.close()
+
+
+def test_the_model_for_route_updates_is_chosen_in_the_app(env, tk_root, monkeypatch):  # noqa: F811
+    from foreverai import window
+    svc, _, _ = env
+    svc.prewarm_later = lambda: None
+    monkeypatch.setattr(claude_code, "_detect_cache", None)
+    panel = window.AISettings(tk_root, lambda provider=None: None)
+    panel.frame.pack()
+    panel.attach(types.SimpleNamespace(store=svc.store, service=svc))
+    s = svc.store.settings
+    assert _pump(tk_root, lambda: panel.choices and len(panel.route.cget("values")) > 1)
+    assert panel.route.get() == "Same as questions" and panel.route.cget("values")[0] == "Same as questions"
+    assert str(panel.route.cget("state")) == "readonly"
+    _choose(panel.route, "deepseek/deepseek-v4-flash")
+    assert _pump(tk_root, lambda: not panel.busy and "Route updates:" in panel.msg.cget("text"))
+    assert s.route_model == {"openrouter": "deepseek/deepseek-v4-flash"} and panel.route.get() == "deepseek/deepseek-v4-flash"
+    _choose(panel.route, "Same as questions")
+    assert _pump(tk_root, lambda: not panel.busy and s.route_model == {})
+    assert panel.route.get() == "Same as questions"
+
+
+def test_the_thinking_level_of_route_updates_is_next_to_their_model(env, tk_root, monkeypatch):  # noqa: F811
+    from foreverai import window
+    svc, _, _ = env
+    svc.prewarm_later = lambda: None
+    monkeypatch.setattr(claude_code, "_detect_cache", None)
+    panel = window.AISettings(tk_root, lambda provider=None: None)
+    panel.frame.pack()
+    panel.attach(types.SimpleNamespace(store=svc.store, service=svc))
+    s = svc.store.settings
+    assert _pump(tk_root, lambda: panel.choices and len(panel.route.cget("values")) > 1)
+    assert not panel.route_effort.winfo_manager()  # only Claude Code has a thinking level
+
+    info = {"path": "/opt/claude", "version": "2", "loggedIn": True, "subscription": "max"}
+    monkeypatch.setattr(claude_code, "detect", lambda force=False: info)
+    monkeypatch.setattr(claude_code, "_detect_cache", (info, time.time()))
+    _choose(panel.provider, "Claude Code (subscription)")
+    assert _pump(tk_root, lambda: not panel.busy and s.provider == "claude_code")
+    assert _pump(tk_root, lambda: panel.route_effort.winfo_manager() != "")
+    # in the line of the model for route updates, right after it
+    assert panel.route_effort.master.grid_info()["row"] == panel.route.grid_info()["row"]
+    assert panel.route_effort.get() == "Same thinking" and panel.route_effort.cget("values")[0] == "Same thinking"
+    assert "very high" in panel.route_effort.cget("values")
+    _choose(panel.route_effort, "low")
+    assert _pump(tk_root, lambda: not panel.busy and s.route_effort == "low")
+    assert panel.msg.cget("text") == "Route updates: thinking low" and panel.route_effort.get() == "low"
+    assert s.claude_effort == "high" and panel.effort.get() == "high"  # the thinking level of questions stays
+    _choose(panel.route_effort, "Same thinking")
+    assert _pump(tk_root, lambda: not panel.busy and s.route_effort == "")
+    assert panel.route_effort.get() == "Same thinking"

@@ -711,9 +711,12 @@ def test_plan_route_marks_its_stops(env):
                 "snapshot": snapshot})
     d = _wait_final(addons, 3)
     assert "plan_route" in Client.tools
-    assert d["marks"] == [{"title": "1. Postman", "x": 65.0, "y": 50.0, "zone": "Teldrassil"},
-                          {"title": "2. Boar", "x": 80.0, "y": 50.0, "zone": "Teldrassil", "mob": "Boar"},
-                          {"title": "3. Giver", "x": 50.0, "y": 60.0, "zone": "Teldrassil"}]
+    assert d["marks"] == [{"title": "1. Postman", "x": 65.0, "y": 50.0, "zone": "Teldrassil",
+                           "tasks": [{"kind": "turn_in", "quest": "Letter", "id": 2}]},
+                          {"title": "2. Boar", "x": 80.0, "y": 50.0, "zone": "Teldrassil", "mob": "Boar",
+                           "tasks": [{"kind": "objective", "quest": "Far Hunt", "id": 1, "label": "Boar"}]},
+                          {"title": "3. Giver", "x": 50.0, "y": 60.0, "zone": "Teldrassil",
+                           "tasks": [{"kind": "turn_in", "quest": "Far Hunt", "id": 1}]}]
     assert d["marksReplace"] is True
     assert Client.result.startswith("Route from 50, 50 (Teldrassil): 3 stops, about 4.9 km.")
     assert Client.result.endswith("The 3 stops are marked on the map in this order (the marks of earlier answers are off "
@@ -925,7 +928,8 @@ def test_marks_after_an_edit_are_added_to_the_edited_route(env):
          "whereToGet": ["Boar: kill Boar (level 5) — Teldrassil 80.0, 50.0 (2400 m, 9 spawn points in your zone)"]}]})
     svc.run_tool(ctx, "plan_route", {})
     assert ctx.route_edit is None and ctx.replaces_marks is True
-    assert ctx.marks[0] == {"title": "1. Boar", "x": 80.0, "y": 50.0, "zone": "Teldrassil", "mob": "Boar"}
+    assert ctx.marks[0] == {"title": "1. Boar", "x": 80.0, "y": 50.0, "zone": "Teldrassil", "mob": "Boar",
+                           "tasks": [{"kind": "objective", "quest": "Far Hunt", "id": 1, "label": "Boar"}]}
     assert "took off the route: Byancie" not in ctx.did()
 
 
@@ -947,3 +951,565 @@ def test_the_reply_tells_the_game_how_to_change_the_route(env):
     assert d["route"] == {"remove": [{"title": "Byancie", "x": 55.3, "y": 56.8}]} and d["untrack"] == ["Bloodfeather Rogue"]
     assert d["marks"] == [{"title": "Owl", "x": 64.2, "y": 69.2, "zone": "", "mob": "Strigid Owl"}]  # the stop knows its creature
     assert d["marksReplace"] is False
+
+
+ROUTE_SNAPSHOT = {"player": {"coords": "50.0, 50.0", "map": "Teldrassil", "level": 10}, "quests": [
+    {"id": 1, "title": "Far Hunt", "status": "in progress", "turnIn": "Giver (Teldrassil 50.0, 60.0)",
+     "whereToGet": ["Boar: kill Boar (level 5) — Teldrassil 80.0, 50.0 (2400 m, 9 spawn points in your zone)"]},
+    {"id": 2, "title": "Letter", "status": "READY TO TURN IN", "turnIn": "Postman (Teldrassil 65.0, 50.0)"}],
+    "marks": ["1. Old Stop — Teldrassil 40.0, 40.0 (300 m)", "2. Byancie — Teldrassil 55.3, 56.8"]}
+
+
+def test_a_route_the_player_did_not_ask_for_is_proposed(env):
+    """When the AI decides by itself that the route no longer fits, the player decides: a card, not the map."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_SNAPSHOT)
+    text, err = svc.run_tool(ctx, "plan_route", {"skip": ["Letter"], "propose": True})
+    assert not err and ctx.marks == [] and ctx.track == [] and ctx.route_marked is False
+    (action,) = ctx.actions
+    assert action["op"] == "route" and action["addon"] == "Map"
+    assert action["stops"] == [{"title": "1. Boar", "x": 80.0, "y": 50.0, "zone": "Teldrassil", "mob": "Boar",
+                           "tasks": [{"kind": "objective", "quest": "Far Hunt", "id": 1, "label": "Boar"}]},
+                               {"title": "2. Giver", "x": 50.0, "y": 60.0, "zone": "Teldrassil",
+                           "tasks": [{"kind": "turn_in", "quest": "Far Hunt", "id": 1}]}]
+    assert action["track"] == [{"name": "Boar", "quest": "Far Hunt"}]
+    assert text.endswith("Proposed to the player as a new route: a card with Accept and Reject. The marks on the map "
+                         "stay until they accept it; do not mark these stops.")
+    assert ctx.did() == ["proposed a new route (waits for the player's Accept): 1. Boar, 2. Giver",
+                         "planned the route: left out [Letter]"]
+    # a second proposal in the same answer takes the place of the first
+    svc.run_tool(ctx, "plan_route", {"propose": True})
+    assert [a["op"] for a in ctx.actions] == ["route"] and len(ctx.actions[0]["stops"]) == 3
+
+
+def test_a_change_of_the_route_can_be_proposed(env):
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_SNAPSHOT)
+    text, err = svc.run_tool(ctx, "edit_route", {"remove": ["Old Stop"], "propose": True})
+    assert not err and ctx.route_edit is None and ctx.edit_notes == {}
+    (action,) = ctx.actions
+    assert action["op"] == "route_edit" and action["edit"] == {"remove": [{"title": "Old Stop", "x": 40.0, "y": 40.0}]}
+    assert action["untrack"] == [] and action["summary"] == "Taken off the route: Old Stop. The route now: 1. Byancie."
+    assert text.startswith("Proposed to the player (a card with Accept and Reject), nothing changed yet: ")
+    assert ctx.did() == ["proposed changing the route (waits for the player's Accept): "
+                         "Taken off the route: Old Stop. The route now: 1. Byancie."]
+
+
+def test_the_choices_of_a_route_are_kept_in_the_conversation(env):
+    """An update of the route later keeps what was left out, done last and where it ends."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_SNAPSHOT)
+    svc.run_tool(ctx, "plan_route", {"skip": ["Letter"], "last": ["Far Hunt"], "end_x": 56.7, "end_y": 59.5,
+                                     "end_title": "Dazalar"})
+    assert ctx.did()[-1] == "planned the route: left out [Letter]; last [Far Hunt]; ends near Dazalar (56.7, 59.5)"
+    ctx = _ctx(svc, addons, ROUTE_SNAPSHOT)
+    svc.run_tool(ctx, "plan_route", {})
+    assert ctx.did()[-1] == "planned the route: nothing left out"
+
+
+def test_the_reply_says_whether_the_marks_are_a_planned_route(env):
+    """The add-on keeps a planned route up to date when the player wants that; a single mark is not a route."""
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        calls_ = []
+
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            if not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall("c1", Client.calls_[0][0], Client.calls_[0][1])]
+                return
+            yield "text", "Done."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    for n, (call, planned) in enumerate([(("plan_route", "{}"), True),
+                                         (("mark_on_map", '{"title": "Dazalar", "x": 56.7, "y": 59.5}'), False),
+                                         (("plan_route", '{"propose": true}'), False)]):
+        Client.calls_ = [call]
+        svc.handle({"type": "question", "msgId": 3 + n, "session": "S", "nextInbox": 3 + 4 * n, "conv": "c",
+                    "text": "route", "snapshot": ROUTE_SNAPSHOT})
+        assert _wait_final(addons, 3 + 4 * n)["routePlanned"] is planned
+
+
+def test_a_message_from_the_add_on_is_answered_in_the_language_of_the_conversation(env):
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            Client.user = messages[-1]["content"]
+            yield "text", "Trasa zaktualizowana."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "auto": True,
+                "text": "[Quest log changed] took [Crown of the Earth]. Update the route on the map.", "snapshot": {}})
+    _wait_final(addons, 3)
+    assert Client.user.endswith(
+        'Now answer this message from the add-on (the player did not type it): "[Quest log changed] took [Crown of the '
+        'Earth]. Update the route on the map."\nAnswer in the language of the conversation so far, not in the language '
+        "of this message or of the game data.")
+
+
+def test_a_route_planned_in_this_answer_is_edited_in_place(env):
+    """The real answer: plan_route, then edit_route to drop two stops and reorder, then the end point added. The edit
+    went to the old route on the map, the model marked the stops again, and the map got ten stops, each twice, and no
+    longer counted as a planned route."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_SNAPSHOT)
+    svc.run_tool(ctx, "plan_route", {})
+    assert [m["title"] for m in ctx.marks] == ["1. Postman", "2. Boar", "3. Giver"]
+    text, err = svc.run_tool(ctx, "edit_route", {"remove": ["Postman"], "order": ["giver"]})
+    assert not err and ctx.route_edit is None  # the route on the map is replaced by this one, not edited
+    assert text == ("Taken off the route: Postman. The route now: 1. Giver, 2. Boar. These marks replace the ones on "
+                    "the map; do not mark them again.")
+    assert ctx.marks == [{"title": "1. Giver", "x": 50.0, "y": 60.0, "zone": "Teldrassil",
+                           "tasks": [{"kind": "turn_in", "quest": "Far Hunt", "id": 1}]},
+                         {"title": "2. Boar", "x": 80.0, "y": 50.0, "zone": "Teldrassil", "mob": "Boar",
+                           "tasks": [{"kind": "objective", "quest": "Far Hunt", "id": 1, "label": "Boar"}]}]
+    svc.run_tool(ctx, "mark_on_map", {"title": "Dazalar", "x": 56.7, "y": 59.5, "add": True})  # where it ends
+    assert [m["title"] for m in ctx.marks] == ["1. Giver", "2. Boar", "Dazalar"]
+    assert ctx.route_marked is True and ctx.replaces_marks is True  # an extra stop keeps it a planned route
+    assert ctx.track == [{"name": "Boar", "quest": "Far Hunt"}]
+    assert "took off the route: Postman" in ctx.did() and "put the route in another order" in ctx.did()
+
+    svc.run_tool(ctx, "edit_route", {"remove": ["2"]})  # the stop with the creature: its watch goes with it
+    assert [m["title"] for m in ctx.marks] == ["1. Giver", "Dazalar"] and ctx.track == []
+    text, err = svc.run_tool(ctx, "edit_route", {"remove": ["Byancie"]})
+    assert err and text == ("Nothing changed: no stop called Byancie. The stops of the route you marked in this "
+                            "answer: 1. Giver, 2. Dazalar.")
+
+
+def test_the_reply_of_an_edited_planned_route(env):
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            if not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall("c1", "plan_route", "{}"),
+                                     ToolCall("c2", "edit_route", '{"remove": ["Postman"]}'),
+                                     ToolCall("c3", "mark_on_map", '{"title": "Dazalar", "x": 56.7, "y": 59.5, "add": true}')]
+                return
+            yield "text", "Done."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "route again",
+                "snapshot": ROUTE_SNAPSHOT})
+    d = _wait_final(addons, 3)
+    assert [m["title"] for m in d["marks"]] == ["1. Boar", "2. Giver", "Dazalar"]
+    assert d["marksReplace"] is True and d["routePlanned"] is True and d["route"] is None
+
+
+def test_a_place_is_marked_once(env):
+    """"Na mapie były zdublowane punkty": the same NPC twice, once with the quest in brackets after the name."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_SNAPSHOT)
+    svc.run_tool(ctx, "plan_route", {})  # 1. Postman, 2. Boar, 3. Giver
+    text, err = svc.run_tool(ctx, "mark_on_map", {"title": "4. Boar (Far Hunt)", "x": 80.2, "y": 50.4, "add": True})
+    assert err and text == ("Not marked: Boar (Far Hunt) is already on the route as stop 2 (Boar). A place is one "
+                            "stop; say in the answer everything to do there.")
+    text, err = svc.run_tool(ctx, "mark_on_map", {"title": "Mailbox", "x": 65.1, "y": 50.1, "add": True})  # the same spot
+    assert err and "already on the route as stop 1 (Postman)" in text
+    assert [m["title"] for m in ctx.marks] == ["1. Postman", "2. Boar", "3. Giver"]
+
+    ctx = _ctx(svc, addons, ROUTE_SNAPSHOT)  # the map: 1. Old Stop, 2. Byancie
+    text, err = svc.run_tool(ctx, "mark_on_map", {"title": "Byancie", "x": 55.3, "y": 56.8, "add": True})
+    assert err and text == ("Not marked: Byancie is already on the map as stop 2 (Byancie). A place is one stop; say "
+                            "in the answer everything to do there.")
+    text, err = svc.run_tool(ctx, "mark_on_map", {"title": "Byancie", "x": 55.3, "y": 56.8})  # a new set of marks
+    assert not err and len(ctx.marks) == 1
+
+
+def test_marks_say_what_is_to_be_done_there(env):
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_SNAPSHOT)
+    svc.run_tool(ctx, "plan_route", {})
+    assert [m.get("tasks") for m in ctx.marks] == [[{"kind": "turn_in", "quest": "Letter", "id": 2}],
+                                                   [{"kind": "objective", "quest": "Far Hunt", "id": 1, "label": "Boar"}],
+                                                   [{"kind": "turn_in", "quest": "Far Hunt", "id": 1}]]
+    ctx = _ctx(svc, addons, {})
+    svc.run_tool(ctx, "mark_on_map", {"title": "Byancie", "x": 55.3, "y": 56.8, "quest": "[The Great Tree Provides]",
+                                      "task": "turn_in"})
+    svc.run_tool(ctx, "mark_on_map", {"title": "Dazalar", "x": 56.7, "y": 59.5, "quest": "Taming", "task": "dance", "add": True})
+    svc.run_tool(ctx, "mark_on_map", {"title": "The dock", "x": 50, "y": 50, "add": True})
+    assert [m.get("tasks") for m in ctx.marks] == [[{"kind": "turn_in", "quest": "The Great Tree Provides"}], None, None]
+
+
+def test_a_place_that_is_done_can_be_marked_again(env):
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, {"marks": ["1. Nessa Shadowsong — Teldrassil 56.3, 92.4 (120 m)",
+                                       "2. Vesprystus (Hippogryph Master) — Teldrassil 58.4, 94.0 (done)"]})
+    text, err = svc.run_tool(ctx, "mark_on_map", {"title": "Vesprystus", "x": 58.4, "y": 94.0, "add": True,
+                                                  "quest": "Flight to Auberdine", "task": "objective"})
+    assert not err and len(ctx.marks) == 1
+    text, err = svc.run_tool(ctx, "edit_route", {"remove": ["Vesprystus (Hippogryph Master)"]})  # and still be removed
+    assert not err
+
+
+UPDATE = "[Quest log changed] took [Crown of the Earth]. Update the route on the map."
+
+
+def test_route_updates_can_have_their_own_model(env):
+    """The player chooses in the app which model answers the add-on's own updates of the route (a cheaper or faster
+    one than for questions)."""
+    svc, addons, _ = env
+    seen = []
+
+    class Client(FakeClient):
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            seen.append(model)
+            yield "text", "ok"
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    main = svc.store.settings.model
+    assert svc.set_route_model("nope/model") == (False, "Model nope/model does not exist on OpenRouter.")
+    assert svc.set_route_model("deepseek/deepseek-v4-flash") == (True, "Route updates: deepseek/deepseek-v4-flash")
+    assert svc.store.settings.route_model == {"openrouter": "deepseek/deepseek-v4-flash"} and main != "deepseek/deepseek-v4-flash"
+
+    def ask(n, text, **more):
+        svc.handle({"type": "question", "msgId": n, "session": "S", "nextInbox": n, "conv": "c", "text": text,
+                    "snapshot": {}, **more})
+        return _wait_final(addons, n)
+
+    ask(2, "Where is Byancie?")
+    d = ask(5, UPDATE, auto=True, news=True)
+    assert seen == [main, "deepseek/deepseek-v4-flash"] and d["model"] == "deepseek/deepseek-v4-flash"
+    ask(8, "[Player action] Accepted: repair.", auto=True)  # another message of the add-on: not an update of the route
+    assert seen[-1] == main
+    ask(11, UPDATE, auto=True)  # an add-on that does not say "news" yet
+    assert seen[-1] == "deepseek/deepseek-v4-flash"
+
+    assert svc.set_route_model("") == (True, "Route updates: the same model as questions")
+    assert svc.store.settings.route_model == {}
+    ask(14, UPDATE, auto=True, news=True)
+    assert seen[-1] == main
+
+
+def test_claude_route_updates_have_their_own_session(env, monkeypatch):
+    from foreverai import claude_code
+    svc, addons, _ = env
+    info = {"path": "claude.exe", "version": "2.1.304", "loggedIn": True, "subscription": "max"}
+    monkeypatch.setattr(claude_code, "detect", lambda force=False: info)
+    turns, made = [], []
+
+    class FakeSession:
+        def __init__(self, exe, workdir, system, model, effort, search_mode, bridge_url, bridge_token):
+            made.append(model)
+            self.key, self.model, self.workdir = (model, effort, search_mode, system), model, workdir
+            self.conv, self.turns, self.busy = None, 0, False
+
+        def alive(self):
+            return True
+
+        def close(self):
+            pass
+
+        def turn(self, prompt, images=None):
+            turns.append((self.model, prompt))
+            self.turns += 1
+            yield "final", "ok"
+
+    monkeypatch.setattr(claude_code, "ClaudeSession", FakeSession)
+    svc.prewarm_later = lambda: None
+    assert svc.set_provider("claude_code")[0]
+    assert svc.set_route_model("gpt-6") == (False, "gpt-6 is not a Claude model.")
+    assert svc.set_route_model("claude-sonnet-5-5") == (True, "Route updates: Sonnet 5.5")
+
+    def ask(n, text, **more):
+        svc.handle({"type": "question", "msgId": n, "session": "S", "nextInbox": n, "conv": "c", "text": text,
+                    "snapshot": {}, **more})
+        return _wait_final(addons, n)
+
+    assert ask(3, "Plan a route")["model"] == "Haiku 5.5"
+    assert ask(8, UPDATE, auto=True, news=True)["model"] == "Sonnet 5.5"
+    assert ask(13, "And now?")["model"] == "Haiku 5.5"
+    assert ask(18, UPDATE, auto=True, news=True)["model"] == "Sonnet 5.5"
+    assert [m for m, _ in turns] == ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5-5"]
+    assert made == ["claude-haiku-5-5", "claude-sonnet-5-5"]  # one session each, kept: no restart for every update
+    # each side is told what the other did in between: the earlier turns go along
+    assert "Plan a route" in turns[1][1] and "[Quest log changed]" in turns[2][1] and "And now?" in turns[3][1]
+
+
+RUTTHERAN = {"player": {"coords": "58.4, 94.0", "map": "Teldrassil", "level": 11}, "quests": [
+    {"id": 1, "title": "The Sisterhood of Elune", "status": "READY TO TURN IN", "turnIn": "Sister Aquinne (Darnassus 28.9, 45.8)"},
+    {"id": 2, "title": "Training the Beast", "status": "READY TO TURN IN", "turnIn": "Jocaste (Darnassus 40.4, 8.6)"},
+    {"id": 3, "title": "Easing Suffering", "status": "READY TO TURN IN", "turnIn": "Sentinel Eralya Leafshadow (Teldrassil 37.5, 36.8)"},
+    {"id": 4, "title": "Nessa's Fish", "status": "READY TO TURN IN", "turnIn": "Nessa Shadowsong (Teldrassil 56.3, 92.4)"}]}
+
+
+def test_a_route_through_zones_is_marked_with_the_ways_between_them(env):
+    """"Nie bierze pod uwagę jak dostać się do danej lokacji": the way into a zone is a stop of the route, in its
+    place, and what matters most comes first."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, RUTTHERAN)
+    text, err = svc.run_tool(ctx, "plan_route", {})
+    assert not err and ('Stops wait in Darnassus (2). The way there is known (Portal to Darnassus): call plan_route '
+                        'again with then=[{"zone": "Darnassus"}]') in text
+    ctx = _ctx(svc, addons, RUTTHERAN)
+    text, err = svc.run_tool(ctx, "plan_route", {"first": ["Training the Beast"], "then": [
+        {"zone": "Darnassus"}, {"zone": "Teldrassil", "via_x": "87", "via_y": 44, "via_title": "The city gate"}]})
+    assert not err
+    assert [(m["title"], m["zone"]) for m in ctx.marks] == [
+        ("1. Nessa Shadowsong", "Teldrassil"), ("2. Portal to Darnassus", "Teldrassil"), ("3. Jocaste", "Darnassus"),
+        ("4. Sister Aquinne", "Darnassus"), ("5. The gate of Darnassus (approx.)", "Darnassus"),
+        ("6. Sentinel Eralya Leafshadow", "Teldrassil")]
+    assert ctx.marks[1]["tasks"] == [{"kind": "travel", "zone": "Darnassus"}]
+    assert ctx.marks[4]["tasks"] == [{"kind": "travel", "zone": "Teldrassil"}]
+    # the next answers know how the route was planned: an update keeps to it
+    (note,) = [n for n in ctx.did() if n.startswith("planned the route")]
+    assert note == ("planned the route: first [Training the Beast]; then Darnassus by Portal to Darnassus (55, 89), "
+                    "arriving at 30, 41; then Teldrassil by The gate of Darnassus (approx.) (88, 44), arriving at 38, 51")
+    # a way the app does not know, as the model gives it
+    snapshot = dict(RUTTHERAN, quests=RUTTHERAN["quests"] + [
+        {"id": 5, "title": "The Keeper", "status": "READY TO TURN IN", "turnIn": "Keeper (Moonglade 51.0, 45.0)"}])
+    ctx = _ctx(svc, addons, snapshot)
+    svc.run_tool(ctx, "plan_route", {"skip": ["The Sisterhood of Elune", "Training the Beast"], "then": [
+        {"zone": "Moonglade", "via_x": 58.4, "via_y": 94, "via_title": "Vesprystus", "arrive_x": 44, "arrive_y": 45}]})
+    assert [m["title"] for m in ctx.marks] == ["1. Nessa Shadowsong", "2. Vesprystus", "3. Keeper"]
+    assert ctx.marks[1]["tasks"] == [{"kind": "travel", "zone": "Moonglade"}] and ctx.marks[2]["zone"] == "Moonglade"
+
+
+def test_the_order_of_a_route_can_name_a_stop_added_in_the_same_answer(env):
+    """The real answer: the portal was added to a route on the map and was to come first; the order did not know
+    the new stop, so it stayed last."""
+    svc, addons, _ = env
+    snapshot = {"marks": ["1. Sister Aquinne — Darnassus 28.9, 45.8", "2. Jocaste — Darnassus 40.4, 8.6"]}
+    ctx = _ctx(svc, addons, snapshot)
+    svc.run_tool(ctx, "mark_on_map", {"title": "Portal to Darnassus", "x": 55.9, "y": 89.6, "zone": "Teldrassil", "add": True})
+    text, err = svc.run_tool(ctx, "edit_route", {"order": ["Portal to Darnassus", "Jocaste"]})
+    assert not err and text == "The route now: 1. Portal to Darnassus, 2. Jocaste, 3. Sister Aquinne."
+    assert ctx.route_edit == {"order": [{"title": "Portal to Darnassus", "x": 55.9, "y": 89.6},
+                                         {"title": "Jocaste", "x": 40.4, "y": 8.6},
+                                         {"title": "Sister Aquinne", "x": 28.9, "y": 45.8}]}
+    assert [m["title"] for m in ctx.marks] == ["Portal to Darnassus"] and ctx.replaces_marks is False
+
+
+def test_route_updates_can_have_their_own_thinking_level(env, monkeypatch):
+    """An update of the route is a small job: the player lets it think less than questions, with the same model or
+    with the one chosen for updates."""
+    from foreverai import claude_code
+    svc, addons, _ = env
+    info = {"path": "claude.exe", "version": "2.1.304", "loggedIn": True, "subscription": "max"}
+    monkeypatch.setattr(claude_code, "detect", lambda force=False: info)
+    turns, made = [], []
+
+    class FakeSession:
+        def __init__(self, exe, workdir, system, model, effort, search_mode, bridge_url, bridge_token):
+            made.append((model, effort))
+            self.key, self.model, self.effort, self.workdir = (model, effort, search_mode, system), model, effort, workdir
+            self.conv, self.turns, self.busy = None, 0, False
+
+        def alive(self):
+            return True
+
+        def close(self):
+            pass
+
+        def turn(self, prompt, images=None):
+            turns.append((self.model, self.effort))
+            self.turns += 1
+            yield "final", "ok"
+
+    monkeypatch.setattr(claude_code, "ClaudeSession", FakeSession)
+    svc.prewarm_later = lambda: None
+    assert svc.set_provider("claude_code")[0]
+    assert svc.set_route_effort("nope") == (False, "Unknown thinking level.")
+    assert svc.set_route_effort("low") == (True, "Route updates: thinking low")
+    assert svc.store.settings.route_effort == "low" and svc.store.settings.claude_effort == "high"
+
+    def ask(n, text, **more):
+        svc.handle({"type": "question", "msgId": n, "session": "S", "nextInbox": n, "conv": "c", "text": text,
+                    "snapshot": {}, **more})
+        return _wait_final(addons, n)
+
+    ask(1, "Plan a route")
+    ask(4, UPDATE, auto=True, news=True)  # the same model, thinking less: a session of its own
+    ask(7, "And now?")
+    ask(10, UPDATE, auto=True, news=True)
+    assert turns == [("claude-haiku-5-5", "high"), ("claude-haiku-5-5", "low")] * 2
+    assert made == [("claude-haiku-5-5", "high"), ("claude-haiku-5-5", "low")]  # one session each, kept
+
+    assert svc.set_route_model("claude-sonnet-5-5")[0]  # with the model chosen for updates
+    ask(13, UPDATE, auto=True, news=True)
+    assert turns[-1] == ("claude-sonnet-5-5", "low")
+
+    assert svc.set_route_effort("") == (True, "Route updates: the same thinking level as questions")
+    assert svc.store.settings.route_effort == ""
+    ask(16, UPDATE, auto=True, news=True)
+    assert turns[-1] == ("claude-sonnet-5-5", "high")
+
+
+def test_a_mark_can_say_what_to_do_there(env):
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, {})
+    svc.run_tool(ctx, "mark_on_map", {"title": "Jocaste", "x": 40.4, "y": 8.6, "zone": "Darnassus",
+                                      "note": "  (learn Beast Training, then talk to her again about the pet's loyalty and food)  "})
+    assert ctx.marks[0]["note"] == "learn Beast Training, then talk to her again about the pet's"
+    svc.run_tool(ctx, "mark_on_map", {"title": "The dock", "x": 50, "y": 50, "add": True})
+    assert "note" not in ctx.marks[1]
+    svc.run_tool(ctx, "mark_on_map", {"title": "Fandral", "x": 34.8, "y": 9.3, "add": True,
+                                      "note": "talk to Onu (Grove of the Ancients)"})
+    assert ctx.marks[2]["note"] == "talk to Onu (Grove of the Ancients)"  # its own brackets stay whole
+
+
+def _planning_service(svc, addons, seen):
+    """A model that plans a route when asked for one (leaving [Letter] out) and answers an update without a tool."""
+    class Client(FakeClient):
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            seen.append(messages[-1]["content"] if messages[-1]["role"] == "user" else None)
+            if "plan my route" in str(messages[-1]["content"]) and not any(m["role"] == "tool" for m in messages):
+                yield "tool_calls", [ToolCall("c1", "plan_route", '{"skip": ["Letter"], "end_x": 50, "end_y": 60, '
+                                                                  '"end_title": "Dolanaar"}')]
+                return
+            yield "text", "ok"
+
+    return Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+
+
+def test_an_update_of_the_route_comes_already_planned(env):
+    """"Trwa to bardzo długo": an update used to be the model reading everything, calling plan_route and writing an
+    answer. The app plans the route again itself, the way the model planned it; the model checks it and says one line."""
+    svc, addons, _ = env
+    seen = []
+    svc = _planning_service(svc, addons, seen)
+    snapshot = dict(ROUTE_SNAPSHOT, bags={"free": 3}, spells=["Aimed Shot"], zoneNPCs=["Vendor — Teldrassil 50.0, 51.0 (20 m)"])
+    svc.handle({"type": "question", "msgId": 1, "session": "S", "nextInbox": 1, "conv": "c", "text": "plan my route",
+                "snapshot": snapshot})
+    assert [m["title"] for m in _wait_final(addons, 1)["marks"]] == ["1. Boar", "2. Giver"]
+    assert "## bags" in seen[0] and "planned again" not in seen[0]
+
+    # a quest was taken: the update
+    later = dict(snapshot, marks=["1. Boar — Teldrassil 80.0, 50.0 (900 m)", "2. Giver — Teldrassil 50.0, 60.0",
+                                  "Taken off the route by the player: Giver"])
+    later["quests"] = snapshot["quests"] + [
+        {"id": 3, "title": "Fresh", "status": "READY TO TURN IN", "turnIn": "Elder (Teldrassil 55.0, 50.0)"}]
+    del seen[:]
+    svc.handle({"type": "question", "msgId": 6, "session": "S", "nextInbox": 6, "conv": "c", "text": UPDATE,
+                "snapshot": later, "auto": True, "news": True})
+    d = _wait_final(addons, 6)
+    # planned the way it was planned ([Letter] left out), with the quest just taken, without what the player took off
+    assert [m["title"] for m in d["marks"]] == ["1. Elder", "2. Boar"]
+    assert d["marksReplace"] is True and d["routePlanned"] is True
+    (told,) = seen
+    assert "# The route, planned again" in told and "1. Elder (55, 50)" in told and "- [Letter]: left out as asked" in told
+    assert "It is on the map in place of the old one when you call no tool" in told
+    # only what a route needs is read again
+    assert "## quests" in told and "## zoneNPCs" in told and "## bags" not in told and "## spells" not in told
+    # and the plan is remembered after a restart of the app
+    again = _planning_service(svc, addons, seen)
+    del seen[:]
+    again.handle({"type": "question", "msgId": 11, "session": "S", "nextInbox": 11, "conv": "c", "text": UPDATE,
+                  "snapshot": later, "auto": True, "news": True})
+    assert [m["title"] for m in _wait_final(addons, 11)["marks"]] == ["1. Elder", "2. Boar"]
+
+
+def test_an_update_without_a_remembered_plan_is_left_to_the_model(env):
+    svc, addons, _ = env
+    seen = []
+    svc = _planning_service(svc, addons, seen)
+    svc.handle({"type": "question", "msgId": 1, "session": "S", "nextInbox": 1, "conv": "other", "text": UPDATE,
+                "snapshot": ROUTE_SNAPSHOT, "auto": True, "news": True})
+    d = _wait_final(addons, 1)
+    assert not d.get("marks") and "planned again" not in seen[0] and "## quests" in seen[0]
+
+
+def test_an_update_takes_the_route_on_from_the_zone_the_player_is_in(env):
+    """The zones the route went through are remembered with it; the ones behind the player are not gone back to."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, RUTTHERAN)
+    svc.run_tool(ctx, "plan_route", {"then": [{"zone": "Darnassus"}, {"zone": "Teldrassil"}]})
+    assert [m["zone"] for m in ctx.marks] == ["Teldrassil", "Teldrassil", "Darnassus", "Darnassus", "Darnassus", "Teldrassil"]
+    in_town = dict(RUTTHERAN, player={"coords": "30.0, 41.0", "map": "Darnassus", "level": 11},
+                   marks=["1. Jocaste — Darnassus 40.4, 8.6"])
+    ctx = _ctx(svc, addons, in_town)
+    assert svc.plan_again(ctx) is not None
+    assert [m["title"] for m in ctx.marks] == ["1. Sister Aquinne", "2. Jocaste", "3. The gate of Darnassus (approx.)",
+                                               "4. Sentinel Eralya Leafshadow"]
+    out_of_town = dict(RUTTHERAN, player={"coords": "38.0, 50.0", "map": "Teldrassil", "level": 11},
+                       marks=["1. Sentinel Eralya Leafshadow — Teldrassil 37.5, 36.8"])
+    out_of_town["quests"] = [q for q in RUTTHERAN["quests"] if q["id"] == 3]
+    ctx = _ctx(svc, addons, out_of_town)
+    svc.plan_again(ctx)
+    assert [m["title"] for m in ctx.marks] == ["1. Sentinel Eralya Leafshadow"]  # not back through the gate
+
+
+def test_a_session_that_cannot_reach_the_tools_is_replaced(env, monkeypatch):
+    """"Narzędzie do planowania trasy nie działa": the session's call of a tool came back as an error and never
+    reached the app. The player must not get an answer written without the tools: the question is asked once more,
+    on a fresh session."""
+    from foreverai import claude_code
+    svc, addons, _ = env
+    info = {"path": "claude.exe", "version": "2.1.322", "loggedIn": True, "subscription": "max"}
+    monkeypatch.setattr(claude_code, "detect", lambda force=False: info)
+    made, closed = [], []
+
+    class FakeSession:
+        def __init__(self, exe, workdir, system, model, effort, search_mode, bridge_url, bridge_token):
+            made.append(self)
+            self.key, self.workdir = (model, effort, search_mode, system), workdir
+            self.conv, self.turns, self.busy, self.broken = None, 0, False, len(made) == 1
+
+        def alive(self):
+            return self not in closed
+
+        def close(self):
+            closed.append(self)
+
+        def turn(self, prompt, images=None):
+            self.turns += 1
+            if self.broken:  # the first session: its tools answer with an error the app never sees
+                yield "tool_error", "mcp__foreverai__plan_route"
+                yield "final", "The route tool does not work, so here is a route by hand."
+                return
+            text, _ = svc.tool_from_bridge("plan_route", {})
+            yield "final", "The route is on the map."
+
+    monkeypatch.setattr(claude_code, "ClaudeSession", FakeSession)
+    svc.prewarm_later = lambda: None
+    assert svc.set_provider("claude_code")[0]
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "plan my route",
+                "snapshot": ROUTE_SNAPSHOT})
+    d = _wait_final(addons, 3)
+    assert d["text"] == "The route is on the map." and [m["title"] for m in d["marks"]] == ["1. Postman", "2. Boar", "3. Giver"]
+    assert len(made) == 2 and made[0] in closed and made[1] not in closed
+    # a tool that answered with an error of its own is not a broken link: nothing is asked twice
+    made[1].turn = lambda prompt, images=None: iter([("tool_error", "mcp__foreverai__mark_on_map"), ("final", "Done.")])
+    svc.tool_from_bridge  # (the app saw the call: see below)
+    orig = made[1].turn
+
+    def seen_by_the_app(prompt, images=None):
+        svc.tool_from_bridge("mark_on_map", {"title": "x", "x": "no", "y": 1})
+        yield from orig(prompt, images)
+
+    made[1].turn = seen_by_the_app
+    svc.handle({"type": "question", "msgId": 8, "session": "S", "nextInbox": 8, "conv": "c", "text": "mark it",
+                "snapshot": ROUTE_SNAPSHOT})
+    assert _wait_final(addons, 8)["text"] == "Done." and len(made) == 2
+
+
+
+def test_an_update_that_changes_nothing_does_not_ask_the_model(env):
+    """"DZIAŁAŁ SZYBKO": the route planned again is the route on the map, so there is nothing for a model to check."""
+    svc, addons, _ = env
+    seen = []
+    svc = _planning_service(svc, addons, seen)
+    svc.handle({"type": "question", "msgId": 1, "session": "S", "nextInbox": 1, "conv": "c", "text": "plan my route",
+                "snapshot": ROUTE_SNAPSHOT})
+    _wait_final(addons, 1)
+    del seen[:]
+    same = dict(ROUTE_SNAPSHOT, marks=["1. Old Stop — Teldrassil 40.0, 40.0 (done)", "2. Boar — Teldrassil 80.0, 50.0 (900 m)",
+                                       "3. Giver — Teldrassil 50.0, 60.0",
+                                       "These stops leave the route when what is to be done there is done: Boar, Giver"])
+    svc.handle({"type": "question", "msgId": 6, "session": "S", "nextInbox": 6, "conv": "c", "text": UPDATE,
+                "snapshot": same, "auto": True, "news": True})
+    d = _wait_final(addons, 6)
+    assert seen == [] and d["routeUnchanged"] is True and not d.get("marks")
+    assert d["text"] == "Route checked: nothing to change."
+    assert len(svc.convs.history("c")) == 1  # nothing to remember about it
+
+
+def test_a_long_route_is_marked_to_its_end(env):
+    """The real update: sixteen stops, of which the last four (the portal, the flight, Darkshore) never reached the map."""
+    svc, addons, _ = env
+    quests = [{"id": n, "title": f"Errand {n}", "status": "READY TO TURN IN", "turnIn": f"Clerk {n} (Teldrassil {10 + 4 * n}.0, 50.0)"}
+              for n in range(1, 17)]
+    ctx = _ctx(svc, addons, {"player": {"coords": "5.0, 50.0", "map": "Teldrassil"}, "quests": quests})
+    text, _ = svc.run_tool(ctx, "plan_route", {})
+    assert len(ctx.marks) == 16 and ctx.marks[-1]["title"] == "16. Clerk 16" and "The 16 stops are marked" in text

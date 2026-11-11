@@ -152,6 +152,7 @@ local function money(c)
   if s > 0 then return string.format("%ds %dc", s, cu) end
   return cu .. "c"
 end
+ns.Coins = money -- copper as "1g 2s 3c", for the other parts of the add-on
 
 -- step 1 (in slices over several frames): every priced item that passes the filters the game knows instantly
 local function collect(job)

@@ -122,6 +122,17 @@ TOOLS.append({
                 "x": {"type": "number"}, "y": {"type": "number"},
                 "zone": {"type": "string"},
                 "add": {"type": "boolean", "description": "true: keep the marks of earlier answers and add this one"},
+                "quest": {"type": "string", "description": "The quest this stop is for (its title), with task: the "
+                                                            "stop then stays on the route until that is done, "
+                                                            "instead of leaving when the player reaches the place"},
+                "note": {"type": "string", "description": "What to do there in a few words, in English like the "
+                                                           "add-on's window (e.g. 'learn Beast Training'): shown in "
+                                                           "brackets after the stop in the player's route list. Leave "
+                                                           "it out when quest and task say it: the list then says "
+                                                           "'turn in …' or 'pick up …' by itself"},
+                "task": {"type": "string", "enum": ["objective", "turn_in", "pick_up"],
+                         "description": "What the player does there for that quest: an objective of it, turning it "
+                                        "in, or picking it up"},
                 "mob": {"type": "string", "description": "When the mark is where a creature is to be found: its exact "
                                                           "name. The game then watches for it: a living one in sight is "
                                                           "marked on the screen and announced with a sound, and the "
@@ -150,6 +161,10 @@ TOOLS.append({
                           "description": "Stops in the order to walk them; the stops you do not name follow in the "
                                          "order they had"},
                 "clear": {"type": "boolean", "description": "true: take every stop off the map"},
+                "propose": {"type": "boolean",
+                            "description": "true when the player did not ask for this change and you think the route "
+                                           "no longer fits: the player gets it as a card to accept, and the route "
+                                           "stays as it is until then"},
                 "stop_tracking": {"type": "array", "items": {"type": "string"},
                                   "description": "Creatures to stop watching for, by the name that starts their line "
                                                  "in the tracked section; [\"all\"] for every one. A stop taken off "
@@ -164,29 +179,63 @@ TOOLS.append({
     "type": "function",
     "function": {
         "name": "plan_route",
-        "description": "The walking route through the player's quest log in their current zone: every objective and "
-                       "turn-in with a known place, in the order with the shortest way, each turn-in after its own "
-                       "objectives, with the distances, and what is left out and why (another zone, needs a skill, "
-                       "no known place). It also marks the stops on the map in that order (up to 12), replacing "
-                       "earlier marks. Use it whenever the player asks for a route, a path, an order for their "
-                       "quests or \"what is the best way to do these\"; do not order the stops yourself. You decide "
-                       "what the route holds: read the quests first (text, level against the player's, elite or "
-                       "group, escort, what you advised earlier) and say so with skip, last, new_quests and end.",
+        "description": "The route through the player's quest log: every objective and turn-in with a known place, in "
+                       "the order with the shortest way, each turn-in after its own objectives, with the distances, "
+                       "and what is left out and why (another zone, needs a skill, no known place). It covers the "
+                       "player's zone and, with then, the zones the route goes on into, each through the way the "
+                       "player really takes there (a portal, a boat, a flight, a road), which becomes a stop of its "
+                       "own. It also marks the stops on the map in that order (up to 12), replacing earlier marks. "
+                       "Use it whenever the player asks for a route, a path, an order for their quests or \"what is "
+                       "the best way to do these\"; do not order the stops yourself, and do not set the stops of "
+                       "another zone by hand. You decide what the route holds: read the quests first (text, level "
+                       "against the player's, elite or group, escort, what you advised earlier) and say so with "
+                       "skip, first, last, new_quests, then and end.",
         "parameters": {
             "type": "object",
             "properties": {
                 "skip": {"type": "array", "items": {"type": "string"},
                          "description": "Quest titles to leave out: quests the player cannot or should not do now "
                                         "(an elite or group quest alone, far above their level, one you advised against)"},
+                "first": {"type": "array", "items": {"type": "string"},
+                          "description": "Quest titles to do before everything else in their zone, also when that "
+                                         "makes the way longer: what the player gains most from having early (a class "
+                                         "quest that gives an ability or a pet skill, a quest that opens others, one "
+                                         "with a time limit)"},
                 "last": {"type": "array", "items": {"type": "string"},
                          "description": "Quest titles to do after everything else (the hard ones: by then the player "
                                         "may have a level more or company)"},
+                "then": {"type": "array",
+                         "description": "The zones the route goes on into after the player's zone, in the order the "
+                                        "player travels, when quests lead there (turn-ins waiting in a city, the next "
+                                        "zone). The player's own zone may come again after another one, when the "
+                                        "rest of it cannot be reached on foot from where they stand (a village "
+                                        "behind a portal, an island): then only what lies on the way out is done "
+                                        "first, and the rest when the route is back",
+                         "items": {"type": "object", "properties": {
+                             "zone": {"type": "string", "description": "English name of the zone, as in the game "
+                                                                       "data or as plan_route named it"},
+                             "via_x": {"type": "number", "description": "The way out of the zone before this one, in "
+                                                                        "THAT zone's coordinates: the portal, boat, "
+                                                                        "flight master or road the player takes. "
+                                                                        "Leave via and arrive out when plan_route "
+                                                                        "said that it knows the way"},
+                             "via_y": {"type": "number"},
+                             "via_title": {"type": "string", "description": "What it is, e.g. 'Portal to Darnassus'"},
+                             "arrive_x": {"type": "number", "description": "Where the player comes out in this zone, "
+                                                                           "in this zone's coordinates"},
+                             "arrive_y": {"type": "number"}}, "required": ["zone"]}},
                 "new_quests": {"type": "array", "items": {"type": "string"},
-                               "description": "Titles of nearbyQuests worth picking up on the way: only the ones you "
-                                              "recommend, not all of them"},
-                "end_x": {"type": "number", "description": "Where the player goes after these quests, in this "
-                                                             "zone's coordinates (the road to the next zone, a flight master, "
-                                                             "the town for the turn-ins elsewhere): the route ends near it"},
+                               "description": "Titles of nearbyQuests worth picking up that are not by the route "
+                                              "(the result names them); the ones whose giver stands next to the "
+                                              "player or to a stop are picked up without being named here"},
+                "propose": {"type": "boolean",
+                            "description": "true when the player did not ask for a route and you think the one on the "
+                                           "map no longer fits: the new route goes to the player as a card to accept, "
+                                           "and the map stays as it is until then"},
+                "end_x": {"type": "number", "description": "Where the player goes after these quests, in the "
+                                                             "coordinates of the route's last zone (the road to the "
+                                                             "next zone, a flight master), when that zone itself is "
+                                                             "not on the route with then: the route ends near it"},
                 "end_y": {"type": "number"},
                 "end_title": {"type": "string", "description": "What is at end_x, end_y, e.g. 'the road to Darnassus'"},
                 "mark": {"type": "boolean", "description": "false: only compute, do not mark (default true)"},
@@ -607,6 +656,12 @@ def validate_mark(args: dict) -> tuple[dict | None, str]:
         return None, "Rejected: coordinates outside 0-100."
     title = str(args.get("title") or "Point").strip()[:60]
     mark = {"title": title, "x": round(x, 1), "y": round(y, 1), "zone": str(args.get("zone") or "").strip()[:60]}
+    note = str(args.get("note") or "").strip()
+    if note.startswith("(") and note.endswith(")") and not set("()") & set(note[1:-1]):
+        note = note[1:-1].strip()  # the list puts it in brackets itself; brackets inside a note stay whole
+    note = note[:60].rstrip()
+    if note:
+        mark["note"] = note  # what to do there, shown in brackets after the stop in the add-on's list
     return mark, f"Marked on the map: {title} ({mark['x']}, {mark['y']})."
 
 
@@ -615,6 +670,11 @@ def run_fetch(url: str) -> str:
     return fetch(url)
 
 _ids = itertools.count(1)
+
+
+def next_action_id() -> int:
+    """An id for a proposal card (the add-on keeps track of cards by it)."""
+    return next(_ids)
 
 
 def _flatten(prefix: str, value: Any, out: dict) -> None:

@@ -131,6 +131,7 @@ def _env(exe: str, **extra: str) -> dict[str, str]:
 
 
 _detect_cache: tuple[dict | None, float] | None = None
+UPDATE_TRIES, UPDATE_WAIT_S = 4, 3  # a copy that does not start is tried again this often, this far apart
 
 
 def detect(force: bool = False) -> dict | None:
@@ -140,11 +141,23 @@ def detect(force: bool = False) -> dict | None:
         return _detect_cache[0]
     info = None
     for exe in candidate_executables():
-        try:
-            out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=20,
-                                 env=_env(exe), creationflags=NO_WINDOW)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            log.warning("claude candidate %s failed: %s", exe, e)
+        out = None
+        # Claude Code updates itself in the background: while its file is being replaced the system refuses to start
+        # it (Windows: "[WinError 216]"). That is over in a few seconds, so it is tried again before another copy.
+        for attempt in range(UPDATE_TRIES):
+            try:
+                out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=20,
+                                     env=_env(exe), creationflags=NO_WINDOW)
+                break
+            except subprocess.TimeoutExpired as e:
+                log.warning("Claude Code at %s did not answer: %s", exe, e)
+                break
+            except OSError as e:
+                if attempt + 1 < UPDATE_TRIES:
+                    time.sleep(UPDATE_WAIT_S)
+                else:
+                    log.warning("Claude Code at %s could not be started (%s); looking for another copy", exe, e)
+        if out is None:
             continue
         # only a binary that reports itself as Claude Code (not e.g. the Claude desktop app or another "claude")
         if "Claude Code" not in (out.stdout or ""):
@@ -208,8 +221,10 @@ def flatten_messages(messages: list[dict]) -> tuple[str, str]:
 
 def _parse_stream(get_event, on_tool) -> Iterator[tuple[str, object]]:
     """Shared parser of Claude Code stream-json events for one turn.
-    Yields ("text", full_text) / ("phase", str) / ("final", text) / ("error", str); stops at the end of the turn."""
+    Yields ("text", full_text) / ("phase", str) / ("final", text) / ("error", str); stops at the end of the turn.
+    Also ("tool_error", tool name) when a call of one of the app's own tools came back to the model as an error."""
     text = ""
+    ours: dict[str, str] = {}  # tool_use id -> name, for the app's tools
     while True:
         ev = get_event()
         if ev is None:
@@ -223,6 +238,8 @@ def _parse_stream(get_event, on_tool) -> Iterator[tuple[str, object]]:
                 text = ""
             elif et == "content_block_start":
                 block = e.get("content_block") or {}
+                if block.get("type") == "tool_use" and str(block.get("name", "")).startswith("mcp__foreverai__"):
+                    ours[str(block.get("id"))] = str(block.get("name"))
                 if block.get("type") in ("tool_use", "server_tool_use"):
                     phase = on_tool(block.get("name", ""))
                     if phase:
@@ -238,6 +255,12 @@ def _parse_stream(get_event, on_tool) -> Iterator[tuple[str, object]]:
                     # the answer is complete; Claude Code would still spend ~2-3 s on a post-turn summary
                     yield "final", text
                     return
+        elif kind == "user":  # what the tools answered
+            content = (ev.get("message") or {}).get("content")
+            for part in content if isinstance(content, list) else []:
+                if (isinstance(part, dict) and part.get("type") == "tool_result" and part.get("is_error")
+                        and str(part.get("tool_use_id")) in ours):
+                    yield "tool_error", ours[str(part.get("tool_use_id"))]
         elif kind == "result":
             if ev.get("is_error") or ev.get("subtype") not in (None, "success"):
                 yield "error", f"Claude Code: {ev.get('result') or ev.get('subtype')}"

@@ -22,8 +22,8 @@ from .memory import ConversationStore, MemoryStore
 from .gemini import Gemini
 from .openrouter import OpenRouter
 from .prompt import build_messages, entity_names
-from .tools import (TOOLS, auction_request, format_addon_options, format_auction, remember_options, run_fetch,
-                    run_kb_search, validate_abandon, validate_mark, validate_proposal, validate_vendor)
+from .tools import (TOOLS, auction_request, format_addon_options, format_auction, next_action_id, remember_options,
+                    run_fetch, run_kb_search, validate_abandon, validate_mark, validate_proposal, validate_vendor)
 from .wowformat import bracket_names, md_to_wow
 
 log = logging.getLogger("foreverai")
@@ -53,7 +53,8 @@ SCREEN_NOTE = ("The player attached the current screen as an image (top-left cor
 # the last turns inline, before the model's context fills up and Claude Code stops to compact it.
 MAX_SESSION_TURNS = 14
 MAX_SESSION_CHARS = 350_000  # ~90k tokens of questions and tool results; answers and thinking come on top
-MAX_MARKS = 12  # marks one answer can set: a route through a full quest log (route.EXACT_MAX)
+MAX_MARKS = 12  # marks one answer can set by hand
+MAX_ROUTE_MARKS = 20  # ... and the stops of a planned route: one through several zones is long, and loses its end otherwise
 MAX_TRACKED = 5  # creatures the add-on watches for at once
 
 
@@ -115,42 +116,76 @@ class InboxWriter:
 
 
 # a line of the "marks" section: "2. Sentinel Arynia Cloudsbreak — Teldrassil 38.3, 34.4 (115 m)"
-_MARK_LINE = re.compile(r"^\d+\. (.+) — .*? (\d+(?:\.\d+)?), (\d+(?:\.\d+)?)(?: \(\d+ m\))?$")
+_MARK_LINE = re.compile(r"^\d+\. (.+) — .*? (\d+(?:\.\d+)?), (\d+(?:\.\d+)?)(?: \((?:\d+ m|done)\))?$")
 
 
-def edit_route(ctx: "TurnContext", args: dict) -> tuple[str, bool]:
-    """The edit_route tool: change the route that is on the player's map (the snapshot's marks and tracked sections)
-    without marking it again. Either everything asked for fits, or nothing changes. A later call in the same answer
-    takes the place of an earlier one for the route; creatures to stop watching for add up."""
-    def names(value) -> list[str]:
-        value = [value] if isinstance(value, str) else value if isinstance(value, list) else []
-        return [str(v).strip() for v in value if str(v).strip()]
+def propose_route(ctx: "TurnContext", action: dict) -> None:
+    """A route change the model proposes by itself: one card per answer, the latest proposal."""
+    ctx.actions[:] = [a for a in ctx.actions if a.get("op") not in ("route", "route_edit")]
+    ctx.actions.append({"id": next_action_id(), "addon": "Map", **action})
 
+
+def _already_marked(ctx: "TurnContext", mark: dict, add: bool) -> str | None:
+    """Why a mark is not set: the place is on the route already (this answer's marks, or the map's when the mark is
+    added to them). The same spot under any name, or the same name close by (\"Corithras Moonrage\" and \"Corithras
+    Moonrage (Crown of the Earth)\")."""
+    def bare(title: str) -> str:
+        return re.sub(r"^\d+[.)]\s*", "", str(title)).strip()
+
+    def name(title: str) -> str:
+        return re.sub(r"\s*\([^)]*\)\s*$", "", bare(title)).strip("[] ").lower()
+
+    def same(a: dict, b: dict) -> bool:
+        za, zb = str(a.get("zone") or "").lower(), str(b.get("zone") or "").lower()
+        if za and zb and za != zb:
+            return False
+        dx, dy = abs(a["x"] - b["x"]), abs(a["y"] - b["y"])
+        return (dx <= 0.3 and dy <= 0.3) or (name(a["title"]) == name(b["title"]) and dx <= 1.0 and dy <= 1.0)
+
+    def refused(where: str, n: int, other: dict) -> str:
+        return (f"Not marked: {bare(mark['title'])} is already on {where} as stop {n} ({bare(other['title'])}). "
+                "A place is one stop; say in the answer everything to do there.")
+
+    for n, other in enumerate(ctx.marks, 1):
+        if same(mark, other):
+            return refused("the route", n, other)
+    if add and (not ctx.marks or not ctx.replaces_marks):  # the map's route stays: this one joins it
+        # a stop that is done is not in the way: marking its place again makes it a stop to do
+        lines = [str(line) for line in ctx.snapshot.get("marks") or []]
+        stops = [(n, {"title": m.group(1), "x": float(m.group(2)), "y": float(m.group(3))})
+                 for n, (line, m) in enumerate(((line, _MARK_LINE.match(line)) for line in lines), 1)
+                 if m and not line.endswith("(done)")]
+        for n, other in stops:
+            if same(mark, other):
+                return refused("the map", n, other)
+    return None
+
+
+def _edit_answer_route(ctx: "TurnContext", remove: list[str], order: list[str], stop: list[str],
+                       clear: bool) -> tuple[str, bool]:
+    """edit_route after this answer marked a route (plan_route, then a change to it): the change applies to these marks,
+    which replace the ones on the map, not to the route on the map."""
     def bare(title: str) -> str:
         return re.sub(r"^\d+[.)]\s*", "", title).strip("[] ").lower()
 
-    stops = [{"title": m.group(1), "x": float(m.group(2)), "y": float(m.group(3))}
-             for m in (_MARK_LINE.match(str(line)) for line in ctx.snapshot.get("marks") or []) if m]
-    tracked = [re.split(r" \(also counts|: ", str(line))[0] for line in ctx.snapshot.get("tracked") or []]
-    remove, order, stop = names(args.get("remove")), names(args.get("order")), names(args.get("stop_tracking"))
-    clear = args.get("clear") is True
-    if not (remove or order or stop or clear):
-        return "Nothing changed: say what to change (remove, order, clear or stop_tracking).", True
-    if (remove or order or clear) and not stops:
-        return "Nothing changed: nothing of yours is marked on the map.", True
-
     def numbered(some: list[dict]) -> str:
-        return ", ".join(f"{n}. {s['title']}" for n, s in enumerate(some, 1))
+        return ", ".join(f"{n}. {re.sub(r'^[0-9]+[.)]\s*', '', m['title'])}" for n, m in enumerate(some, 1))
+
+    marks = list(ctx.marks)
+    if clear:
+        del ctx.marks[:], ctx.mark_adds[:], ctx.track[:]
+        ctx.route_marked = False
+        ctx.route_edit, ctx.edit_notes["route"] = {"clear": True}, ["cleared the route"]
+        return "The route is cleared: no marks of yours are on the map.", False
 
     def pick(wanted: list[str]) -> list[dict] | str:
-        """The stops named by their number in the marks section or by their title; a name when one fits no stop."""
         found: list[dict] = []
         for name in wanted:
             key = name.rstrip(".")
             if key.isdigit():
-                hit = stops[int(key) - 1] if 1 <= int(key) <= len(stops) else None
+                hit = marks[int(key) - 1] if 1 <= int(key) <= len(marks) else None
             else:
-                hit = next((s for s in stops if s["title"].lower() == bare(name) and s not in found), None)
+                hit = next((m for m in marks if bare(m["title"]) == bare(name) and m not in found), None)
             if hit is None:
                 return name
             if hit not in found:
@@ -160,7 +195,93 @@ def edit_route(ctx: "TurnContext", args: dict) -> tuple[str, bool]:
     gone, first = pick(remove), pick(order)
     for missing in (gone, first):
         if isinstance(missing, str):
-            return f"Nothing changed: no stop called {missing}. The stops on the map: {numbered(stops)}.", True
+            return (f"Nothing changed: no stop called {missing}. The stops of the route you marked in this answer: "
+                    f"{numbered(marks)}."), True
+    watched = [t["name"] for t in ctx.track]
+    if stop and stop[0].lower() == "all":
+        unwatched = watched
+    else:
+        unwatched = []
+        for name in stop:
+            hit = next((w for w in watched if w.lower() == name.strip("[] ").lower()), None)
+            if hit is None:
+                return (f"Nothing changed: nothing called {name} is watched for with this route. "
+                        + ("Watched for: " + ", ".join(watched) + "." if watched else "Nothing is watched for.")), True
+            unwatched.append(hit)
+    adds = {id(m): a for m, a in zip(ctx.marks, ctx.mark_adds)}
+    first = [m for m in first if m not in gone]
+    left = first + [m for m in marks if m not in gone and m not in first]
+    if any(re.match(r"^\d+[.)]", m["title"]) for m in marks):  # the numbers follow the new order
+        for n, m in enumerate([m for m in left if re.match(r"^\d+[.)]", m["title"])], 1):
+            m["title"] = f"{n}. {re.sub(r'^[0-9]+[.)]\s*', '', m['title'])}"[:60]
+    ctx.marks[:] = left
+    ctx.mark_adds[:] = [adds.get(id(m), False) for m in left]
+    mobs = {str(m.get("mob")).lower() for m in left if m.get("mob")}
+    ctx.track[:] = [t for t in ctx.track if t["name"].lower() in mobs and t["name"] not in unwatched]
+    said = []
+    if gone:
+        said.append("Taken off the route: " + ", ".join(re.sub(r"^[0-9]+[.)]\s*", "", m["title"]) for m in gone) + ".")
+        ctx.notes.append("took off the route: " + ", ".join(re.sub(r"^[0-9]+[.)]\s*", "", m["title"]) for m in gone))
+    if first:
+        ctx.notes.append("put the route in another order")
+    if unwatched:
+        said.append("No longer watched for: " + ", ".join(unwatched) + ".")
+        ctx.notes.append("stopped watching for: " + ", ".join(unwatched))
+    said.append(f"The route now: {numbered(left) if left else 'no stops left'}. These marks replace the ones on the map; "
+                "do not mark them again.")
+    return " ".join(said), False
+
+
+def edit_route(ctx: "TurnContext", args: dict) -> tuple[str, bool]:
+    """The edit_route tool: change the route that is on the player's map (the snapshot's marks and tracked sections)
+    without marking it again. Either everything asked for fits, or nothing changes. A later call in the same answer
+    takes the place of an earlier one for the route; creatures to stop watching for add up. With propose=true nothing
+    changes: the player gets the change as a card to accept."""
+    def names(value) -> list[str]:
+        value = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+        return [str(v).strip() for v in value if str(v).strip()]
+
+    def bare(title: str) -> str:
+        return re.sub(r"^\d+[.)]\s*", "", title).strip("[] ").lower()
+
+    stops = [{"title": m.group(1), "x": float(m.group(2)), "y": float(m.group(3))}
+             for m in (_MARK_LINE.match(str(line)) for line in ctx.snapshot.get("marks") or []) if m]
+    # the stops this answer adds to the route (mark_on_map with add): the order can name them, they follow the rest
+    added = [] if ctx.replaces_marks else [{"title": re.sub(r"^\d+[.)]\s*", "", m["title"]), "x": m["x"], "y": m["y"]}
+                                           for m in ctx.marks]
+    tracked = [re.split(r" \(also counts|: ", str(line))[0] for line in ctx.snapshot.get("tracked") or []]
+    remove, order, stop = names(args.get("remove")), names(args.get("order")), names(args.get("stop_tracking"))
+    clear = args.get("clear") is True
+    if not (remove or order or stop or clear):
+        return "Nothing changed: say what to change (remove, order, clear or stop_tracking).", True
+    if ctx.marks and ctx.replaces_marks and args.get("propose") is not True:
+        return _edit_answer_route(ctx, remove, order, stop, clear)
+    if (remove or order or clear) and not stops:
+        return "Nothing changed: nothing of yours is marked on the map.", True
+
+    def numbered(some: list[dict]) -> str:
+        return ", ".join(f"{n}. {s['title']}" for n, s in enumerate(some, 1))
+
+    def pick(wanted: list[str], among: list[dict]) -> list[dict] | str:
+        """The stops named by their number in the marks section or by their title; a name when one fits no stop."""
+        found: list[dict] = []
+        for name in wanted:
+            key = name.rstrip(".")
+            if key.isdigit():
+                hit = among[int(key) - 1] if 1 <= int(key) <= len(among) else None
+            else:
+                hit = next((s for s in among if s["title"].lower() == bare(name) and s not in found), None)
+            if hit is None:
+                return name
+            if hit not in found:
+                found.append(hit)
+        return found
+
+    gone, first = pick(remove, stops), pick(order, stops + added)
+    for missing in (gone, first):
+        if isinstance(missing, str):
+            return (f"Nothing changed: no stop called {missing}. The stops on the map: {numbered(stops)}."
+                    + (f" Added in this answer: {', '.join(s['title'] for s in added)}." if added else "")), True
     if stop and stop[0].lower() == "all":
         unwatched = tracked
     else:
@@ -173,6 +294,7 @@ def edit_route(ctx: "TurnContext", args: dict) -> tuple[str, bool]:
             unwatched.append(hit)
 
     said, notes, edit = [], [], {}
+    propose = args.get("propose") is True
     if clear:
         edit = {"clear": True}
         said.append("The route is cleared: no marks of yours are on the map.")
@@ -180,7 +302,7 @@ def edit_route(ctx: "TurnContext", args: dict) -> tuple[str, bool]:
     elif gone or first:
         gone = [s for s in stops if s in gone]  # in the order of the route
         first = [s for s in first if s not in gone]
-        left = first + [s for s in stops if s not in gone and s not in first]
+        left = first + [s for s in stops + added if s not in gone and s not in first]
         if gone:
             edit["remove"] = gone
             said.append("Taken off the route: " + ", ".join(s["title"] for s in gone) + ".")
@@ -189,6 +311,10 @@ def edit_route(ctx: "TurnContext", args: dict) -> tuple[str, bool]:
             edit["order"] = left
             notes.append("put the route in another order")
         said.append("The route now: " + (numbered(left) if left else "no stops left") + ".")
+    if propose:
+        summary = " ".join(said + (["No longer watched for: " + ", ".join(unwatched) + "."] if unwatched else []))
+        propose_route(ctx, {"op": "route_edit", "edit": edit, "untrack": unwatched, "summary": summary})
+        return "Proposed to the player (a card with Accept and Reject), nothing changed yet: " + summary, False
     if edit:
         ctx.route_edit, ctx.edit_notes["route"] = edit, notes
     if unwatched:
@@ -224,6 +350,7 @@ class TurnContext:
         self.ah_open: bool | None = None
         self.web_search: Callable[[str], tuple[str, list[dict]]] | None = None  # Gemini: grounded search
         self.conv = str(msg.get("conv") or "default")
+        self.tool_calls = 0  # calls of the app's tools that reached the app in this answer (Claude Code)
         self.notes: list[str] = []  # what the answer did that neither marks nor actions show (memory)
 
     def did(self) -> list[str]:
@@ -242,6 +369,11 @@ class TurnContext:
                 out.append(f"proposed repairing for {a.get('cost')}")
             elif op == "abandon_quest":
                 out.append(f"proposed abandoning [{a.get('title')}]")
+            elif op == "route":
+                out.append("proposed a new route (waits for the player's Accept): "
+                           + ", ".join(str(s.get("title")) for s in a.get("stops") or []))
+            elif op == "route_edit":
+                out.append("proposed changing the route (waits for the player's Accept): " + str(a.get("summary") or ""))
             else:
                 out.append(f"proposed a change in {a.get('addon')}: {str(a.get('description') or '')[:80]}")
         if self.track:
@@ -318,6 +450,9 @@ class Service:
         self._req_ids = itertools.count(1)
         self._bridge = None
         self._claude: claude_code.ClaudeSession | None = None
+        # a second session for the updates of a route, when the player chose another model for them
+        self._claude_route: claude_code.ClaudeSession | None = None
+        self._route_plans: dict | None = None  # conversation -> how its route was planned (see _plans)
         self._claude_lock = threading.Lock()
         self.screen_for: Callable[[int], bytes | None] = lambda msg_id: None  # set by the app (screenshot watcher)
 
@@ -407,34 +542,88 @@ class Service:
         activity.info("AI provider: %s", label)
         return True, "AI provider: " + label
 
+    def _model_problem(self, provider: str, model: str) -> str | None:
+        """Why this model cannot be used with the provider; None when it can."""
+        if provider == "claude_code":
+            known = {m["id"] for m in claude_code.CLAUDE_MODELS} | {"sonnet", "opus", "haiku", "fable"}
+            return None if model in known or model.startswith("claude-") else f"{model} is not a Claude model."
+        if provider == "gemini":
+            ids = {m["id"] for m in self.gemini_models()}
+            if not gemini.is_chat_model(model) or (ids and model not in ids and not model.endswith("-latest")):
+                return f"{model} is not a Gemini chat model available to this key."
+            return None
+        ids = {m["id"] for m in self.models()}
+        return f"Model {model} does not exist on OpenRouter." if ids and model not in ids else None
+
     def set_model(self, model: str) -> tuple[bool, str]:
         """A model of the current provider; returns (ok, message for the player)."""
         model = str(model or "").strip()
         provider = self.store.settings.provider
         if not model:
             return False, "Choose a model or enter its ID."
+        problem = self._model_problem(provider, model)
+        if problem:
+            return False, problem
         if provider == "claude_code":
-            known = {m["id"] for m in claude_code.CLAUDE_MODELS} | {"sonnet", "opus", "haiku", "fable"}
-            if model not in known and not model.startswith("claude-"):
-                return False, f"{model} is not a Claude model."
             self.store.update(claude_model=model)
             self.prewarm_later()
             text = f"Claude model: {model_name(model)}"
         elif provider == "gemini":
-            ids = {m["id"] for m in self.gemini_models()}
-            if not gemini.is_chat_model(model) or (ids and model not in ids and not model.endswith("-latest")):
-                return False, f"{model} is not a Gemini chat model available to this key."
             self.store.update(gemini_model=model)
             self._gemini_down.pop(model, None)  # chosen again: it gets another chance
             text = f"Gemini model: {model}"
         else:
-            ids = {m["id"] for m in self.models()}
-            if ids and model not in ids:
-                return False, f"Model {model} does not exist on OpenRouter."
             self.store.update(model=model)
             text = f"Model: {model}"
         activity.info(text)
         return True, text
+
+    def set_route_model(self, model: str) -> tuple[bool, str]:
+        """The model that answers the add-on's own updates of a route (the player switched them on in the game), for
+        the current provider; "" means the model of questions. Returns (ok, message for the player)."""
+        model = str(model or "").strip()
+        provider = self.store.settings.provider
+        chosen = dict(self.store.settings.route_model or {})
+        if not model:
+            chosen.pop(provider, None)
+            text = "Route updates: the same model as questions"
+        else:
+            problem = self._model_problem(provider, model)
+            if problem:
+                return False, problem
+            chosen[provider] = model
+            text = "Route updates: " + (model_name(model) if provider == "claude_code" else model)
+        self.store.update(route_model=chosen)
+        activity.info(text)
+        return True, text
+
+    def model_for(self, msg: dict, provider: str) -> str:
+        """The model that answers this message: the one chosen for route updates when the add-on asks for one, else
+        the model of questions."""
+        s = self.store.settings
+        main = {"claude_code": s.claude_model, "gemini": s.gemini_model}.get(provider, s.model)
+        return (self._is_route_update(msg) and (s.route_model or {}).get(provider)) or main
+
+    @staticmethod
+    def _is_route_update(msg: dict) -> bool:
+        """The add-on's own request to update the route (an add-on that does not say "news" yet sends the text)."""
+        return msg.get("news") is True or str(msg.get("text") or "").startswith("[Quest log changed]")
+
+    def set_route_effort(self, effort: str) -> tuple[bool, str]:
+        """The thinking level of the add-on's own updates of a route (Claude Code); "" means the one of questions."""
+        effort = str(effort or "").strip()
+        if effort and effort not in claude_code.EFFORTS:
+            return False, "Unknown thinking level."
+        self.store.update(route_effort=effort)
+        text = ("Route updates: thinking " + EFFORT_NAMES.get(effort, effort) if effort
+                else "Route updates: the same thinking level as questions")
+        activity.info(text)
+        return True, text
+
+    def effort_for(self, msg: dict) -> str:
+        """The thinking level this message is answered with (Claude Code)."""
+        s = self.store.settings
+        return (self._is_route_update(msg) and s.route_effort) or s.claude_effort
 
     def set_effort(self, effort: str) -> tuple[bool, str]:
         if effort not in claude_code.EFFORTS:
@@ -622,18 +811,30 @@ class Service:
         s = self.store.settings
         conv = str(msg.get("conv") or "default")
         history = self.convs.history(conv)
+        # The add-on's own update of a route is a small job that comes often: the route is planned again here, the
+        # way the model planned it, and only the game data a route needs is read again. The model checks the result
+        # and says one line, instead of reading everything, calling the planner and writing an answer.
+        update = self._is_route_update(msg)
         pre_hits = []
-        if self.kb:
+        if self.kb and not update:
             names = entity_names(snapshot)
             pre_hits = self.kb.search_titles(names, k=3)
         memory = self.memory.get(self._char)
-        messages = build_messages(question, snapshot, history, pre_hits, now=datetime.now(),
-                                  kb_date=self.kb.meta("kb_date") if self.kb else None,
-                                  hotfix_date=self.kb.meta("hotfix_date") if self.kb else None,
-                                  memory=memory)
         sources: list[dict] = [{"title": h.title, "url": h.url, "date": h.ts[:10]} for h in pre_hits]
         ctx = TurnContext(msg, writer, snapshot, cancel, sources)
         ctx.pre_urls = {x["url"] for x in sources}  # guessed from names in the game, not chosen by the model
+        planned = self.plan_again(ctx) if update else None
+        if planned and self._same_route(ctx):
+            # the route planned again is the route on the map: nothing for a model to check, and nothing to say
+            del ctx.marks[:], ctx.mark_adds[:], ctx.track[:]
+            writer.send({"kind": "answer", "final": True, "msgId": msg_id, "text": "Route checked: nothing to change.",
+                         "routeUnchanged": True, "status": self.status()})
+            activity.info("Route checked: nothing to change")
+            return
+        messages = build_messages(question, snapshot, history, pre_hits, now=datetime.now(),
+                                  kb_date=self.kb.meta("kb_date") if self.kb else None,
+                                  hotfix_date=self.kb.meta("hotfix_date") if self.kb else None,
+                                  memory=memory, auto=bool(msg.get("auto")), route_update=update, planned=planned)
         self._turn = ctx
         try:
             if s.provider == "claude_code":
@@ -657,7 +858,7 @@ class Service:
                                  "(Keys & sign-in…)."})
             return
         client = (self.gemini_factory if is_gemini else self.client_factory)(key)
-        model = s.gemini_model if is_gemini else s.model
+        model = self.model_for(msg, provider)
         fallback = gemini.FALLBACK_MODEL if is_gemini else s.fallback_model
         if is_gemini and model in self._gemini_down:
             log.info("%s could not answer recently: %s answers", model, fallback)
@@ -671,7 +872,7 @@ class Service:
                 messages[0]["content"] += "\n\nAlways check current information with web_search before answering."
         shot = self.screen_image(ctx)
         if shot:
-            model_info = {"image": True} if is_gemini else ({m["id"]: m for m in self.models()}.get(s.model) or {})
+            model_info = {"image": True} if is_gemini else ({m["id"]: m for m in self.models()}.get(model) or {})
             last = messages[-1]
             if model_info.get("image"):
                 last["content"] = [{"type": "text", "text": last["content"] + "\n\n" + SCREEN_NOTE},
@@ -768,6 +969,7 @@ class Service:
         writer.send({"kind": "answer", "final": True, "msgId": msg_id, "text": final_text, "sources": ctx.used_sources(text),
                      "actions": ctx.actions, "marks": ctx.marks, "marksReplace": ctx.replaces_marks,
                      "track": ctx.track, "route": ctx.route_edit, "untrack": ctx.untrack,
+                     "routePlanned": ctx.route_marked and bool(ctx.marks),
                      "cost": self.last_cost, "model": model,
                      **({"costNote": "Gemini API"} if is_gemini else {}),
                      "links": self.links(text, ctx), "auction": ctx.auction_card(text),
@@ -812,6 +1014,151 @@ class Service:
         """The finished answer goes into the conversation, with what it did."""
         self.convs.append(ctx.conv, self._char, question, answer, ctx.did())
 
+    # ---------------------------------------------------------------- routes
+    def _plan_route(self, ctx: TurnContext, args: dict) -> tuple[str, bool]:
+        """The plan_route tool: the route computed from the game data, marked or proposed as the arguments say."""
+        from .route import plan_route
+        ctx.phase_cb("Planning the route…")
+
+        def titles(value) -> list[str]:
+            return [str(v) for v in value] if isinstance(value, list) else ([value] if isinstance(value, str) and value else [])
+        try:
+            end = (float(args["end_x"]), float(args["end_y"]))
+        except (KeyError, TypeError, ValueError):
+            end = None
+        new_quests = args.get("new_quests") is True or titles(args.get("new_quests"))
+        skip, last, end_title = titles(args.get("skip")), titles(args.get("last")), str(args.get("end_title") or "")[:60]
+        first = titles(args.get("first"))
+
+        def point(hop: dict, key: str) -> tuple[float, float] | None:
+            try:
+                return float(hop[key + "_x"]), float(hop[key + "_y"])
+            except (KeyError, TypeError, ValueError):
+                return None
+        then = args.get("then")
+        hops = [{"zone": str(hop["zone"]).strip()[:60], "via": point(hop, "via"), "arrive": point(hop, "arrive"),
+                 "via_title": str(hop.get("via_title") or "").strip()[:60]}
+                for hop in ([then] if isinstance(then, dict) else then if isinstance(then, list) else [])
+                if isinstance(hop, dict) and str(hop.get("zone") or "").strip()]
+        route = plan_route(ctx.snapshot, new_quests=new_quests, skip=skip, last=last, end=end,
+                           end_title=end_title or None, first=first, then=hops)
+        text = route["text"]
+        propose = args.get("propose") is True
+        if route["stops"] and (propose or args.get("mark") is not False):
+            # what the route holds and why goes into the conversation: an update later keeps to it
+            def way(hop: dict) -> str:
+                via, arrive = hop["via"], hop["arrive"]
+                return (f"then {hop['zone']}"
+                        + (f" by {hop['title'] or 'the way'} ({via[0]:g}, {via[1]:g})" if via else "")
+                        + (f", arriving at {arrive[0]:g}, {arrive[1]:g}" if arrive else ""))
+            choices = [f"left out {', '.join(f'[{t}]' for t in skip)}" if skip else "",
+                       f"first {', '.join(f'[{t}]' for t in first)}" if first else "",
+                       f"last {', '.join(f'[{t}]' for t in last)}" if last else "",
+                       ("picking up every quest nearby" if new_quests is True else
+                        f"picking up {', '.join(f'[{t}]' for t in new_quests)}" if new_quests else ""),
+                       f"ends near {end_title or 'the given point'} ({end[0]:g}, {end[1]:g})" if end else "",
+                       *[way(hop) for hop in route["ways"]]]
+            ctx.notes = [n for n in ctx.notes if not n.startswith("planned the route")]
+            ctx.notes.append("planned the route: " + ("; ".join(c for c in choices if c) or "nothing left out"))
+        if propose and route["stops"]:
+            stops = route["stops"][:MAX_ROUTE_MARKS]
+            watched: list[dict] = []
+            for stop in stops:
+                mob = stop.get("mob")
+                if mob and len(watched) < MAX_TRACKED and all(w["name"].lower() != mob.lower() for w in watched):
+                    watched.append({"name": mob, **({"quest": stop["quest"]} if stop.get("quest") else {})})
+            propose_route(ctx, {"op": "route", "track": watched, "stops": [
+                {"title": f"{n}. {stop['title']}"[:60], "x": round(stop["x"], 1), "y": round(stop["y"], 1),
+                 "zone": stop["zone"], **({"mob": stop["mob"]} if stop.get("mob") else {}),
+                 **({"tasks": stop["tasks"]} if stop.get("tasks") else {})}
+                for n, stop in enumerate(stops, 1)]})
+            text += ("\nProposed to the player as a new route: a card with Accept and Reject. The marks on the map "
+                     "stay until they accept it; do not mark these stops.")
+        elif args.get("mark") is not False and route["stops"]:
+            del ctx.marks[:], ctx.mark_adds[:], ctx.track[:]  # the route is the whole set of marks of this answer
+            ctx.route_edit = None  # and takes the place of the route that was edited
+            ctx.edit_notes.pop("route", None)
+            for stop in route["stops"][:MAX_ROUTE_MARKS]:
+                if stop.get("mob"):
+                    ctx.watch(stop["mob"], stop.get("quest"))
+            for n, stop in enumerate(route["stops"][:MAX_ROUTE_MARKS], 1):
+                ctx.marks.append({"title": f"{n}. {stop['title']}"[:60], "x": round(stop["x"], 1),
+                                  "y": round(stop["y"], 1), "zone": stop["zone"],
+                                  **({"mob": stop["mob"]} if stop.get("mob") else {}),
+                                  **({"tasks": stop["tasks"]} if stop.get("tasks") else {})})
+                ctx.mark_adds.append(False)
+            ctx.route_marked = True
+            self._remember_plan(ctx.conv, args, route)
+            count = len(ctx.marks)
+            which = f"The {count} stops are" if count == len(route["stops"]) else f"The first {count} stops are"
+            text += (f"\n{which} marked on the map in this order (the marks of earlier answers are off the map); "
+                     "do not mark them again. To mark other stops instead, call mark_on_map for each of them.")
+        return text, False
+
+    def _plans(self) -> dict:
+        """The arguments of the last route planned in each conversation (kept across restarts of the app)."""
+        if self._route_plans is None:
+            try:
+                self._route_plans = json.loads((config.data_dir() / "route_plans.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                self._route_plans = {}
+        return self._route_plans
+
+    def _remember_plan(self, conv: str, args: dict, route: dict) -> None:
+        """How the route on the map was planned: the model's choices, and the zones as the planner took them (with the
+        ways it filled in). An update plans it again the same way without asking the model for them."""
+        plan = {k: args[k] for k in ("skip", "first", "last", "new_quests", "end_x", "end_y", "end_title")
+                if args.get(k) not in (None, "", [])}
+        plan["then"] = [{"zone": w["zone"], **({"via_title": w["title"]} if w["title"] else {}),
+                         **({"via_x": w["via"][0], "via_y": w["via"][1]} if w["via"] else {}),
+                         **({"arrive_x": w["arrive"][0], "arrive_y": w["arrive"][1]} if w["arrive"] else {})}
+                        for w in route.get("ways") or []]
+        plans = self._plans()
+        plans.pop(conv, None)
+        plans[conv] = plan
+        for old in list(plans)[:-30]:
+            del plans[old]
+        try:
+            path = config.data_dir() / "route_plans.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(plans, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+
+    @staticmethod
+    def _same_route(ctx: TurnContext) -> bool:
+        """Are this answer's marks the stops that are left on the map, in the same order?"""
+        left = [(m.group(1).lower(), float(m.group(2)), float(m.group(3)))
+                for line, m in ((str(line), _MARK_LINE.match(str(line))) for line in ctx.snapshot.get("marks") or [])
+                if m and not line.endswith("(done)")]
+        new = [(re.sub(r"^\d+[.)]\s*", "", m["title"]).lower(), m["x"], m["y"]) for m in ctx.marks]
+        return len(left) == len(new) and all(a[0] == b[0] and abs(a[1] - b[1]) < 0.06 and abs(a[2] - b[2]) < 0.06
+                                             for a, b in zip(left, new))
+
+    def plan_again(self, ctx: TurnContext) -> str | None:
+        """For the add-on's update of a route: the route planned again from the game data as it is now, the way the
+        model planned it last in this conversation, and set as this answer's marks (the model can still change it).
+        Returns the planner's text for the model; None when no plan is remembered or nothing is left to route."""
+        plan = self._plans().get(ctx.conv)
+        if plan is None or not ctx.snapshot.get("marks"):
+            return None
+        text, _ = self._plan_route(ctx, dict(plan))
+        if not ctx.marks:
+            return None
+        # what the player took off the route stays off
+        off = next((str(line).partition(": ")[2] for line in ctx.snapshot.get("marks") or []
+                    if str(line).startswith("Taken off the route by the player: ")), "")
+        gone = {name.strip().lower() for name in off.split(",") if name.strip()}
+        if gone:
+            kept = [m for m in ctx.marks if re.sub(r"^\d+[.)]\s*", "", m["title"]).lower() not in gone]
+            for n, m in enumerate(kept, 1):
+                m["title"] = f"{n}. {re.sub(r'^[0-9]+[.)] *', '', m['title'])}"[:60]
+            mobs = {str(m.get("mob")).lower() for m in kept if m.get("mob")}
+            ctx.marks[:], ctx.mark_adds[:] = kept, [False] * len(kept)
+            ctx.track[:] = [t for t in ctx.track if t["name"].lower() in mobs]
+            text += "\nNot marked, because the player took them off the route: " + off + "."
+        return text if ctx.marks else None
+
     # ---------------------------------------------------------------- tools (both providers)
     def run_tool(self, ctx: TurnContext | None, name: str, args: dict) -> tuple[str, bool]:
         """Execute one model tool call for the answer in progress. Returns (text for the model, is_error)."""
@@ -837,7 +1184,10 @@ class Service:
             add = args.get("add") is True or ctx.route_edit is not None
             if mark and ctx.route_marked and not add:  # the model marks its own choice of the route's stops
                 del ctx.marks[:], ctx.mark_adds[:], ctx.track[:]
-            if mark:
+            refused = mark and _already_marked(ctx, mark, add)
+            if refused:
+                return refused, True
+            if mark and not add:  # the model's own marks instead of the route; an extra stop keeps it a route
                 ctx.route_marked = False
             if mark and len(ctx.marks) >= MAX_MARKS:
                 return f"Not marked: an answer holds at most {MAX_MARKS} marks, and {mark['title']} would be one more.", True
@@ -846,6 +1196,10 @@ class Service:
                 ctx.mark_adds.append(add)
                 text = text.rstrip(".") + (", added to your earlier marks." if add else
                                            "; the marks of your earlier answers are off the map.")
+                # what is to be done there: the stop leaves the route when that is done, not when it is reached
+                quest, task = str(args.get("quest") or "").strip("[] ")[:80], str(args.get("task") or "")
+                if quest and task in ("objective", "turn_in", "pick_up"):
+                    mark["tasks"] = [{"kind": task, "quest": quest}]
                 mob = str(args.get("mob") or "").strip("[] ")[:60]
                 if mob:
                     watched = ctx.watch(mob)
@@ -859,37 +1213,7 @@ class Service:
             ctx.phase_cb("Changing the route…")
             return edit_route(ctx, args)
         if name == "plan_route":
-            from .route import plan_route
-            ctx.phase_cb("Planning the route…")
-
-            def titles(value) -> list[str]:
-                return [str(v) for v in value] if isinstance(value, list) else ([value] if isinstance(value, str) and value else [])
-            try:
-                end = (float(args["end_x"]), float(args["end_y"]))
-            except (KeyError, TypeError, ValueError):
-                end = None
-            route = plan_route(ctx.snapshot, new_quests=args.get("new_quests") is True or titles(args.get("new_quests")),
-                               skip=titles(args.get("skip")), last=titles(args.get("last")), end=end,
-                               end_title=str(args.get("end_title") or "")[:60] or None)
-            text = route["text"]
-            if args.get("mark") is not False and route["stops"]:
-                del ctx.marks[:], ctx.mark_adds[:], ctx.track[:]  # the route is the whole set of marks of this answer
-                ctx.route_edit = None  # and takes the place of the route that was edited
-                ctx.edit_notes.pop("route", None)
-                for stop in route["stops"][:MAX_MARKS]:
-                    if stop.get("mob"):
-                        ctx.watch(stop["mob"], stop.get("quest"))
-                for n, stop in enumerate(route["stops"][:MAX_MARKS], 1):
-                    ctx.marks.append({"title": f"{n}. {stop['title']}"[:60], "x": round(stop["x"], 1),
-                                      "y": round(stop["y"], 1), "zone": stop["zone"],
-                                      **({"mob": stop["mob"]} if stop.get("mob") else {})})
-                    ctx.mark_adds.append(False)
-                ctx.route_marked = True
-                count = len(ctx.marks)
-                which = f"The {count} stops are" if count == len(route["stops"]) else f"The first {count} stops are"
-                text += (f"\n{which} marked on the map in this order (the marks of earlier answers are off the map); "
-                         "do not mark them again. To mark other stops instead, call mark_on_map for each of them.")
-            return text, False
+            return self._plan_route(ctx, args)
         if name == "save_memory":
             if phase:
                 ctx.phase_cb(phase)
@@ -996,8 +1320,11 @@ class Service:
     def tool_from_bridge(self, name: str, args: dict) -> tuple:
         log.info("tool %s %s", name, {k: str(v)[:60] for k, v in (args or {}).items()})
         activity.info("Tool: %s", name)
+        if self._turn is not None:
+            self._turn.tool_calls += 1
         text, is_error = self.run_tool(self._turn, name, args)
-        session = self._claude
+        side = self._claude_route
+        session = side if side is not None and side.busy else self._claude
         if session is not None:  # the result stays in the session's context like the questions do
             session.sent_chars = getattr(session, "sent_chars", 0) + len(text)
         return text, is_error
@@ -1062,41 +1389,58 @@ class Service:
             system += " Always check current information on the web (WebSearch) before answering."
         return system
 
-    def _new_claude_session(self, exe: str, system: str) -> claude_code.ClaudeSession:
+    def _new_claude_session(self, exe: str, system: str, model: str | None = None,
+                            effort: str | None = None) -> claude_code.ClaudeSession:
         s = self.store.settings
         url, token = self._bridge_info()
         # its own folder (it holds the address of this app's tools), also for sessions started in the same instant
         workdir = config.data_dir() / "claude_session" / f"{int(time.time() * 1000)}-{secrets.token_hex(4)}"
-        return claude_code.ClaudeSession(exe, workdir, system, s.claude_model, s.claude_effort, s.search_mode,
-                                         url, token)
+        return claude_code.ClaudeSession(exe, workdir, system, model or s.claude_model, effort or s.claude_effort,
+                                         s.search_mode, url, token)
 
-    def _drop_claude(self) -> None:
-        old, self._claude = self._claude, None
+    def _drop_claude(self, side: bool = False) -> None:
+        if side:
+            old, self._claude_route = self._claude_route, None
+        else:
+            old, self._claude = self._claude, None
         if old:
             old.close()
             import shutil
             threading.Thread(target=lambda: (time.sleep(2), shutil.rmtree(old.workdir, ignore_errors=True)),
                              daemon=True).start()
 
-    def claude_session_for(self, system: str, conv: str) -> tuple[claude_code.ClaudeSession, bool] | None:
+    def claude_session_for(self, system: str, conv: str, model: str | None = None,
+                           effort: str | None = None) -> tuple[claude_code.ClaudeSession, bool] | None:
         """A running session for this conversation; (session, continues) — continues=False means the session is new
-        to this conversation and the earlier turns must be sent along with the question."""
+        to this conversation and the earlier turns must be sent along with the question.
+
+        ``model`` or ``effort`` other than those of questions (the ones chosen for route updates) get a session of
+        their own, kept beside the first, so that an update does not restart the session of questions. The two take
+        turns in one conversation, and neither has seen the other's turns: the earlier turns go along then."""
         info = claude_code.detect_cached()
         if not info or not info.get("loggedIn"):
             return None
         s = self.store.settings
-        key = (s.claude_model, s.claude_effort, s.search_mode, system)
+        model, effort = model or s.claude_model, effort or s.claude_effort
+        side = (model, effort) != (s.claude_model, s.claude_effort)
+        key = (model, effort, s.search_mode, system)
         with self._claude_lock:
-            cur = self._claude
+            cur = self._claude_route if side else self._claude
             if cur and (not cur.alive() or cur.busy or cur.key != key or cur.turns >= MAX_SESSION_TURNS
                         or getattr(cur, "sent_chars", 0) >= MAX_SESSION_CHARS
-                        or (cur.conv is not None and cur.conv != conv)):
-                self._drop_claude()
+                        or (cur.conv is not None and cur.conv != conv and not side)):
+                self._drop_claude(side)
                 cur = None
             if cur is None:
-                cur = self._claude = self._new_claude_session(info["path"], system)
-            continues = cur.conv == conv
+                cur = self._new_claude_session(info["path"], system, model, effort)
+                if side:
+                    self._claude_route = cur
+                else:
+                    self._claude = cur
+            continues = cur.conv == conv and not side
             cur.conv = conv
+            if side and self._claude is not None:
+                self._claude.conv = None  # the session of questions has not seen this update
             return cur, continues
 
     def prewarm_later(self) -> None:
@@ -1128,12 +1472,14 @@ class Service:
             log.info("claude session prewarmed (%s, effort %s)", s.claude_model, s.claude_effort)
             activity.info("Claude session ready")
 
-    def _answer_claude(self, msg: dict, ctx: TurnContext, messages: list[dict], conv: str) -> None:
+    def _answer_claude(self, msg: dict, ctx: TurnContext, messages: list[dict], conv: str,
+                       again: bool = False) -> None:
         msg_id, writer, cancel, sources = ctx.msg_id, ctx.writer, ctx.cancel, ctx.sources
         question = str(msg.get("text") or "").strip()
         s = self.store.settings
         system = self._claude_system(messages[0]["content"])
-        got = self.claude_session_for(system, conv)
+        model = self.model_for(msg, "claude_code")
+        got = self.claude_session_for(system, conv, model, self.effort_for(msg))
         if got is None:
             writer.send({"kind": "error", "final": True, "msgId": msg_id, "status": self.status(),
                          "text": "Claude Code is not available or not signed in. Sign in (run claude auth login in a terminal) or switch "
@@ -1168,11 +1514,19 @@ class Service:
                 state["phase"] = p
                 flush(force=True)
         ctx.phase_cb = set_phase
-        final = None
+        final, broken = None, False
         for kind, val in session.turn(prompt, images):
             if cancel.is_set():
                 log.info("claude answer %s cancelled", msg_id)
                 break
+            if kind == "tool_error":
+                # A tool of the app answered the model with an error, and no call has reached the app: the session
+                # has lost its link to the tools. Whatever it writes now is written without them.
+                if ctx.tool_calls == 0 and not again:
+                    log.warning("claude session cannot reach the app's tools (%s): asking again on a new session", val)
+                    broken = True
+                    break
+                continue
             if kind == "text":
                 state["text"], state["phase"] = str(val), "Writing…"
                 flush()
@@ -1189,6 +1543,10 @@ class Service:
             with self._claude_lock:
                 if self._claude is session:
                     self._drop_claude()
+                elif self._claude_route is session:
+                    self._drop_claude(side=True)
+            if broken and not cancel.is_set():
+                self._answer_claude(msg, ctx, messages, conv, again=True)
             return
         text = final or state["text"]
         self.ensure_marks(ctx, text)
@@ -1199,13 +1557,15 @@ class Service:
                      "auction": ctx.auction_card(text),
                      "marks": ctx.marks, "marksReplace": ctx.replaces_marks, "track": ctx.track,
                      "route": ctx.route_edit, "untrack": ctx.untrack,
+                     "routePlanned": ctx.route_marked and bool(ctx.marks),
                      "sources": ctx.used_sources(text), "actions": ctx.actions,
-                     "model": model_name(s.claude_model),
+                     "model": model_name(model),
                      "costNote": "Claude subscription", "secs": round(time.monotonic() - started, 1),
                      "status": self.status()})
-        self.on_event(f"Last answer: Claude Code {s.claude_model}")
+        self.on_event(f"Last answer: Claude Code {model}")
 
     def close(self) -> None:
         with self._claude_lock:
             self._drop_claude()
+            self._drop_claude(side=True)
 
