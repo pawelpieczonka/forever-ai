@@ -115,6 +115,24 @@ function GetMaxPlayerLevel() return 60 end
 function GetItemCount() return 0 end
 function GetProfessions() return nil end
 
+-- the skill window's lines (name, isHeader, rank, maxRank); WoW Forever 1.60.1 lists every profession twice in a row
+local skillLines = {
+  { "Class Skills", true }, { "Beast Mastery", false, 1, 1 }, { "Marksmanship", false, 1, 1 }, { "Survival", false, 1, 1 },
+  { "Professions", true }, { "Leatherworking", false, 84, 150 }, { "Leatherworking", false, 84, 150 },
+  { "Skinning", false, 112, 150 }, { "Skinning", false, 112, 150 },
+  { "Secondary Skills", true }, { "Cooking", false, 60, 75 }, { "Cooking", false, 60, 75 },
+  { "First Aid", false, 75, 150 }, { "First Aid", false, 75, 150 },
+  { "Weapon Skills", true }, { "Bows", false, 118, 120 }, { "Daggers", false, 64, 120 }, { "Swords", false, 1, 120 },
+  { "Armor Proficiencies", true }, { "Cloth", false, 1, 1 }, { "Leather", false, 1, 1 },
+  { "Languages", true }, { "Language: Common", false, 300, 300 }, { "Language: Darnassian", false, 300, 300 },
+}
+function GetNumSkillLines() return #skillLines end
+function GetSkillLineInfo(i)
+  local l = skillLines[i]
+  if not l then return nil end
+  return l[1], l[2], true, l[3] or 0, 0, 0, l[4] or 0, false, 0, 0, 0, 0, ""
+end
+
 ------------------------------------------------------------------------ the map
 local maps = {
   [947] = { mapID = 947, name = "Azeroth", mapType = 1, parentMapID = 0, size = { 48000, 32000 } },
@@ -250,10 +268,10 @@ for _, name in ipairs({
   "GetInventoryItemDurability", "GetInventoryItemLink", "GetInventoryItemQuality", "GetItemStats", "GetLootSlotInfo",
   "GetMacroInfo", "GetMacroSpell", "GetMerchantItemLink", "GetMerchantNumItems", "GetNumBuybackItems",
   "GetNumLootItems", "GetNumQuestChoices", "GetNumQuestLogChoices", "GetNumQuestLogRewards", "GetNumQuestRewards",
-  "GetNumSkillLines", "GetNumTrainerServices", "GetObjectiveText", "GetPetActionInfo", "GetPetFoodTypes",
+  "GetNumTrainerServices", "GetObjectiveText", "GetPetActionInfo", "GetPetFoodTypes",
   "GetPetHappiness", "GetPetLoyalty", "GetProfessionInfo", "GetProgressText", "GetQuestItemInfo", "GetQuestItemLink",
   "GetQuestLink", "GetQuestLogItemLink", "GetQuestLogQuestText", "GetQuestLogRewardMoney", "GetQuestLogRewardXP",
-  "GetQuestText", "GetRepairAllCost", "GetRewardMoney", "GetRewardText", "GetSkillLineInfo",
+  "GetQuestText", "GetRepairAllCost", "GetRewardMoney", "GetRewardText",
   "GetSpecializationInfoByID", "GetTitleText", "GetTrainerServiceCost", "GetTrainerServiceInfo",
   "GetTrainerServiceLevelReq", "GetTrainerServiceSkillReq", "HasAction", "NotifyInspect", "RepairAllItems", "SetAbandonQuest", "GetNumFactions",
   "GetFactionInfo", "GetNumSpellTabs", "GetSpellTabInfo", "GetSpellBookItemName", "GetContainerNumSlots",

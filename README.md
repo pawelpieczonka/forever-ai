@@ -1,111 +1,229 @@
+<div align="center">
+
+<img src="assets/foreverai.png" width="88" alt="ForeverAI logo">
+
 # ForeverAI
 
-AI assistant in a chat window inside World of Warcraft: Forever. It answers using your character, quests, gear and surroundings, a local Forever knowledge base and the auction house prices of your auction add-on. Answers come from Claude Code (Claude subscription), OpenRouter or Google Gemini.
+**An AI assistant inside World of Warcraft: Forever that already knows your character.**
 
-## What you can do with it
+[![Latest release](https://img.shields.io/github/v/release/pawelpieczonka/forever-ai?label=download&color=3ddc97)](https://github.com/pawelpieczonka/forever-ai/releases/latest)
+![Windows 10/11](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4)
+![Linux with Wine](https://img.shields.io/badge/Linux-with%20Wine-FCC624)
 
-Open the window with the **AI** button or `/fai` and ask in your own words, in your own language. ForeverAI already sees your character, your quest log, your bags and where you stand, so there is nothing to explain first.
+</div>
 
-### Ask what to do next
+Ask in your own words, in any language. ForeverAI sees your quests, bags, gear and where you stand, so there is nothing to explain first. It answers from a knowledge base of what Forever changed and, with Auctionator, from auction house prices.
 
-"What should I do next?", "Is this ring better than mine?", "Which talent do I take now?", "Why do I keep dying to this mob?" The answer is about your character as it is right now, not a general guide.
+## What it does
 
-<img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/ask.png?raw=true" alt="A question and its answer in the ForeverAI window" width="460">
+<table>
+<tr>
+<td width="410"><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/ask.png?raw=true" alt="A question and its answer in the ForeverAI window" width="400"></td>
+<td>
 
-### Get a route, and find the creature instead of the spot
+### Tells you what to do next
 
-"Plan a route through my quests" puts the stops on your map in the shortest walking order and leaves out what you should not do alone. The arrow leads you from stop to stop, and the marks are still there after a `/reload`.
+The answer is about your character as it is now.
 
-When a stop is a creature, ForeverAI watches for it: a living one in sight gets a marker over its nameplate, a sound and a line in the chat, and the strip under the chat shows how many are near you. **list** opens the stops of the route.
+- "What should I do next?"
+- "Is this ring better than mine?"
+- "Which talent do I take now?"
+- "Why do I keep dying to this mob?"
 
-<img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/route.png?raw=true" alt="A marked route with its list of stops and a tracked creature" width="460">
+</td>
+</tr>
+<tr>
+<td><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/route.png?raw=true" alt="A marked route with its list of stops and a tracked creature" width="400"></td>
+<td>
 
-### Change your mind
+### Plans a route and finds the creature
 
-Take a stop off with **x**, make another one the **next**, or just say it: "I already have the crawler legs, drop that stop". The route on the map changes; nothing is planned from scratch.
+"Plan a route through my quests" puts the stops on your map in the shortest walking order and leaves out what you should not do alone.
 
-<img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/edit.png?raw=true" alt="The route after a stop was dropped by asking" width="460">
+- With TomTom, its arrow leads you from stop to stop.
+- A creature you need gets a marker over its nameplate, a sound and a chat line when it comes into sight.
+- The strip above the text field counts how many are in sight.
+- The marks are still there after a `/reload`.
+
+</td>
+</tr>
+<tr>
+<td><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/edit.png?raw=true" alt="The route after a stop was dropped by asking" width="400"></td>
+<td>
+
+### Changes the route when you change your mind
+
+Click **x** to drop a stop, **next** to go there first, or just say it:
+
+> "I already have the crawler legs, drop that stop."
+
+The route on the map changes. Nothing is planned from scratch.
+
+</td>
+</tr>
+</table>
+
+<sub>The add-on's window with example answers, taken in the add-on simulator.</sub>
 
 ### More things to ask
 
-- "How long until level 30 at this pace?" and "How much gold did I make today, and on what?"
-- "What do I craft to get Leatherworking to 150 with what I have?"
-- "Find a one-handed sword on the auction house that is an upgrade for me, up to 5 gold."
-- "My bags are full. What can I sell?" (at a vendor it prepares the list; nothing is sold until you click **Accept**)
-- "Where do I buy Coarse Thread?" or "Where is the hunter trainer? Mark it."
-- "Remember that I play Beast Mastery and level with a friend who plays a mage."
-- **Alt+click** an item, a spell or a quest to ask about exactly that one.
-
-The pictures show the add-on's window as it looks in the game, with example answers; they were taken in the add-on simulator.
-
-## Requirements
-
-- Windows 10/11, or Linux with WoW Forever running under Wine (Lutris, Steam/Proton, Bottles, Heroic or plain Wine)
-- One AI provider: Claude Code signed in, an [OpenRouter key](https://openrouter.ai/keys) or a [Google Gemini API key](https://aistudio.google.com/apikey)
-- Recommended: Questie, TomTom; for auction house questions Auctionator (and Pawn for upgrade checks)
-
-## Download
-
-Get the newest version from [GitHub Releases](https://github.com/pawelpieczonka/forever-ai/releases/latest). Each file is for one platform:
-
-| File | Platform | Start |
+| Topic | Ask | Good to know |
 |---|---|---|
-| `ForeverAI-<version>-Windows-x64.zip` | Windows 10/11 | `ForeverAI-Windows/ForeverAI-Windows.exe` |
-| `ForeverAI-<version>-Linux-x86_64.tar.gz` | Linux (glibc 2.35 or newer: Ubuntu 22.04, Debian 12 and later) | `ForeverAI-Linux/ForeverAI-Linux` |
+| Leveling | "How long until level 30 at this pace?" | |
+| Gold | "How much gold did I make today, and on what?" | |
+| Professions | "What do I craft to get Leatherworking to 150 with what I have?" | |
+| Auction house | "Find a one-handed sword on the AH that is an upgrade for me, up to 5 gold." | needs an Auctionator scan; Pawn for upgrades |
+| Selling | "My bags are full. What can I sell?" | at a vendor; nothing is sold until you click **Accept** |
+| Places | "Where do I buy Coarse Thread?" or "Where is the hunter trainer? Mark it." | |
+| Memory | "Remember that I play Beast Mastery and level with a friend who plays a mage." | kept for later conversations |
+| One thing | **Alt+click** an item, a spell or a quest | the question is about exactly that one |
 
-No Python is needed. `SHA256SUMS.txt` in the release has the checksums. The app tells you when a newer release is out (**Download update** in its window).
+## How it works
 
-## Install and run
+```mermaid
+flowchart LR
+    addon["<b>The add-on</b><br/>in the game"] <-->|"question, game data<br/>answer, marks"| app["<b>ForeverAI app</b><br/>with the knowledge base"]
+    app <-->|"question<br/>answer"| ai["<b>AI model</b><br/>Claude Code, OpenRouter<br/>or Gemini"]
+```
 
-### Windows
+Add-ons cannot reach the internet or other programs. So the add-on puts its question into a screenshot, which the app reads, and the app writes the answer into small helper add-ons (`ForeverAI_Inbox…`) that the add-on loads. That is why the app has to run while you play, and why the game needs one `/reload` after the add-on is installed.
 
-1. Extract the zip anywhere and run `ForeverAI-Windows\ForeverAI-Windows.exe`. It finds the game and installs the add-on.
-2. In the game type `/reload`, then click the **AI** button or type `/fai`.
+## Get started
 
-### Linux
+**You need:**
 
-1. Extract the archive (`tar -xzf ForeverAI-<version>-Linux-x86_64.tar.gz`) and run `ForeverAI-Linux/ForeverAI-Linux` (from a file manager or a terminal).
-2. The app finds the game in your Wine prefixes (`$WINEPREFIX`, Lutris, `~/.wine`, `~/Games`, Heroic, Bottles, Steam) or on mounted disks, and installs the add-on. If it does not, choose the `World of Warcraft` folder or start it with `--game-dir`.
-3. In the game type `/reload`, then click the **AI** button or type `/fai`.
+- Windows 10/11, or Linux with WoW Forever under Wine (Lutris, Steam/Proton, Bottles, Heroic or plain Wine)
+- One AI: Claude Code (Claude subscription), an [OpenRouter key](https://openrouter.ai/keys) or a [Google Gemini API key](https://aistudio.google.com/apikey). See [Choosing the AI](#choosing-the-ai).
+- No other add-on is required. [Four of them](#other-add-ons) add quest data, a map arrow, auction prices and upgrade checks.
 
-**Desktop shortcut** adds ForeverAI to the application menu and to the desktop. Claude Code is found on `PATH`, in `~/.local/bin`, npm/nvm installs and the Claude desktop app.
+### 1. Download
 
-Keep ForeverAI running while you play.
+From [the latest release](https://github.com/pawelpieczonka/forever-ai/releases/latest):
 
-### Choosing the AI
+| System | File | Start |
+|---|---|---|
+| Windows 10/11 | `ForeverAI-<version>-Windows-x64.zip` | `ForeverAI-Windows/ForeverAI-Windows.exe` |
+| Linux, glibc 2.35+ (Ubuntu 22.04, Debian 12 and later) | `ForeverAI-<version>-Linux-x86_64.tar.gz` | `ForeverAI-Linux/ForeverAI-Linux` |
 
-At start the app checks Claude Code first: when it is installed and signed in, it is used and no key is needed. Otherwise the window asks for an OpenRouter or a Google Gemini key (checked with the provider before it is saved). The AI is set in the app window under **AI settings**: the provider, the model (for OpenRouter and Gemini also any other model by its ID), the thinking level of Claude Code and web search; changes apply to the next question. **Keys & sign-in…** saves a key or signs in to Claude Code (also to switch back to a signed-in Claude Code). Keys are stored only on your computer, in the system's credential store: Windows Credential Manager, or the Secret Service on Linux (GNOME Keyring, KWallet, KeePassXC). Without one, a key is kept in `.env` in the data folder, readable only by your user, and moves to the credential store once one is available (keys saved by older versions move the same way). If Google cannot serve the chosen Gemini model (overloaded, out of quota or not answering), `gemini-flash-lite-latest` answers instead: when an answer has not started after 10 seconds, a short test request tells an overloaded model from a busy one, so the switch takes seconds rather than a long timeout. The chosen model is checked again in the background every few minutes and used again once it can answer.
+No Python needed. `SHA256SUMS.txt` in the release has the checksums. The app tells you when a newer version is out (**Download update** in its window).
 
-## Usage
+### 2. Start the app and reload the game
 
-- **Alt+click** an item, spell or quest to add it to your question.
-- Changes in the game (add-on options, selling, repairing, abandoning a quest) happen only after you click **Accept**.
-- **Auction house:** ask e.g. "Find the best one-handed sword on the AH that is an upgrade for me, up to 100 gold". The AI searches the prices of Auctionator's last scan (open the auction house and scan in Auctionator first) and, with Pawn, checks which items are upgrades. **Search on the AH** under the answer shows the recommended items in Auctionator's Shopping tab while the auction house is open. ForeverAI only reads the other add-ons' data and never changes them; buying stays with you.
-- **Routes and marks:** ask e.g. "Plan a route through my quests" or "Where do I find Befouled Webwood? Mark it". The stops go on the map (TomTom when it is installed, the game's map pin otherwise), stay there after a `/reload`, and each one comes off when you reach it. Tell the AI what to leave out or do last and the route follows.
-- **Tracking creatures:** when a mark is where a creature is to be found, the add-on watches for it: a living one in sight gets a marker over its nameplate, a sound and a line in the chat. Every creature that counts for the same quest objective is watched for, and tracking ends by itself when the objective is done. While something is tracked the game shows the nameplates of all enemies; your own settings come back when it ends.
-- The strip above the text field shows what is tracked (with the number in sight) and how many stops are marked; **x** ends either. **list** on the route opens its stops in order with their distance: **x** takes a stop off, **next** makes it the next one. You can also just ask ("drop the second stop", "I already have the amulets"): the AI changes the route that is on the map instead of planning it again. `/fai stop` ends tracking and clears the marks.
-- **Settings** tab: which game data is sent, font size, the AI button; it also shows the AI in use (chosen in the app window).
-- Commands: `/fai`, `/fai <question>`, `/fai new`, `/fai stop`, `/fai track`, `/fai debug`.
+<table>
+<tr>
+<td width="330"><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/app.png?raw=true" alt="The ForeverAI app window after it installed the add-on" width="320"></td>
+<td>
 
-## Run from source
+Extract the file anywhere and start the app. It finds the game and installs the add-on.
 
-Python 3.12+ with Tk from your distribution (Linux: `sudo apt install python3-venv python3-tk`, `sudo dnf install python3-tkinter` or `sudo pacman -S tk`). Use the distribution's Python, not a standalone one (uv, python-build-standalone): their Tk has no font rendering, so the window shows bitmap fonts.
+Then type `/reload` in the game and click the **AI** button, or type `/fai`.
+
+Keep the app running while you play. **Desktop shortcut** in its window puts it on the desktop (on Linux also in the application menu).
+
+</td>
+</tr>
+</table>
+
+<details>
+<summary><b>Linux:</b> where the app looks for the game</summary>
+
+<br>
+
+In your Wine prefixes (`$WINEPREFIX`, Lutris, `~/.wine`, `~/Games`, Heroic, Bottles, Steam) and on mounted disks. If it does not find the game, choose the `World of Warcraft` folder in its window or start it with `--game-dir`.
+
+The app finds Claude Code on `PATH`, in `~/.local/bin`, in npm/nvm installs and in the Claude desktop app.
+
+</details>
+
+## Choosing the AI
+
+| | Claude Code | OpenRouter | Google Gemini |
+|---|---|---|---|
+| **You need** | a Claude subscription, Claude Code installed and signed in | an [OpenRouter key](https://openrouter.ai/keys) | a [Gemini API key](https://aistudio.google.com/apikey) |
+| **Cost** | included in the subscription | per question, from your OpenRouter credit | Google's API prices for your key |
+| **Models** | Haiku, Sonnet or Opus, with a thinking level | a list, or any model by its ID | a list, or any model by its ID |
+| **When the model cannot answer** | — | a second model answers | `gemini-flash-lite-latest` answers within seconds |
+
+- At start the app uses Claude Code when it is installed and signed in. Otherwise its window asks for a key and checks it with the provider before saving it.
+- **AI settings** in the app window change the provider, the model, the thinking level and web search (Auto, Always or Off). **Keys & sign-in…** adds a key or signs in to Claude Code. Changes apply to the next question.
+- Keys stay on your computer, in Windows Credential Manager or the Linux Secret Service (GNOME Keyring, KWallet, KeePassXC). Without one, the key is kept in `.env` in the data folder, readable only by you, and moves to the credential store once there is one.
+- When a Gemini answer has not started after 10 seconds, a short test tells an overloaded model from a busy one, so the switch to `gemini-flash-lite-latest` takes seconds instead of a long timeout. The app checks the chosen model again every few minutes and goes back to it once it answers.
+
+## Other add-ons
+
+| Add-on | What ForeverAI gets from it |
+|---|---|
+| Questie | quests available near you, and where quest creatures, objects and items are |
+| TomTom | its arrow and waypoints for marks and routes (otherwise the game's map pin) |
+| Auctionator | prices from your last scan (open the auction house and scan first); **Search on the AH** under an answer shows the picks in its Shopping tab |
+| Pawn | which items are upgrades for you |
+
+ForeverAI reads other add-ons and never changes their files. Their settings change only through a proposal you accept in the game.
+
+## In the game
+
+> [!IMPORTANT]
+> Add-on options, selling, repairing and abandoning a quest happen only after you click **Accept**. Buying on the auction house always stays with you.
+
+| Do this | To |
+|---|---|
+| **Alt+click** an item, a spell or a quest | add it to your question |
+| **list** on the route | see its stops in order with their distance; **x** takes one off, **next** makes it the next |
+| **x** on the strip above the text field | stop tracking, or remove the route |
+| **Settings** tab | choose which game data is sent, the font size, the AI button; see which AI is in use |
+
+**Routes and tracking.** Each stop comes off the map when you reach it. The add-on watches for every creature that counts for the same quest objective and stops by itself when the objective is done. While it tracks, the game shows the nameplates of all enemies; your own setting comes back afterwards.
+
+| Command | What it does |
+|---|---|
+| `/fai` | opens or closes the window |
+| `/fai <question>` | asks right away |
+| `/fai new` | starts a new conversation |
+| `/fai stop` | ends tracking and clears the marks |
+| `/fai button` | shows or hides the AI button |
+| `/fai status`, `/fai track`, `/fai debug` | details for troubleshooting |
+
+## Uninstall
+
+| Delete | Windows | Linux |
+|---|---|---|
+| The app | the extracted `ForeverAI-Windows` folder | the extracted `ForeverAI-Linux` folder |
+| Your data | `%APPDATA%\ForeverAI` | `~/.local/share/foreverai` |
+| The add-on | `ForeverAI` and `ForeverAI_Inbox*` in `World of Warcraft/_forever_/Interface/AddOns` | the same |
+| Shortcuts | `ForeverAI.lnk` on the desktop | `~/.local/share/applications/foreverai.desktop` and `ForeverAI.desktop` on the desktop |
+
+When the app runs from a git checkout, its data is in `companion/data`.
+
+## Development
+
+Python 3.12+ with your distribution's Tk (Linux: `sudo apt install python3-venv python3-tk`, `sudo dnf install python3-tkinter` or `sudo pacman -S tk`). A standalone Python (uv, python-build-standalone) has a Tk without font rendering, so the window shows bitmap fonts.
 
 ```bash
 python3 -m venv companion/.venv
 companion/.venv/bin/python -m pip install -r companion/requirements.txt
-cd companion && .venv/bin/python -m foreverai
 ```
 
-Tests: `.venv/bin/python -m pytest -q` (Linux) or `.venv\Scripts\python.exe -m pytest -q` (Windows), in `companion`.
+| To | Run in `companion` |
+|---|---|
+| start the app | `.venv/bin/python -m foreverai` |
+| run the tests | `.venv/bin/python -m pytest -q` |
+| run the add-on outside the game, connected to the app, and save pictures of its window | `.venv/bin/python -m addonsim --help` |
 
-The add-on simulator runs the add-on outside the game, connected to the app, and saves pictures of its window: `.venv/bin/python -m addonsim --help`, in `companion`.
+On Windows use `.venv\Scripts\python.exe` instead of `.venv/bin/python`.
 
-## Build
+<details>
+<summary><b>Build the apps</b></summary>
 
-The apps are not committed: GitHub Actions (`.github/workflows/release.yml`) builds the Windows and the Linux app from the same commit for every pull request (as workflow artifacts) and publishes both as a GitHub Release when a new version reaches `main`. Local builds go to `release/` (ignored by git).
+<br>
 
-Windows (writes `release\windows\ForeverAI-Windows\`, with `-Package` also the release zip):
+The built apps are not committed. GitHub Actions (`.github/workflows/release.yml`) builds both from the same commit for every pull request (as workflow artifacts). Local builds go to `release/`, which git ignores. A Linux build runs on distributions with the same or a newer glibc than the machine that built it.
+
+| Platform | Writes | With the flag, also |
+|---|---|---|
+| Windows | `release\windows\ForeverAI-Windows\` | `-Package`: the release zip |
+| Linux | `release/linux/ForeverAI-Linux/` | `--package`: the release archive |
+
+Windows:
 
 ```powershell
 python -m venv companion\.venv
@@ -113,7 +231,7 @@ companion\.venv\Scripts\python.exe -m pip install -r companion\requirements.txt 
 .\build_exe.ps1 -Package
 ```
 
-Linux (writes `release/linux/ForeverAI-Linux/`, with `--package` also the release archive; it runs on distributions with the same or a newer glibc than the build machine):
+Linux:
 
 ```bash
 python3 -m venv companion/.venv
@@ -121,15 +239,23 @@ companion/.venv/bin/python -m pip install -r companion/requirements.txt pyinstal
 ./build_linux.sh --package
 ```
 
-The starter knowledge base `seed/kb.sqlite` is bundled into both apps (your own `companion/data/kb.sqlite` is used instead when it exists).
+Both apps bundle the starter knowledge base `seed/kb.sqlite`. When `companion/data/kb.sqlite` exists, the app uses that one instead.
 
-### Publishing a release
+</details>
 
-1. Set the new version in `addon/ForeverAI/ForeverAI.toc`, `ns.version` in `addon/ForeverAI/Core.lua`, `companion/foreverai/__init__.py` and `companion/pyproject.toml` (a test checks that they agree).
-2. Merge to `main`. The workflow builds both apps and, since this version has no release yet, publishes the release `v<version>` (it creates the tag) with both files and `SHA256SUMS.txt`.
+<details>
+<summary><b>Publish a release</b></summary>
 
-A push to `main` with a version that is already released only builds the apps (workflow artifacts). Pushing a tag `v<version>` that matches the version in the source publishes it as well.
+<br>
 
-## Uninstall
+```mermaid
+flowchart LR
+    v["New version in<br/>4 files"] --> m["Merge to main"] --> b["Workflow builds<br/>Windows + Linux"] --> r["GitHub Release<br/>v#lt;version#gt;"]
+```
 
-Delete the ForeverAI folder, your data and `ForeverAI` plus `ForeverAI_Inbox*` in `World of Warcraft/_forever_/Interface/AddOns`. Data: `%APPDATA%\ForeverAI` on Windows, `~/.local/share/foreverai` on Linux (`companion/data` when run from a git checkout). On Linux also delete `~/.local/share/applications/foreverai.desktop` and `ForeverAI.desktop` on the desktop.
+1. Set the new version in `addon/ForeverAI/ForeverAI.toc`, `ns.version` in `addon/ForeverAI/Core.lua`, `companion/foreverai/__init__.py` and `companion/pyproject.toml`. A test checks that they agree.
+2. Merge to `main`. Since this version has no release yet, the workflow publishes `v<version>` (it creates the tag) with both files and `SHA256SUMS.txt`.
+
+A push to `main` with a version that is already released only builds the apps. Pushing a tag `v<version>` that matches the version in the source publishes it as well.
+
+</details>
