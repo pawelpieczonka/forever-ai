@@ -118,6 +118,10 @@ class Sim:
         self.game_dir = make_game_dir(Path(game_dir))
         self.market = market  # lua/market.lua: Auctionator's prices, swords on offer, things in the bags
         self.addons_dir = self.game_dir / "Interface" / "AddOns"
+        if market:  # listed among the installed add-ons like in the game; market.lua is its code and data
+            (self.addons_dir / "Auctionator").mkdir(parents=True, exist_ok=True)
+            (self.addons_dir / "Auctionator" / "Auctionator.toc").write_text(
+                "## Interface: 11508\n## Title: Auctionator\n## Version: 345\n", encoding="utf-8")
         self.screens_dir = self.game_dir / "Screenshots"
         self.screen = (int(screen[0]), int(screen[1]))
         self.fps = fps

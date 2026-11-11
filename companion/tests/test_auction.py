@@ -140,6 +140,100 @@ def test_exact_items_tool_round_trip_and_shopping_card(env):  # noqa: F811
                                         {"id": 2592, "name": "Wool Cloth", "price": "35s 0c"}]
 
 
+def test_auctionator_list_puts_any_items_on_the_card(env):  # noqa: F811
+    """The real answer: the player asked for a filter in Auctionator for the Darkmoon Faire items, and the model said it
+    cannot make one and told them to type a list by hand. The card searched only items the auction search had priced
+    in the same answer; now the model puts any items on it, and the card saves them as a shopping list too."""
+    from foreverai.service import InboxWriter, TurnContext
+    svc, addons, _ = env
+    snap = {"addons": [{"name": "Auctionator"}, {"name": "Questie"}]}
+    ctx = TurnContext({"msgId": 4}, InboxWriter(addons, "S", 1, 20, 4), snap, threading.Event(), [])
+    ctx.ah_items["Green Iron Bracers"] = {"id": 3835, "name": "Green Iron Bracers", "price": "22s 0c"}
+    ctx.writer.send({"kind": "answer", "final": False, "msgId": 4, "text": "", "phase": "x"})
+    out = {}
+    t = threading.Thread(target=lambda: out.update(r=svc.run_tool(ctx, "auctionator_list", {
+        "items": ["[Small Furry Paw]", "green iron bracers", "Small Furry Paw", 'Torn "Bear" Pelt;^', " ",
+                  "Soft Bushy Tail"], "name": "Darkmoon Faire; turn-ins"})))
+    t.start()
+    deadline, req = time.time() + 5, None
+    while time.time() < deadline and not req:
+        req = (_read_inbox(addons, 1).get("requests") or [None])[0]
+        time.sleep(0.02)
+    # the prices of the items the card has none for, from the last scan, in one search
+    assert req["op"] == "auction_search" and req["items"] == [
+        {"name": "Small Furry Paw"}, {"name": "Torn Bear Pelt"}, {"name": "Soft Bushy Tail"}]
+    _send(svc, {"type": "game_result", "id": req["id"], "result": {
+        "source": "Auctionator", "exact": True, "maxAgeDays": 30, "matched": 1, "ahOpen": False,
+        "items": [{"id": 5134, "name": "Small Furry Paw", "price": "4s 10c", "seen": "today"}],
+        "missing": [{"name": "Torn Bear Pelt", "id": 11407, "why": "no auction price seen in the last 30 days"},
+                    {"name": "Soft Bushy Tail", "why": "unknown item name (not in the game's item cache): give the item id"}]}})
+    t.join(5)
+    text, err = out["r"]
+    assert not err and "holds 4 items" in text and '"ForeverAI: Darkmoon Faire turn-ins"' in text
+    assert "do not tell them to make the list by hand" in text
+    assert "[Small Furry Paw] (item 5134) — 4s 10c" in text and "[Soft Bushy Tail]: unknown item name" in text
+    # the listed items in their order, priced where an auction search found them, whatever the answer names
+    card = [{"id": 5134, "name": "Small Furry Paw", "price": "4s 10c"},
+            {"id": 3835, "name": "Green Iron Bracers", "price": "22s 0c"},
+            {"name": "Torn Bear Pelt"}, {"name": "Soft Bushy Tail"}]
+    assert ctx.auction_card("Here is the list.") == card
+    assert ctx.auction_list() == {"auctionList": "ForeverAI: Darkmoon Faire turn-ins"}
+    # without the tool: the old card, the auction items the answer names, saved under the add-on's own name
+    plain = TurnContext({"msgId": 5}, ctx.writer, snap, threading.Event(), [])
+    plain.ah_items["Green Iron Bracers"] = card[1]
+    assert plain.auction_card("Buy [Green Iron Bracers].") == [card[1]] and plain.auction_list() == {}
+    assert plain.auction_card("Buy [Small Furry Paw].") is None
+
+    for args, why in (({"items": []}, "give the exact item names"), ({"items": ["[]", '"']}, "give the exact item names"),
+                      ({"items": [f"Item {n}" for n in range(21)]}, "at most 20 items")):
+        text, err = svc.run_tool(plain, "auctionator_list", args)
+        assert err and why in text
+    no_auctionator = TurnContext({"msgId": 6}, ctx.writer, {"addons": [{"name": "Questie"}]}, threading.Event(), [])
+    text, err = svc.run_tool(no_auctionator, "auctionator_list", {"items": ["Linen Cloth"]})
+    assert err and "Auctionator is not installed" in text and no_auctionator.auction_card("[Linen Cloth]") is None
+    # one name, not a list; no answer from the game (the turn ends): the card holds it without a price
+    plain.cancel.set()
+    text, err = svc.run_tool(plain, "auctionator_list", {"items": "Linen Cloth"})
+    assert not err and "did not respond" in text and plain.auction_card("") == [{"name": "Linen Cloth"}]
+    assert plain.auction_list() == {"auctionList": "ForeverAI: Shopping"}
+
+
+def test_the_answer_carries_the_auctionator_list(env):  # noqa: F811
+    from foreverai.openrouter import ToolCall
+    from foreverai.service import Service
+    from test_service import FakeClient, _wait_final
+    svc, addons, _ = env
+
+    class Client(FakeClient):
+        listed = False
+
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            if not Client.listed:
+                Client.listed = True
+                yield "tool_calls", [ToolCall("c1", "auctionator_list", json.dumps(
+                    {"items": ["Small Furry Paw", "Soft Bushy Tail"], "name": "Darkmoon Faire"}))]
+                return
+            yield "text", "The card below saves them as an Auctionator list."
+
+    svc = Service(svc.store, None, addons, client_factory=Client, lookahead=4)
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "filter",
+                "snapshot": {"addons": [{"name": "Auctionator"}]}})
+    deadline, req = time.time() + 5, None
+    while time.time() < deadline and not req:
+        req = next((r for n in range(3, 7) for r in _read_inbox(addons, n).get("requests") or []), None)
+        time.sleep(0.02)
+    _send(svc, {"type": "game_result", "id": req["id"], "result": {
+        "source": "Auctionator", "exact": True, "maxAgeDays": 30, "matched": 1,
+        "items": [{"id": 4582, "name": "Soft Bushy Tail", "price": "1s 5c", "seen": "today"}],
+        "missing": [{"name": "Small Furry Paw", "why": "no auction price seen in the last 30 days"}]}})
+    d = _wait_final(addons, 3)
+    assert d["auction"] == [{"name": "Small Furry Paw"}, {"id": 4582, "name": "Soft Bushy Tail", "price": "1s 5c"}]
+    assert d["auctionList"] == "ForeverAI: Darkmoon Faire"
+    svc.handle({"type": "question", "msgId": 4, "session": "S", "nextInbox": 7, "conv": "c", "text": "thanks",
+                "snapshot": {}})
+    assert "auctionList" not in _wait_final(addons, 7)  # each answer its own card
+
+
 BAGS = {"freeSlots": 5, "items": [
     {"item": "[Hearthstone]", "id": 6948, "count": 1, "bound": True, "tooltip": "Soulbound\nUnique", "quality": "common"},
     {"item": "[Linen Cloth]", "id": 2589, "count": 12, "sellCopper": 13, "tooltip": "Crafting Reagent",
@@ -343,6 +437,24 @@ print("META " .. tostring(result.source) .. "|" .. tostring(result.dbItems) .. "
   .. tostring(result.lastScan) .. "|" .. tostring(result.skipped["too high level"]) .. "|" .. tostring(result.notLoaded))
 local ok, why = ns.Auction.ShowInAuctionator({ "Gleaming Sword" })
 print("SHOW " .. tostring(ok) .. "|" .. tostring(why))
+-- a shopping list: only through Auctionator's public API, each item an exact search, also with the AH closed
+local function j(...)
+  local t = {}
+  for i = 1, select("#", ...) do t[i] = tostring((select(i, ...))) end
+  return table.concat(t, "|")
+end
+print("SAVE0 " .. j(ns.Auction.SaveAsList("ForeverAI: Faire", { "Small Furry Paw" })))
+local saved = {}
+Auctionator.API.v1.CreateShoppingList = function(caller, name, strings)
+  saved[#saved + 1] = caller .. ">" .. name .. ">" .. table.concat(strings, ",")
+end
+print("SAVE1 " .. j(ns.Auction.SaveAsList("ForeverAI: Faire",
+  { "Small Furry Paw", 'Torn "Bear" Pelt;^', "", "Soft Bushy Tail" })) .. "|" .. saved[1])
+print("SAVE2 " .. j(ns.Auction.SaveAsList(nil, { "Linen Cloth" })) .. "|" .. saved[2])
+print("SAVE3 " .. j(ns.Auction.SaveAsList("x", { "", '"' })) .. "|" .. #saved)
+Auctionator.API.v1.CreateShoppingList = function() error("list broken") end
+local okErr, err = ns.Auction.SaveAsList("x", { "Linen Cloth" })
+print("SAVE4 " .. tostring(okErr) .. "|" .. (tostring(err):gsub("^.-: ", "")))
 
 -- exact items: ids, names the client knows, a name from the player's bags, a name only the price data's cached items
 -- have, an item whose name must be loaded, one without a price, an unknown name; the price data stays untouched
@@ -437,6 +549,12 @@ def test_auction_lua_reads_auctionator_prices(tmp_path):
     assert source == "Auctionator" and db_items == "10" and matched == "3" and last_scan == "3 days ago (full scan)"
     assert too_high == "1" and not_loaded == "nil"
     assert lines["SHOW"] == "false|Open the auction house first."
+    assert lines["SAVE0"] == "false|This Auctionator cannot save shopping lists."  # an Auctionator without the API
+    assert lines["SAVE1"] == ('true|ForeverAI: Faire|ForeverAI>ForeverAI: Faire>"Small Furry Paw","Torn Bear Pelt",'
+                              '"Soft Bushy Tail"')
+    assert lines["SAVE2"] == 'true|ForeverAI|ForeverAI>ForeverAI>"Linen Cloth"'  # the add-on's own list name
+    assert lines["SAVE3"] == "false|Nothing to save.|2"
+    assert lines["SAVE4"] == "false|list broken"
     json.dumps(lines)
 
 

@@ -607,6 +607,55 @@ TOOLS.append({
     },
 })
 
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "auctionator_list",
+        "description": "Put items on the Auction house card under your answer: with one click the player searches "
+                       "them all on the auction house (Auctionator's Shopping tab) or saves them as an Auctionator "
+                       "shopping list. Use it when the player asks for a list, a filter or a search in Auctionator, "
+                       "or when you recommend buying items that search_auction_house did not price. Exact item "
+                       "names as the game shows them: the item, not the quest that wants it ([Small Furry Paw], not "
+                       "Small Furry Paws). It returns their prices from the last scan and the names the price data "
+                       "does not know (check those). Items search_auction_house returned in this answer go on the "
+                       "card by themselves when the answer names them in [brackets].",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "items": {"type": "array", "items": {"type": "string"}, "description": "Exact item names"},
+                "name": {"type": "string", "description": "A few words naming the list in English, e.g. "
+                                                          "'Darkmoon Faire turn-ins'"},
+            },
+            "required": ["items"],
+        },
+    },
+})
+AUCTIONATOR_LIST_MAX = 20  # items on one card
+
+
+def auctionator_list(args: dict, snapshot: dict) -> tuple[dict | None, str]:
+    """(the list for the Auction house card, text for the model)."""
+    installed = {str(a.get("name")) for a in (snapshot.get("addons") or []) if isinstance(a, dict)}
+    if installed and "Auctionator" not in installed:
+        return None, "Not shown: Auctionator is not installed, so there is nothing to search or save the items in."
+    raw = args.get("items")
+    names: list[str] = []
+    for n in raw if isinstance(raw, list) else [raw] if isinstance(raw, str) else []:
+        # Auctionator's search strings use " ; ^ for exact, terms and categories
+        n = re.sub(r'["^;]', "", str(n or "")).strip().strip("[]").strip()[:80]
+        if n and n.lower() not in {x.lower() for x in names}:
+            names.append(n)
+    if not names:
+        return None, "Not shown: give the exact item names."
+    if len(names) > AUCTIONATOR_LIST_MAX:
+        return None, f"Not shown: a card holds at most {AUCTIONATOR_LIST_MAX} items; give the ones worth buying."
+    title = re.sub(r"\s+", " ", re.sub(r'["^;|]', "", str(args.get("name") or ""))).strip()[:40] or "Shopping"
+    lst = {"name": f"ForeverAI: {title}", "items": names}
+    return lst, (f"The Auction house card under your answer holds {len(names)} items: the player searches them on "
+                 f"the auction house with one click or saves them as the Auctionator shopping list "
+                 f"\"{lst['name']}\". Say so in a few words; do not tell them to make the list by hand.")
+
+
 AH_CUT = 0.05  # the auction house keeps 5% of a sale
 # the auction house is worth a listing (the trip, the wait and a deposit lost when nothing sells) only when the whole
 # stack brings at least this much more there than at a vendor: 10% and 50 copper

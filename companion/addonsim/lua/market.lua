@@ -116,8 +116,24 @@ for _, p in ipairs(prices) do
   local d = tostring(today - p[3])
   db[tostring(p[1])] = { m = p[2], h = { [d] = p[2] }, l = {}, a = { [d] = p[4] } }
 end
-Auctionator = { API = { v1 = { MultiSearchExact = function() end } }, State = { CurrentRealm = "Forever" },
-  Constants = { SCAN_DAY_0 = day0 } }
+-- the shopping lists the add-on saved, by name; like Auctionator, a list of the same name is replaced
+local lists = {}
+Auctionator = { API = { v1 = {
+  MultiSearchExact = function() end,
+  CreateShoppingList = function(caller, name, searchStrings)
+    assert(type(caller) == "string" and type(name) == "string" and type(searchStrings) == "table",
+      "Usage Auctionator.API.v1.CreateShoppingList(string, string, string[])")
+    local copy = {}
+    for i, s in ipairs(searchStrings) do copy[i] = s end
+    lists[name] = copy
+  end,
+  GetShoppingListItems = function(caller, name)
+    assert(lists[name], "Auctionator.API.v1.GetShoppingListItems: List does not exist: " .. tostring(name))
+    local copy = {}
+    for i, s in ipairs(lists[name]) do copy[i] = s end
+    return copy
+  end,
+} }, State = { CurrentRealm = "Forever" }, Constants = { SCAN_DAY_0 = day0 } }
 AUCTIONATOR_PRICE_DATABASE = { __dbversion = 8, Forever = db }
 AUCTIONATOR_SAVEDVARS = { TimeOfLastBrowseScan = time() - 3600 }
-sim.market = { items = items, bag = bag, prices = prices }
+sim.market = { items = items, bag = bag, prices = prices, lists = lists }

@@ -297,7 +297,7 @@ def test_mcp_server_protocol():
     names = [t["name"] for t in srv.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]]
     assert names == ["search_knowledge_base", "propose_addon_change", "save_memory", "delete_memory", "fetch_url",
                      "mark_on_map", "edit_route", "plan_route", "addon_options", "propose_quest_abandon", "propose_vendor_action",
-                     "search_auction_house", "compare_sell_prices"]
+                     "search_auction_house", "compare_sell_prices", "auctionator_list"]
     res = srv.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                       "params": {"name": "addon_options", "arguments": {"addon": "Questie"}}})
     assert res["result"] == {"content": [{"type": "text", "text": "ok addon_options"}], "isError": False}
@@ -1695,3 +1695,109 @@ def test_a_free_model_for_route_updates_follows_the_rules_of_free_models(free_en
     assert FreeClient.seen == [("openai/gpt-6-luna", "auto")] * 2
     ask(11, "Where is Byancie?")
     assert FreeClient.seen == [("google/gemma-4-31b-it:free", "never")] * 2
+
+
+def test_a_knowledge_base_search_that_finds_nothing_names_the_web_as_the_next_step(env, tmp_path):
+    """The real answer: "Which items are best to hand in at the Darkmoon Faire for the bag? Take the AH prices." The
+    model searched the knowledge base, read "No results in the local knowledge base." and answered another question
+    (what to sell on the auction house) without searching the web. With a web search the result now says to use it;
+    without one it stays as it was."""
+    from foreverai.kb.store import KB
+    svc, addons, _ = env
+    kb = KB(tmp_path / "empty.sqlite")
+    kb.upsert_page("wiki", "1", "Skyborne", "https://warcraft.wiki.gg/wiki/Skyborne", "1", "s", "t",
+                   "The Skyborne are a playable race in World of Warcraft: Forever with wings of their own.")
+
+    class Client(FakeClient):
+        results: list = []
+        query = "Darkmoon Faire"
+
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            done = [m["content"] for m in messages if m["role"] == "tool"]
+            if not done:
+                yield "tool_calls", [ToolCall("c1", "search_knowledge_base", json.dumps({"query": Client.query}))]
+                return
+            Client.results.append((search_mode, done[-1]))
+            yield "text", "Done."
+
+    svc = Service(svc.store, kb, addons, client_factory=Client, lookahead=4)
+
+    def ask(n):
+        svc.handle({"type": "question", "msgId": n, "session": "S", "nextInbox": n, "conv": "c", "text": "q",
+                    "snapshot": {}})
+        _wait_final(addons, n)
+        return Client.results[-1]
+
+    mode, text = ask(3)
+    assert mode == "auto" and text.startswith("No results in the local knowledge base. When the answer depends on it")
+    assert "search the web for it before you answer" in text and "never answer another question" in text
+    Client.query = "Skyborne wings"  # found: the pages, and nothing about the web
+    mode, text = ask(7)
+    assert "[Skyborne |" in text and "search the web" not in text
+    Client.query = "Darkmoon Faire"
+    assert svc.set_search_mode("never")[0]
+    assert ask(11) == ("never", "No results in the local knowledge base.")
+    assert svc.set_search_mode("always")[0]
+    assert ask(15)[1].startswith("No results in the local knowledge base. When the answer depends on it")
+
+
+def test_a_free_model_without_a_paid_search_gets_no_web_step(env, tmp_path):
+    from foreverai.kb.store import KB
+    svc, addons, _ = env
+
+    class Client(FreeClient):
+        results: list = []
+
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            done = [m["content"] for m in messages if m["role"] == "tool"]
+            if not done:
+                yield "tool_calls", [ToolCall("c1", "search_knowledge_base", '{"query": "Darkmoon Faire"}')]
+                return
+            Client.results.append((search_mode, done[-1]))
+            yield "text", "Done."
+
+    FreeClient.balance, FreeClient.seen, FreeClient.fail = 0.0, [], set()
+    svc = Service(svc.store, KB(tmp_path / "empty.sqlite"), addons, client_factory=Client, lookahead=4)
+    assert svc.set_model("google/gemma-4-31b-it:free")[0]
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "q", "snapshot": {}})
+    _wait_final(addons, 3)
+    assert Client.results == [("never", "No results in the local knowledge base.")]
+
+
+def test_claude_code_gets_the_web_step_while_its_websearch_is_on(env, tmp_path, monkeypatch):
+    from foreverai import claude_code
+    from foreverai.kb.store import KB
+    svc, addons, _ = env
+    svc.kb = KB(tmp_path / "empty.sqlite")
+    monkeypatch.setattr(claude_code, "detect", lambda force=False: {"path": "claude", "version": "2.1.304",
+                                                                    "loggedIn": True, "subscription": "max"})
+    seen = {"results": []}
+
+    class FakeSession:
+        def __init__(self, exe, workdir, system, model, effort, search_mode, bridge_url, bridge_token):
+            seen["bridge"] = bridge_url
+            self.key = (model, effort, search_mode, system)
+            self.workdir, self.conv, self.turns, self.busy = workdir, None, 0, False
+
+        def alive(self):
+            return True
+
+        def close(self):
+            pass
+
+        def turn(self, prompt, images=None):
+            from foreverai.mcp_server import http_bridge
+            call = http_bridge(seen["bridge"].replace("/mcp", "/tool"), svc._bridge.token)
+            seen["results"].append(call("search_knowledge_base", {"query": "Darkmoon Faire"}))
+            yield "final", "Done."
+
+    monkeypatch.setattr(claude_code, "ClaudeSession", FakeSession)
+    assert svc.set_provider("claude_code")[0]
+    for n, mode in ((3, "auto"), (7, "never")):
+        assert svc.set_search_mode(mode)[0]
+        svc.handle({"type": "question", "msgId": n, "session": "S", "nextInbox": n, "conv": "c", "text": "q",
+                    "snapshot": {}})
+        _wait_final(addons, n)
+    (auto, auto_err), (never, never_err) = seen["results"]
+    assert not auto_err and "search the web for it before you answer" in auto
+    assert not never_err and never == "No results in the local knowledge base."

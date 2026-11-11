@@ -36,7 +36,8 @@ MCP_TOOLS = ["mcp__foreverai__search_knowledge_base", "mcp__foreverai__propose_a
              "mcp__foreverai__save_memory", "mcp__foreverai__delete_memory", "mcp__foreverai__fetch_url",
              "mcp__foreverai__mark_on_map", "mcp__foreverai__addon_options", "mcp__foreverai__propose_quest_abandon",
              "mcp__foreverai__propose_vendor_action", "mcp__foreverai__search_auction_house",
-             "mcp__foreverai__compare_sell_prices", "mcp__foreverai__plan_route", "mcp__foreverai__edit_route"]
+             "mcp__foreverai__compare_sell_prices", "mcp__foreverai__auctionator_list", "mcp__foreverai__plan_route",
+             "mcp__foreverai__edit_route"]
 TIMEOUT_S = 300
 
 
@@ -277,6 +278,7 @@ def tool_phase(name: str) -> str | None:
                        ("propose_vendor_action", "Preparing vendor list…"),
                        ("search_auction_house", "Searching the auction house…"),
                        ("compare_sell_prices", "Comparing vendor and auction prices…"),
+                       ("auctionator_list", "Preparing the auction list…"),
                        ("plan_route", "Planning the route…"), ("edit_route", "Changing the route…")):
         if key in name:
             return phase

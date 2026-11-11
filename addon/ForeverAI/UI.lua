@@ -462,7 +462,7 @@ function UI.UpdateAnswer(data)
       if ns.Map.Left() > 0 then ns.Map.DropDone() end
       ns.Map.UpdateAnswered()
     end
-    if type(data.auction) == "table" and #data.auction > 0 then UI.AuctionCard(data.auction) end
+    if type(data.auction) == "table" and #data.auction > 0 then UI.AuctionCard(data.auction, data.auctionList) end
     currentAnswer = nil
   elseif not e.news then -- a news line waits for the whole answer
     e.body = ns.Links.Linkify(data.text or "", nil)
@@ -699,11 +699,13 @@ function UI.MarksCard(marks, replace, track, quiet)
   relayout()
 end
 
--- items the answer recommends from the auction search: one click shows them in Auctionator's Shopping tab
-function UI.AuctionCard(items)
+-- items the answer recommends: one click shows them in Auctionator's Shopping tab, or saves them as a shopping list
+function UI.AuctionCard(items, listName)
   local lines, names = {}, {}
   for i, it in ipairs(items) do
-    lines[#lines + 1] = string.format("• %s  |cffffd100%s|r", esc(it.name or "?"), esc(it.price or ""))
+    local price = it.price and it.price ~= "" and ("|cffffd100" .. esc(it.price) .. "|r")
+      or "|cff6a7380no price in the last scan|r"
+    lines[#lines + 1] = string.format("• %s  %s", esc(it.name or "?"), price)
     names[i] = it.name
   end
   card("|cffffd27aAuction house|r |cff6a7380(prices from the last Auctionator scan)|r\n" .. table.concat(lines, "\n"),
@@ -712,6 +714,14 @@ function UI.AuctionCard(items)
       local ok, err = ns.Auction.ShowInAuctionator(names)
       if ok then self:Done("|cff5dff9dShown in Auctionator (Shopping tab).|r") else UI.Notice(err, "warn") end
     end, "primary" },
+    { "Save as list", 100, function(self)
+      local ok, saved = ns.Auction.SaveAsList(listName, names)
+      if ok then
+        self:Done("|cff5dff9dSaved as the Auctionator shopping list|r " .. esc(saved) .. "|cff5dff9d (Shopping tab).|r")
+      else
+        UI.Notice(saved, "warn")
+      end
+    end },
     { "Dismiss", 80, function(self) self:Done("|cff8a93a0Dismissed.|r") end },
   })
   relayout()

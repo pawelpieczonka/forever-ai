@@ -1,6 +1,7 @@
 -- ForeverAI: auction house prices from the player's auction add-on, for the AI's search_auction_house tool.
 -- Only reads: Auctionator's price data (its public API v1 and the realm's price table) and Pawn's upgrade check.
--- The other add-ons' code and data are never changed.
+-- The other add-ons' code and data are never changed; the one thing written is a shopping list the player saves
+-- with a click on the Auction house card, through Auctionator's public API.
 local ADDON, ns = ...
 local AH = {}
 ns.Auction = AH
@@ -527,17 +528,39 @@ function AH.Search(req, reply)
 end
 
 ------------------------------------------------------------------------ show the recommended items in Auctionator
+local function terms(names)
+  local out = {}
+  for _, n in ipairs(names or {}) do
+    n = tostring(n or ""):gsub("[\";^]", "")
+    if n ~= "" then out[#out + 1] = n end
+  end
+  return out
+end
+
 function AH.ShowInAuctionator(names)
   local A = auctionator()
   if not (A and A.API.v1.MultiSearchExact) then return false, "Auctionator is not available." end
   if not AH.IsOpen() then return false, "Open the auction house first." end
-  local terms = {}
-  for _, n in ipairs(names or {}) do
-    n = tostring(n or ""):gsub("[\";^]", "")
-    if n ~= "" then terms[#terms + 1] = n end
-  end
-  if #terms == 0 then return false, "Nothing to search." end
-  local ok, e = pcall(A.API.v1.MultiSearchExact, CALLER, terms)
+  local t = terms(names)
+  if #t == 0 then return false, "Nothing to search." end
+  local ok, e = pcall(A.API.v1.MultiSearchExact, CALLER, t)
   if not ok then return false, tostring(e) end
   return true
+end
+
+-- An Auctionator shopping list of these items, each an exact search; it replaces a list of the same name (the app
+-- names ForeverAI's lists "ForeverAI: ...", so a list of the player's own is not one of them). At the auction house
+-- Auctionator searches it at once.
+AH.LIST_NAME = "ForeverAI"
+function AH.SaveAsList(name, names)
+  local A = auctionator()
+  if not (A and A.API.v1.CreateShoppingList) then return false, "This Auctionator cannot save shopping lists." end
+  local t = terms(names)
+  if #t == 0 then return false, "Nothing to save." end
+  for i, n in ipairs(t) do t[i] = '"' .. n .. '"' end
+  name = tostring(name or ""):gsub("[\";^]", "")
+  if name == "" then name = AH.LIST_NAME end
+  local ok, e = pcall(A.API.v1.CreateShoppingList, CALLER, name, t)
+  if not ok then return false, tostring(e) end
+  return true, name
 end

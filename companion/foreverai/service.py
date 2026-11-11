@@ -22,9 +22,9 @@ from .memory import ConversationStore, MemoryStore
 from .gemini import Gemini
 from .openrouter import FREE_MODELS, FREE_ROUTER, OpenRouter, is_free
 from .prompt import build_messages, entity_names
-from .tools import (TOOLS, auction_request, format_addon_options, format_auction, format_sell_prices, next_action_id,
-                    remember_options, run_fetch, run_kb_search, sell_price_request, validate_abandon, validate_mark,
-                    validate_proposal, validate_vendor)
+from .tools import (TOOLS, auction_request, auctionator_list, format_addon_options, format_auction, format_sell_prices,
+                    next_action_id, remember_options, run_fetch, run_kb_search, sell_price_request, validate_abandon,
+                    validate_mark, validate_proposal, validate_vendor)
 from .wowformat import bracket_names, md_to_wow
 
 log = logging.getLogger("foreverai")
@@ -60,6 +60,11 @@ MAX_SESSION_CHARS = 350_000  # ~90k tokens of questions and tool results; answer
 MAX_MARKS = 12  # marks one answer can set by hand
 MAX_ROUTE_MARKS = 20  # ... and the stops of a planned route: one through several zones is long, and loses its end otherwise
 MAX_TRACKED = 5  # creatures the add-on watches for at once
+# a knowledge-base search that found nothing, when the model can search the web: the next step, at the moment it
+# matters (a model that read "not in the knowledge base" used to answer another question instead)
+KB_MISS_WEB = (" When the answer depends on it (an event, a system, a change in Forever), search the web for it "
+               "before you answer: \"it is not in the data\" is no answer while you can look it up, and never answer "
+               "another question in place of the one asked.")
 
 
 def model_name(model_id: str) -> str:
@@ -352,7 +357,9 @@ class TurnContext:
         self.want_screen = bool(msg.get("wantScreen"))
         self.ah_items: dict[str, dict] = {}  # items the auction search returned (name -> id, price)
         self.ah_open: bool | None = None
+        self.ah_list: dict | None = None  # auctionator_list: {"name": the Auctionator list, "items": exact names}
         self.web_search: Callable[[str], tuple[str, list[dict]]] | None = None  # Gemini: grounded search
+        self.web = False  # the model of this answer has a web search (whatever the provider's tool for it is)
         self.conv = str(msg.get("conv") or "default")
         self.tool_calls = 0  # calls of the app's tools that reached the app in this answer (Claude Code)
         self.notes: list[str] = []  # what the answer did that neither marks nor actions show (memory)
@@ -413,13 +420,29 @@ class TurnContext:
             out.append(src)
         return out[:limit]
 
+    def remember_auction(self, res: dict | None) -> None:
+        """The items an auction search returned (for the card) and whether the auction house is open."""
+        for it in (res or {}).get("items") or []:
+            if it.get("name") and it.get("id"):
+                self.ah_items[str(it["name"])] = {"id": it["id"], "name": it["name"], "price": it.get("price")}
+        if res and res.get("ahOpen") is not None:
+            self.ah_open = bool(res.get("ahOpen"))
+
     def auction_card(self, answer: str) -> list[dict] | None:
-        """Auction items the answer recommends (named in [brackets]), for the "Search on the AH" card."""
-        if not self.ah_items:
-            return None
+        """Items for the Auction house card ("Search on the AH", "Save as list"): the ones the model put on it with
+        auctionator_list, priced where the auction search found them, or else the auction items the answer
+        recommends (named in [brackets])."""
+        found = {k.lower(): v for k, v in self.ah_items.items()}
+        if self.ah_list:
+            return [found.get(n.lower()) or {"name": n} for n in self.ah_list["items"]]
         named = {n.lower() for n in bracket_names(answer or "")}
-        picked = [v for k, v in self.ah_items.items() if k.lower() in named]
+        picked = [v for k, v in found.items() if k in named]
         return picked[:10] or None
+
+    def auction_list(self) -> dict:
+        """The name the card saves its items under in Auctionator, when the model gave the list; else the add-on
+        uses its own."""
+        return {"auctionList": self.ah_list["name"]} if self.ah_list else {}
 
     def add_source(self, src: dict) -> None:
         if src.get("url") and all(x["url"] != src["url"] for x in self.sources):
@@ -937,6 +960,7 @@ class Service:
         search_mode = s.search_mode if is_gemini else self.search_mode(model)
         if search_mode != s.search_mode:
             log.info("web search off: %s is free and the balance does not cover paid searches", model)
+        ctx.web = search_mode != "never"
         if is_gemini and model in self._gemini_down:
             log.info("%s could not answer recently: %s answers", model, fallback)
             self._recheck_gemini(client, model)
@@ -1057,7 +1081,7 @@ class Service:
                      "routePlanned": ctx.route_marked and bool(ctx.marks),
                      "cost": None if no_cost else self.last_cost, "model": model,
                      **({"costNote": "Gemini API"} if is_gemini else {"costNote": "no cost"} if no_cost else {}),
-                     "links": self.links(text, ctx), "auction": ctx.auction_card(text),
+                     "links": self.links(text, ctx), "auction": ctx.auction_card(text), **ctx.auction_list(),
                      "secs": round(time.monotonic() - started, 1),
                      "status": self.status() if is_gemini else self._status_after(cost, requests if free else 0)})
         self.on_event(f"Last answer: {model}" + ("" if is_gemini else ", no cost" if no_cost
@@ -1255,6 +1279,8 @@ class Service:
             query = str(args.get("query", ""))
             ctx.phase_cb(f"Searching knowledge base: {query[:40]}")
             text, found = run_kb_search(self.kb, query)
+            if not found and ctx.web:
+                text += KB_MISS_WEB
             for f in found:  # search hits count as sources only if the answer actually talks about them
                 ctx.add_source(f)
                 ctx.pre_urls.add(f["url"])
@@ -1341,11 +1367,7 @@ class Service:
                 return err, True
             ctx.phase_cb("Searching the auction house…")
             res = self.game_call(ctx, "auction_search", req)
-            for it in (res or {}).get("items") or []:
-                if it.get("name") and it.get("id"):
-                    ctx.ah_items[str(it["name"])] = {"id": it["id"], "name": it["name"], "price": it.get("price")}
-            if res and res.get("ahOpen") is not None:
-                ctx.ah_open = bool(res.get("ahOpen"))
+            ctx.remember_auction(res)
             return format_auction(res), not res or bool(res.get("error"))
         if name == "compare_sell_prices":
             entries, req, err = sell_price_request(ctx.snapshot, args)
@@ -1358,6 +1380,20 @@ class Service:
                 if res and res.get("ahOpen") is not None:
                     ctx.ah_open = bool(res.get("ahOpen"))
             return format_sell_prices(entries, res), False
+        if name == "auctionator_list":
+            lst, text = auctionator_list(args, ctx.snapshot)
+            if not lst:
+                return text, True
+            ctx.ah_list = lst
+            # the card's prices, and the names the price data does not know (a quest's name, a translated page's)
+            priced = {k.lower() for k in ctx.ah_items}
+            req, _ = auction_request({"items": [n for n in lst["items"] if n.lower() not in priced]})
+            if req:
+                ctx.phase_cb("Looking up the auction prices…")
+                res = self.game_call(ctx, "auction_search", req)
+                ctx.remember_auction(res)
+                text += "\n\nWhat the last scan of the player's auction add-on says about them:\n" + format_auction(res)
+            return text, False
         if name == "web_search":
             if not ctx.web_search:
                 return "Web search is not available with this AI provider.", True
@@ -1480,8 +1516,8 @@ class Service:
         s = self.store.settings
         system += ("\n\nThe foreverai MCP server provides: search_knowledge_base, search_auction_house, compare_sell_prices, "
                    "addon_options, propose_addon_change, propose_quest_abandon, propose_vendor_action, mark_on_map, "
-                   "plan_route, edit_route, save_memory, delete_memory, fetch_url. Read web pages (e.g. build links) only with fetch_url — it gets "
-                   "past bot blocking.")
+                   "auctionator_list, plan_route, edit_route, save_memory, delete_memory, fetch_url. Read web pages "
+                   "(e.g. build links) only with fetch_url — it gets past bot blocking.")
         if s.search_mode == "always":
             system += " Always check current information on the web (WebSearch) before answering."
         return system
@@ -1583,6 +1619,7 @@ class Service:
                                  "the AI provider to OpenRouter or Gemini in Settings."})
             return
         session, continues = got
+        ctx.web = s.search_mode != "never"  # the session's WebSearch
         # a session that already holds this conversation only needs the new question
         _, prompt = claude_code.flatten_messages([messages[0], messages[-1]] if continues else messages)
         shot = self.screen_image(ctx)
@@ -1651,7 +1688,7 @@ class Service:
         self.last_cost = None
         writer.send({"kind": "answer", "final": True, "msgId": msg_id,
                      "text": md_to_wow(text) if text else "(no answer)", "links": self.links(text, ctx),
-                     "auction": ctx.auction_card(text),
+                     "auction": ctx.auction_card(text), **ctx.auction_list(),
                      "marks": ctx.marks, "marksReplace": ctx.replaces_marks, "track": ctx.track,
                      "route": ctx.route_edit, "untrack": ctx.untrack,
                      "routePlanned": ctx.route_marked and bool(ctx.marks),
