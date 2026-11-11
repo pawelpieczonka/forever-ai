@@ -244,3 +244,21 @@ def test_the_thinking_level_of_route_updates_is_next_to_their_model(env, tk_root
     _choose(panel.route_effort, "Same thinking")
     assert _pump(tk_root, lambda: not panel.busy and s.route_effort == "")
     assert panel.route_effort.get() == "Same thinking"
+
+
+def test_the_window_shows_the_app_version_next_to_its_title():
+    import tkinter as tk
+
+    from foreverai import __version__, window
+    try:
+        w = window.AppWindow()
+    except tk.TclError:
+        pytest.skip("no display")
+    try:
+        w.root.withdraw()
+        header = w.version.master.pack_slaves()
+        assert [str(s.cget("text")) for s in header[:2]] == ["ForeverAI", f"v{__version__}"]
+        assert w.version.cget("fg") == window.DIM  # small and dimmed, not a second title
+        assert w.version.cget("font") != header[0].cget("font")
+    finally:
+        w.root.destroy()

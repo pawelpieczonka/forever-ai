@@ -12,7 +12,7 @@ import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from . import claude_code, config
+from . import __version__, claude_code, config
 from .openrouter import is_free
 from .osutil import WINDOWS, open_path, open_terminal
 
@@ -119,6 +119,8 @@ class AppWindow:
         top = tk.Frame(self.root, bg=BG)
         top.pack(fill="x", padx=16, pady=(14, 4))
         tk.Label(top, text="ForeverAI", bg=BG, fg=ACCENT, font=TITLE).pack(side="left")
+        self.version = tk.Label(top, text=f"v{__version__}", bg=BG, fg=DIM, font=(UI, 9))
+        self.version.pack(side="left", anchor="s", padx=(6, 0), pady=(0, 3))
         self.state = tk.Label(top, text="● Starting…", bg=BG, fg=WARN, font=(UI, 10))
         self.state.pack(side="right")
 

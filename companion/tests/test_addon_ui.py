@@ -245,3 +245,50 @@ def test_the_header_shows_the_free_requests_of_a_free_model(tmp_path):
     paid = {**base, "model": "openai/gpt-6-luna", "searchMode": "auto"}
     assert header(paid) == ["|cffff5555$0.00|r   web search: auto"]
     assert header({**paid, "balance": 6.17}) == ["|cff5dff9d$6.17|r   web search: auto"]
+
+
+# the header: the version label, the pill's right edge and text, and the left edge of "+ New"
+HEADER = r"""
+local ver, pill, new
+local f = EnumerateFrames()
+while f do
+  if f:GetObjectType() == "Button" and f:GetText() == "+ New" then new = f end
+  for _, r in ipairs({ f:GetRegions() }) do
+    if r:GetObjectType() == "FontString" then
+      local t = r:GetText() or ""
+      if t:find("OpenRouter", 1, true) and r:GetParent() ~= f:GetParent() and t:find("|r  ", 1, true) then pill = r end
+      if t:find("^v%d") then ver = r end
+    end
+  end
+  f = EnumerateFrames(f)
+end
+return ver and ver:GetText(), pill:GetParent():GetRight(), new:GetLeft(), pill:IsTruncated(), ver and ver:GetRight(),
+       pill:GetParent():GetLeft()
+"""
+
+
+def test_the_header_shows_the_version_and_fits_a_long_model_name(tmp_path):
+    """The window's title has the add-on's version next to it; the model's pill ends before "+ New", and in a narrow
+    window a long model name is cut short instead of running under the button."""
+    import re
+    from pathlib import Path
+    toc = (Path(__file__).resolve().parents[2] / "addon" / "ForeverAI" / "ForeverAI.toc").read_text()
+    version = re.search(r"^## Version: (\S+)", toc, re.M).group(1)
+    install_game(tmp_path / "game", pool=40)
+    sim = Sim(tmp_path / "game", clock=datetime(2026, 11, 10, 12, 0)).start()
+    sim.slash("/fai")
+    sim.run(1)
+    sim.lua("ForeverAIDB.status = ...; ForeverAI.UI.UpdateHeader()",
+            {"provider": "openrouter", "model": "nvidia/nemotron-3-ultra-550b-a55b:free", "searchMode": "never"})
+    sim.run(1)
+    text, pill_right, new_left, cut, ver_right, pill_left = sim.lua(HEADER)
+    assert _s(text) == f"v{version}"
+    assert ver_right < pill_left  # the version comes before the pill
+    assert pill_right < new_left and not cut  # the default window has room for the whole name
+    sim.lua("ForeverAIFrame:SetSize(380, 500)")  # the narrowest window
+    sim.run(1)
+    text, pill_right, new_left, cut, _, _ = sim.lua(HEADER)
+    assert pill_right <= new_left and cut
+    sim.lua("ForeverAIFrame:SetSize(700, 500)")  # wider again: the whole name is back
+    sim.run(1)
+    assert not sim.lua(HEADER)[3]
