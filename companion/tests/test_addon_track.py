@@ -617,18 +617,13 @@ def test_a_popup_that_cannot_be_kept_away_ends_the_search_for_good(sim):
     assert sim.lua("return TEST_popups") == 1
 
 
-def test_the_search_by_name_can_be_turned_off(sim):
-    sim.lua(POPUP)
+def test_the_search_by_name_is_always_on(sim):
+    """There is nothing to choose: the search turns itself off only when the game shows its popup."""
     sim.slash("/fai")
     sim.click("Settings")
     sim.run(1)
-    sim.click("Find tracked creatures beyond nameplate range")
-    assert sim.lua("return ForeverAI.db.lookByName") is False
-    sim.lua(TRACK)
-    sim._wow.inRange[b"strigid screecher"] = True
-    sim.run(3)
-    assert text(sim.lua(SECTION)) == "Strigid Screecher: none in sight now; not seen since it is tracked"
-    assert sim.lua("return TEST_popups") == 0
+    assert "beyond nameplate range" not in " | ".join(sim.texts())
+    assert sim.lua("return ForeverAI.db.lookByName") is True
 
 
 def test_a_game_that_answers_differently_is_not_asked(sim):

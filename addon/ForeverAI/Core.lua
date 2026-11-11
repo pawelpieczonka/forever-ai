@@ -16,7 +16,7 @@ ns.defaults = {
   button = { show = true, point = "TOPRIGHT", x = -24, y = -250 },
   fontSize = 13,
   autoRoute = false, -- how a new route starts: updated when the quest log changes, or not (Settings; each route has its own switch)
-  lookByName = true, -- tracked creatures are also looked for by name, beyond nameplate range (Settings)
+  lookByName = true, -- tracked creatures are also looked for by name; false only when the game showed its popup
   routeAlerts = true, -- the screen says when a route is being updated and when it is done (Settings)
 }
 local MAX_CONVS, MAX_ENTRIES = 25, 50

@@ -75,7 +75,7 @@ def asked(sim) -> list[str]:
     return out
 
 
-SETTING = "New routes: update when my quests change"
+SETTING = "Update new routes when my quests change"
 
 
 def take_a_quest(sim, qid=939, title="Crown of the Earth"):
@@ -335,7 +335,7 @@ def test_an_update_is_a_news_line_and_an_alert_on_the_screen(sim):
 
     sim.click("Settings")
     sim.run(1)
-    sim.click("Show on the screen when a route is updated")
+    sim.click("Show route updates on screen")
     assert sim.lua("return ForeverAI.db.routeAlerts") is False
     sim.click("Chat")
     take_a_quest(sim, 940, "The Balance of Nature")
@@ -680,5 +680,5 @@ def test_a_stop_done_by_what_the_player_did_is_told(sim):
     assert notices(sim)[-1] == "ForeverAI: done: Sentinel Dalia Sunblade. The route is finished."
     sim.click("Settings")
     sim.run(1)
-    sim.click("Show on the screen when a route is updated")
+    sim.click("Show route updates on screen")
     assert sim.errors == []

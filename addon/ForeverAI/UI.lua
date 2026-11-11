@@ -949,29 +949,19 @@ local function buildSettings(p)
     data:SetSize(math.max(width, 10), grid[2])
   end
 
-  head("Route and tracking")
+  head("Routes")
   local routeRow = CreateFrame("Frame", nil, c)
   routeRow:SetSize(420, 26)
-  local autoRoute = Check(routeRow, "New routes: update when my quests change", function() return ns.db.autoRoute == true end,
+  local autoRoute = Check(routeRow, "Update new routes when my quests change", function() return ns.db.autoRoute == true end,
     function(v) ns.db.autoRoute = v end)
   autoRoute:SetPoint("LEFT")
   row(routeRow, 28)
   local alertRow = CreateFrame("Frame", nil, c)
   alertRow:SetSize(420, 26)
-  local alerts = Check(alertRow, "Show on the screen when a route is updated", function() return ns.db.routeAlerts ~= false end,
+  local alerts = Check(alertRow, "Show route updates on screen", function() return ns.db.routeAlerts ~= false end,
     function(v) ns.db.routeAlerts = v end)
   alerts:SetPoint("LEFT")
   row(alertRow, 28)
-
-  local farRow = CreateFrame("Frame", nil, c)
-  farRow:SetSize(420, 26)
-  local far = Check(farRow, "Find tracked creatures beyond nameplate range", function() return ns.db.lookByName ~= false end,
-    function(v)
-      ns.db.lookByName = v
-      if ns.Track then ns.Track.byName = nil end -- checked again when it is turned on
-    end)
-  far:SetPoint("LEFT")
-  row(farRow, 28)
 
   head("Appearance")
   local look = CreateFrame("Frame", nil, c)

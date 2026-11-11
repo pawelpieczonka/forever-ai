@@ -674,7 +674,7 @@ function T.Debug()
     tostring(cvar("nameplateShowAll")), "nameplateMaxDistance", tostring(cvar("nameplateMaxDistance")))
   ns.print("units seen (" .. #units .. "):", #names > 0 and table.concat(names, ", ") or "none")
   ns.print("markers shown:", #T.Marked(), "| blocked by the game:", tostring(T.blocked or "nothing"))
-  ns.print("looking by name:", ns.db and ns.db.lookByName == false and "turned off (Settings)"
+  ns.print("looking by name:", ns.db and ns.db.lookByName == false and "turned off (the game showed its popup)"
     or T.byName == nil and "not tried yet (nothing is tracked)" or T.byName and "works" or "not available in this game")
   for _, line in ipairs(T.Section() or { "nothing is tracked" }) do ns.print(line) end
 end
