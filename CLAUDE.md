@@ -83,7 +83,8 @@ On Windows, use the same steps with `$env:FOREVERAI_DATA`.
 - **Python with the distribution's Tk.** Use the same kind of Python as the Linux build. A standalone Python's Tk (uv, python-build-standalone) draws bitmap fonts, so its screenshots do not show what players see and hide layout that only breaks with real fonts. `companion/.venv` may be such a Python. In that case make a venv from `/usr/bin/python3` and run `pip install -r companion/requirements.txt -c companion/constraints.txt` in it.
 - **Stand-in game folder.** Any folder with a `Wow.exe` works. It stops the app from replacing the add-on in the real game with the one from `main`.
 - **Fresh data folder.** It keeps the user's settings, conversations and characters out of the pictures, which matters because the repository is public. The same `kb.sqlite` and the skipped desktop-shortcut question make both windows start in the same state.
-- **One instance.** Only one ForeverAI runs at a time, so ask the user to close theirs first.
+- **One instance.** Only one ForeverAI runs at a time (it holds port 47811). Ask the user to close theirs, or start a second one from a small wrapper that sets `foreverai.app.SINGLE_INSTANCE_PORT` to another port before it calls `foreverai.app.main()`. Then capture that window by its id (Tk's `wm_frame()`), because `import -window ForeverAI` may take the user's window.
+- **Clean game path.** The window's Game row shows the stand-in folder's full path, e.g. a long temporary one. For a picture that stays (the README's), give the folder a clean path in a private mount namespace: `unshare -rm`, a tmpfs over `/home` with your own home bound back, and `/home/player/Games/World of Warcraft` holding a `Wow.exe`; then start the app as yourself again with a nested `unshare -U --map-user=<your uid> --map-group=<your gid>`.
 - **Capturing.** Wait until the window has settled, then capture the same view at the window's default size. On Linux, `import -window ForeverAI before.png` (ImageMagick) captures just the window, also under Wayland, because Tk runs on XWayland.
 
 Pull request images go on the `screenshots` branch, which is never merged, so they stay out of `main` and the apps. Put them under `pr-<number>/` as `before.png` and `after.png`, or as `<view>-before.png` and `<view>-after.png` when more than one view changed (e.g. `addon-settings-before.png`); the first time, create the branch with `git worktree add --orphan -b screenshots <dir>`. Show each pair side by side:
@@ -105,6 +106,20 @@ Pull request images go on the `screenshots` branch, which is never merged, so th
 ## Integrations with other add-ons
 
 ForeverAI reads other add-ons (Auctionator's price data and public API, Pawn's upgrade check, AceConfig options trees) but never changes their code or files. Changes to another add-on's settings only happen through a proposal the player accepts in the game.
+
+## The README
+
+The README is for players: what ForeverAI does, how to start, how to pick the AI. Developer material comes last, under Development, with the long parts folded in `<details>`. The README is not part of the apps, so a change to it keeps the version and can go in any pull request.
+
+- **Pictures and tables over prose.** A feature is a picture with its example questions next to it: an HTML `<table>` with the picture (`width="400"`) in one cell and the text in the other. Facts that share a shape go in a table: providers, add-ons, commands, paths per system. Prose only explains why, such as why the app has to run while you play.
+- **Pictures** go on the `screenshots` branch under `readme/`, linked as `https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/<name>.png?raw=true`. Take add-on pictures in the add-on simulator and the app window as described under Screenshots, with a clean game path. When a pull request changes a view the README shows, it replaces that picture.
+- **Facts come from the code.** Commands: `SlashCmdList.FOREVERAI` in `addon/ForeverAI/Core.lua`. AI providers: `companion/foreverai/config.py`, `gemini.py`, `claude_code.py` and the fallback in `service.py`. Release file names: `asset_name` in `updates.py`. Shortcuts: `setup_game.py`. Data folders: `config.data_dir`. Default model names change between releases, so the README leaves them out.
+- **Keep it current.** A pull request that adds or changes a command, an AI setting, a file name or path, or anything else players see, updates the matching row of the README.
+- **Mermaid.** A diagram three rows high was cut off at 180 px in GitHub's frame; one row (`flowchart LR`, no branches) shows in full. Keep labels to two short lines (`<br/>`); a line over about 20 characters wraps. Write `<` and `>` in a label as `#lt;` and `#gt;`, since `&lt;` disappears.
+- **GitHub's HTML.** Markdown inside an HTML cell or `<details>` needs a blank line before and after it. Use one alert (`> [!IMPORTANT]`) at most; the README's is the **Accept** rule.
+- **Wording.** Plain English, short sentences, UI labels in bold, no emoji. Run the text through `/no-ai-slop`.
+- **Check it on GitHub** after pushing, at `https://github.com/pawelpieczonka/forever-ai/blob/<commit>/README.md` (the branch URL may show an older version for a minute): every picture, table and diagram, with the `<details>` open.
+- **In the pull request**, describe a README change as a table of its parts, before and after, with a link to the README on the branch.
 
 ## Conventions
 
