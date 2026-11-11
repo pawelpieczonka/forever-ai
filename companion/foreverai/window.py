@@ -296,6 +296,8 @@ class AISettings:
                  ("gemini", "Google Gemini"))
     SEARCH = (("auto", "Auto"), ("always", "Always"), ("never", "Off"))
     MESSAGE_S = 8  # a result stays this long before the Claude Code hint comes back
+    SAME = "Same as questions"  # route updates are answered by the model of questions
+    SAME_EFFORT = "Same thinking"  # ... and with their thinking level
 
     def __init__(self, parent: tk.Misc, ask_key):
         from .service import EFFORT_NAMES
@@ -311,10 +313,13 @@ class AISettings:
         f.columnconfigure(2, weight=1)
         self.provider = ttk.Combobox(f, state="readonly", width=30, values=[n for _, n in self.PROVIDERS])
         self.model = ttk.Combobox(f, width=30)  # OpenRouter and Gemini: another model can be typed by its ID
+        # the model that answers the add-on's own updates of a route (switched on in the game), of this provider
+        self.route = ttk.Combobox(f, state="readonly", width=30, values=[self.SAME])
         self.effort = ttk.Combobox(f, state="readonly", width=14, values=[n for _, n in self.efforts])
         self.search = ttk.Combobox(f, state="readonly", width=14, values=[n for _, n in self.SEARCH])
         self.labels = {}
         for i, (text, box) in enumerate((("Provider", self.provider), ("Model", self.model),
+                                         ("Route updates", self.route),
                                          ("Thinking", self.effort), ("Web search", self.search))):
             lbl = tk.Label(f, text=text, bg=PANEL, fg=DIM, font=(UI, 9), anchor="w")
             lbl.grid(row=i, column=0, sticky="w", padx=(10, 12), pady=4)
@@ -325,7 +330,18 @@ class AISettings:
         self.note = tk.Label(f, text="", bg=PANEL, fg=DIM, font=(UI, 9), anchor="w", justify="left", wraplength=230)
         self.note.grid(row=1, column=2, sticky="w", padx=8)
         self.msg = tk.Label(f, text="", bg=PANEL, fg=DIM, font=(UI, 9), anchor="w", justify="left", wraplength=560)
-        self.msg.grid(row=4, column=0, columnspan=3, sticky="we", padx=10, pady=(0, 6))
+        self.msg.grid(row=5, column=0, columnspan=3, sticky="we", padx=10, pady=(0, 6))
+        # in the line of the model for route updates: their thinking level (Claude Code), then what the line is for
+        beside = tk.Frame(f, bg=PANEL)
+        beside.grid(row=2, column=2, sticky="w", padx=8)
+        self.route_effort = ttk.Combobox(beside, state="readonly", width=14,
+                                         values=[self.SAME_EFFORT] + [n for _, n in self.efforts])
+        self.route_note = tk.Label(beside, text="the route's own updates in the game", bg=PANEL, fg=DIM, font=(UI, 9),
+                                   anchor="w", justify="left", wraplength=230)
+        self.route_note.pack(side="right")
+        self.route.bind("<<ComboboxSelected>>", lambda _e: self._pick_route())
+        self.route_effort.bind("<<ComboboxSelected>>", lambda _e: self._pick(
+            "set_route_effort", dict((n, e) for e, n in self.efforts).get(self.route_effort.get(), "")))
         self.provider.bind("<<ComboboxSelected>>", lambda _e: self._pick_provider())
         self.model.bind("<<ComboboxSelected>>", lambda _e: self._pick_model())
         self.model.bind("<Return>", lambda _e: self._pick_model())
@@ -351,7 +367,7 @@ class AISettings:
         return {"claude_code": s.claude_model, "gemini": s.gemini_model}.get(s.provider, s.model)
 
     def _set_enabled(self, on: bool) -> None:
-        for box in (self.provider, self.effort, self.search):
+        for box in (self.provider, self.route, self.route_effort, self.effort, self.search):
             box.configure(state="readonly" if on else "disabled")
         claude = bool(self.comp) and self._settings().provider == "claude_code"
         self.model.configure(state=("readonly" if claude else "normal") if on else "disabled")
@@ -373,9 +389,15 @@ class AISettings:
                 self._load_choices(s.provider)
         if not self._editing():
             self._show_model()
+        self._show_route()
         for w in (self.effort, self.labels[self.effort]):  # only Claude Code has a thinking level
             w.grid() if s.provider == "claude_code" else w.grid_remove()
         self.effort.set(dict(self.efforts).get(s.claude_effort, s.claude_effort))
+        if s.provider == "claude_code":
+            self.route_effort.pack(side="left", padx=(0, 8))
+        else:
+            self.route_effort.pack_forget()
+        self.route_effort.set(dict(self.efforts).get(s.route_effort, s.route_effort) or self.SAME_EFFORT)
         self.search.set(dict(self.SEARCH).get(s.search_mode, s.search_mode))
         if time.time() > self._msg_until:
             self.msg.configure(text=self._hint(), fg=DIM)
@@ -400,6 +422,17 @@ class AISettings:
         choice = next((c for c in self.choices if c["id"] == mid), None)
         self.model.set(choice["name"] if choice else mid)
         self.note.configure(text=(choice or {}).get("price") or "")
+
+    def _show_route(self) -> None:
+        s = self._settings()
+        mid = (s.route_model or {}).get(s.provider) or ""
+        choice = next((c for c in self.choices if c["id"] == mid), None)
+        self.route.set(choice["name"] if choice else mid or self.SAME)
+
+    def _pick_route(self) -> None:
+        text = self.route.get().strip()
+        by_name = {c["name"]: c["id"] for c in self.choices}
+        self._pick("set_route_model", "" if text == self.SAME else by_name.get(text, text))
 
     def _load_choices(self, provider: str) -> None:
         comp = self.comp
@@ -459,6 +492,8 @@ class AISettings:
                         self.choices = result
                         names = [c["name"] for c in result]
                         self.model.configure(values=names, height=min(10, max(1, len(names))))
+                        self.route.configure(values=[self.SAME] + names, height=min(11, len(names) + 1))
+                        self._show_route()
                         if not self._editing():
                             self._show_model()
                     continue

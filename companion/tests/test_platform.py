@@ -217,3 +217,38 @@ def test_replaced_app_files_ask_for_a_restart(tmp_path, monkeypatch):
     assert app.Companion.files_replaced(comp) is True
     monkeypatch.setattr(sys, "frozen", False)
     assert app._exe_id() is None  # from source nothing is checked
+
+
+def test_a_claude_code_that_is_being_updated_is_tried_again(monkeypatch, caplog):
+    """Claude Code updates itself in the background: for a few seconds its file is half written and Windows refuses
+    to start it ("[WinError 216]"). The app then started on another, older copy and showed a warning."""
+    import subprocess
+    from foreverai import claude_code
+    calls, waits = [], []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[0] == "npm.exe" and len([c for c in calls if c[0] == "npm.exe"]) == 1:
+            raise OSError(216, "This version of %1 is not compatible with the version of Windows you're running")
+        out = '{"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "max"}' if cmd[1] == "auth" else \
+            ("2.1.322 (Claude Code)" if cmd[0] == "npm.exe" else "2.1.321 (Claude Code)")
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(claude_code, "candidate_executables", lambda: ["npm.exe", "bundled.exe"])
+    monkeypatch.setattr(claude_code.subprocess, "run", run)
+    monkeypatch.setattr(claude_code.time, "sleep", waits.append)
+    info = claude_code.detect(force=True)
+    assert info["path"] == "npm.exe" and info["version"] == "2.1.322" and info["loggedIn"] is True
+    assert waits and "failed" not in caplog.text  # waited for the update, and nothing to worry the player with
+
+    # one that does not start at all is passed over, and the log says so once
+    def broken(cmd, **kw):
+        if cmd[0] == "npm.exe":
+            raise OSError(216, "not a valid application")
+        return run(cmd, **kw)
+
+    monkeypatch.setattr(claude_code.subprocess, "run", broken)
+    info = claude_code.detect(force=True)
+    assert info["path"] == "bundled.exe" and info["version"] == "2.1.321"
+    assert caplog.text.count("npm.exe could not be started") == 1
+    monkeypatch.setattr(claude_code, "_detect_cache", None)

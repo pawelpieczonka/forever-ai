@@ -10,6 +10,16 @@ local player = { name = "Simtester", realm = "Forever", level = 24, race = "Nigh
                  zone = "Darkshore", subzone = "Auberdine", mapID = 1439, x = 0.371, y = 0.441 }
 sim.player = player
 
+-- TargetUnit is reserved for the game's own interface. The game refuses an add-on's call (ADDON_ACTION_FORBIDDEN),
+-- but only when there is a unit of that name to target: the refusal tells an add-on that the unit is in range.
+sim.inRange = {} -- names (lower case) of units in the game's range, set by tests
+function TargetUnit(name)
+  name = tostring(name)
+  if name == player.name or sim.inRange[name:lower()] then
+    sim.fire("ADDON_ACTION_FORBIDDEN", "ForeverAI", "TargetUnit()")
+  end
+end
+
 local function empty(name)
   return name:match("^GetNum") and function() return 0 end or function() return nil end
 end
@@ -139,6 +149,7 @@ local maps = {
   [1414] = { mapID = 1414, name = "Kalimdor", mapType = 2, parentMapID = 947, size = { 17500, 11666 } },
   [1439] = { mapID = 1439, name = "Darkshore", mapType = 3, parentMapID = 1414, size = { 6549.9, 4366.6 } },
   [1438] = { mapID = 1438, name = "Teldrassil", mapType = 3, parentMapID = 1414, size = { 5091.7, 3393.8 } },
+  [1457] = { mapID = 1457, name = "Darnassus", mapType = 3, parentMapID = 1414, size = { 1058.3, 705.7 } },
   [1440] = { mapID = 1440, name = "Ashenvale", mapType = 3, parentMapID = 1414, size = { 5766.7, 3843.7 } },
 }
 

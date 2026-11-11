@@ -13,7 +13,10 @@ ns.Track = T
 local MAX = 5
 local SCAN_S = 0.5
 local MAX_MARKERS = 8
-local SAY_AGAIN_S = 15 -- a creature that was out of sight this long is announced again
+local QUIET_S = 5 -- at most one announcement in this time: a group that walks in is one sound
+local AWAY_S = 60 -- none of them in sight for this long (10 s when the game is also asked by name): found again is news
+local AWAY_NAMED_S = 10
+local REMEMBER_S = 300 -- a creature seen this recently is the same creature, not a new one
 local LOGIN_S = 30 -- this long after a loading screen an empty quest log may just not be filled yet
 -- the picture of the marker per tracked creature (the art of the raid icons: only the picture, drawn by the add-on)
 local PICTURES = { 8, 7, 1, 2, 4 }
@@ -28,7 +31,9 @@ local function list()
 end
 
 -- what the last scan found, per name (lower case): { alive = n, names = the ones seen, marked = bool,
---   goneAt = time it left sight }
+--   near = the name of one the game has in its range without a nameplate, guids = the creatures seen (GUID -> when
+--   last), peak = the most seen at once (a game without GUIDs), presentAt = when one was last in sight or near,
+--   news = the name to announce once the quiet time is over, saidAt = when the last announcement was made }
 local sight = {}
 
 local function changed()
@@ -42,6 +47,74 @@ local function cvar(name)
 end
 
 local function inFight() return InCombatLockdown and InCombatLockdown() and true or false end
+
+------------------------------------------------------------------------ looking by name
+-- Nameplates reach about 40 yards in this game, whatever the setting says, and only what is on the screen. The game
+-- itself knows the units much farther out, and one call tells an add-on whether a unit of a given name is among
+-- them: TargetUnit is reserved for the game's own interface, and the game refuses an add-on's call
+-- (ADDON_ACTION_FORBIDDEN) only when there is such a unit to target. The refusal is the answer; nothing is targeted.
+-- (The add-on unitscan finds rares this way.)
+--
+-- The game answers a refusal with the popup "ForeverAI has been blocked from an action only available to the
+-- Blizzard UI". It is kept away three ways: the event is taken from the game's handler while tracking looks by name
+-- (refusals that are not this call are handed on to it), a popup that is shown for this call anyway is hidden in the
+-- same moment, and when that does not work either the search turns itself off for good (ns.db.lookByName).
+local LOOK_S = 1 -- a creature that is not in sight is looked for by its name this often
+local refused, asking, hooked = false, false, false
+
+local function quiet(on)
+  if on == (T.quiet or false) or not (UIParent and UIParent.UnregisterEvent) then return end
+  if on then pcall(UIParent.UnregisterEvent, UIParent, "ADDON_ACTION_FORBIDDEN")
+  else pcall(UIParent.RegisterEvent, UIParent, "ADDON_ACTION_FORBIDDEN") end
+  T.quiet = on
+end
+
+local function giveUp()
+  T.byName = false
+  if ns.db then ns.db.lookByName = false end
+  quiet(false)
+end
+
+local function hidePopups()
+  if hooked or not (hooksecurefunc and StaticPopup_Show) then return end
+  hooked = true
+  hooksecurefunc("StaticPopup_Show", function(which)
+    if not asking or (which ~= "ADDON_ACTION_FORBIDDEN" and which ~= "ADDON_ACTION_BLOCKED") then return end
+    if StaticPopup_Hide then pcall(StaticPopup_Hide, which) end
+    if not StaticPopup_Visible or StaticPopup_Visible(which) then giveUp() end -- it stays on the screen: never again
+  end)
+end
+
+local function exists(name)
+  if T.byName == false then return false end
+  refused, asking = false, true
+  pcall(TargetUnit, name, true)
+  asking = false
+  return refused
+end
+
+-- Does this game answer that way? Checked once: the player's own name must be refused, a name nobody has must not.
+-- T.byName: nil not tried, true works, false not available (then only nameplates, target and mouseover count).
+local function canLookByName()
+  if ns.db and ns.db.lookByName == false then
+    quiet(false)
+    return false
+  end
+  if T.byName == nil then
+    local me = clean(safe(UnitName, "player"))
+    if not (TargetUnit and me) then
+      T.byName = false
+    else
+      hidePopups()
+      quiet(true)
+      T.byName = true -- for the two questions of the check
+      local works = exists(me) and not exists("Nobody Has This Name Xq")
+      if T.byName then T.byName = works end -- unless a popup that stayed turned it off
+    end
+  end
+  quiet(T.byName)
+  return T.byName
+end
 
 -- How much the game lets the add-on see. A game set to show nameplates only for the target and for units in a fight
 -- (the default of this client) shows nothing of a creature that just stands there: "blind". Then "none in sight"
@@ -62,7 +135,8 @@ local function visible()
     local guid = clean(safe(UnitGUID, unit))
     if guid and known[guid] then return end
     if guid then known[guid] = true end
-    out[#out + 1] = { unit = unit, name = name:lower(), shown = name, dead = clean(safe(UnitIsDead, unit)) and true or false }
+    out[#out + 1] = { unit = unit, guid = guid, name = name:lower(), shown = name,
+                      dead = clean(safe(UnitIsDead, unit)) and true or false }
   end
   if C_NamePlate and C_NamePlate.GetNamePlates then
     for _, plate in ipairs(safe(C_NamePlate.GetNamePlates) or {}) do
@@ -70,8 +144,13 @@ local function visible()
       if unit then add(unit) end
     end
   end
+  local plates = #out
   for _, unit in ipairs({ "target", "mouseover" }) do
-    if safe(UnitExists, unit) then add(unit) end
+    local twice = false
+    for n = 1, UnitIsUnit and plates or 0 do
+      if safe(UnitIsUnit, unit, out[n].unit) then twice = true break end
+    end
+    if not twice and safe(UnitExists, unit) then add(unit) end
   end
   return out
 end
@@ -125,7 +204,8 @@ end
 
 ------------------------------------------------------------------------ announcing
 local function announce(name, alive)
-  local text = string.format("%s is in sight%s", name, alive > 1 and (" (" .. alive .. ")") or "")
+  local text = alive > 0 and string.format("%s is in sight%s", name, alive > 1 and (" (" .. alive .. ")") or "")
+    or (name .. " is near") -- found by its name, too far for a nameplate
   if PlaySound then pcall(PlaySound, (SOUNDKIT and SOUNDKIT.RAID_WARNING) or 8959, "Master") end
   if UIErrorsFrame and UIErrorsFrame.AddMessage then pcall(UIErrorsFrame.AddMessage, UIErrorsFrame, text, 0.36, 1, 0.62) end
   ns.print("|cff5dff9d" .. text .. "|r")
@@ -191,6 +271,50 @@ local function counting(mob)
   return set
 end
 
+-- One objective is tracked once: an entry whose creature already counts for an earlier entry goes (the route watched
+-- for Lasher Sproutling, then a mark came for Wrathvine, which gives the same fronds).
+local function mergeSame()
+  local tracked, merged = list(), false
+  for j = #tracked, 2, -1 do
+    local key = tracked[j].name:lower()
+    for i = 1, j - 1 do
+      if counting(tracked[i])[key] then
+        local gone = table.remove(tracked, j)
+        if gone.seen and not tracked[i].seen then tracked[i].seen = gone.seen end
+        sight[key] = nil
+        merged = true
+        break
+      end
+    end
+  end
+  return merged
+end
+
+-- after the list changed, or the quest database came: who counts for what, and no objective twice
+local function settle()
+  local grew = expandAll()
+  return mergeSame() or grew
+end
+
+-- is this creature watched for (by its own name or as one that counts for a tracked objective)?
+function T.Watches(name)
+  local key = tostring(name or ""):lower()
+  for _, mob in ipairs(list()) do
+    if counting(mob)[key] then return true end
+  end
+  return false
+end
+
+-- do these two creatures count for the same tracked objective?
+function T.Same(a, b)
+  a, b = tostring(a or ""):lower(), tostring(b or ""):lower()
+  for _, mob in ipairs(list()) do
+    local set = counting(mob)
+    if set[a] and set[b] then return true end
+  end
+  return false
+end
+
 -- what the player is told is tracked: the objective when several creatures give it
 local function label(mob) return mob.what or mob.name end
 
@@ -204,6 +328,39 @@ function T.Describe(name)
   return name
 end
 
+------------------------------------------------------------------------ what is news
+-- The sound and the line in the chat are for news, and news is a creature that was not there:
+--   * a creature the add-on has not seen lately comes into sight (the next one after a kill, a group walking in);
+--   * one is in sight or near after none was for a while (the player came back to them);
+--   * tracking starts and one is there.
+-- Not news: the same creatures going in and out of sight (nameplates follow the camera and every step a creature
+-- takes), and the change between "near" and "in sight" of creatures already known. Without GUIDs from the game the
+-- count stands in for them: only more at once than ever seen here is news.
+-- At most one announcement in QUIET_S; news in that time is said when it ends, if a creature is still there.
+local function present(s, mob, alive, near, newcomer, newId, clock, byName)
+  for id, t in pairs(s.guids) do
+    if clock - t > REMEMBER_S then s.guids[id] = nil end
+  end
+  local here = alive > 0 or near ~= nil
+  if here then
+    local away = byName and AWAY_NAMED_S or AWAY_S
+    if not s.presentAt or clock - s.presentAt >= away then
+      s.news, s.newsId, s.peak = newcomer or s.names[1] or near or mob.name, nil, 0
+    elseif newcomer and not s.news then
+      s.news, s.newsId = newcomer, newId
+    end
+    s.presentAt = clock
+  else
+    s.news = nil -- gone before it was said: no late news
+  end
+  -- the newcomer itself left during the quiet time (not just a nameplate that blinked): the others are no news
+  if s.news and s.newsId and clock - (s.guids[s.newsId] or 0) > 2 then s.news, s.newsId = nil, nil end
+  if s.news and clock - (s.saidAt or -QUIET_S) >= QUIET_S then
+    announce(s.news, alive)
+    s.saidAt, s.news, s.newsId = clock, nil, nil
+  end
+end
+
 ------------------------------------------------------------------------ scanning
 local lastMode -- which nameplates the game showed at the last scan, and whether a fight was on: the strip says it
 
@@ -211,23 +368,31 @@ function T.Scan()
   local tracked = list()
   if #tracked == 0 then
     if #markers > 0 then hideMarkers(1) end
+    quiet(false) -- nothing to look for: the game's own handler has its event back
     return
   end
   local units = visible()
-  local used, refresh, now = 0, false, time()
+  local used, refresh, now, clock = 0, false, time(), GetTime()
+  local byName = canLookByName()
   for i, mob in ipairs(tracked) do
     local key = mob.name:lower()
     local s = sight[key]
     if not s then
-      s = { alive = 0, names = {} }
+      s = { alive = 0, names = {}, guids = {}, peak = 0 }
       sight[key] = s
     end
     local was, alive, marked, counts = s.alive, 0, false, counting(mob)
+    local newcomer, newId, ids = nil, nil, 0
     wipe(s.names)
     for _, u in ipairs(units) do
       if counts[u.name] and not u.dead then
         alive = alive + 1
         if not tContains(s.names, u.shown) then s.names[#s.names + 1] = u.shown end
+        if u.guid then
+          ids = ids + 1
+          if not s.guids[u.guid] and not newcomer then newcomer, newId = u.shown, u.guid end
+          s.guids[u.guid] = clock
+        end
         local plate = C_NamePlate and C_NamePlate.GetNamePlateForUnit and safe(C_NamePlate.GetNamePlateForUnit, u.unit)
         if plate and used < MAX_MARKERS then
           used = used + 1
@@ -242,12 +407,22 @@ function T.Scan()
         end
       end
     end
-    if alive > 0 then
-      if was == 0 and (not s.told or not s.goneAt or now - s.goneAt >= SAY_AGAIN_S) then
-        announce(s.names[1] or mob.name, alive)
-        s.told = true
+    -- none in sight: is one in the game's range at all? (once a second; the answer stands in between)
+    local near = s.near
+    if alive > 0 or not byName then
+      near = nil
+    elseif clock - (s.lookedAt or -LOOK_S) >= LOOK_S then
+      s.lookedAt = clock
+      near = exists(mob.name) and mob.name or nil
+      for _, other in ipairs(not near and mob.also or {}) do
+        if exists(other) then near = other break end
       end
-      s.goneAt = nil
+    end
+    if near ~= s.near then s.near, refresh = near, true end
+    if ids < alive and alive > s.peak and s.presentAt then newcomer = newcomer or s.names[1] end -- no GUIDs: the count
+    present(s, mob, alive, near, newcomer, newId, clock, byName)
+    s.peak = math.max(s.peak, alive)
+    if alive > 0 then
       local mapID, x, y = playerSpot()
       if x then
         local seen = mob.seen or {}
@@ -258,8 +433,6 @@ function T.Scan()
         seen.t, seen.mapID, seen.x, seen.y = now, mapID, x, y
         mob.seen = seen
       end
-    elseif was > 0 then
-      s.goneAt = now
     end
     s.alive, s.marked = alive, marked
     if was ~= alive then refresh = true end
@@ -330,7 +503,7 @@ end
 -- the settings follow the list: on while something is tracked, back when nothing is (called again after a fight)
 local function syncNameplates()
   if #list() > 0 then
-    expandAll()
+    settle()
     if T.ShowNameplates() then pcall(T.Scan) changed() end
   else
     restoreNameplates()
@@ -349,10 +522,16 @@ end
 
 function T.CheckQuests()
   local tracked = list()
-  local gone = expandAll() -- the quest database may have come since
+  local gone = settle() -- the quest database may have come since
   local quests = logQuests()
   for i = #tracked, 1, -1 do
-    if finished(tracked[i], quests) then forget(i) gone = true end
+    if finished(tracked[i], quests) then
+      local names = counting(tracked[i])
+      forget(i)
+      gone = true
+      -- nothing left to do at the stops that led to these creatures
+      if ns.Map and ns.Map.Done then pcall(ns.Map.Done, names) end
+    end
   end
   if gone then
     T.Scan()
@@ -376,7 +555,7 @@ function T.Set(mobs, add)
     local name = type(m) == "table" and m.name or m
     if type(name) == "string" and name ~= "" and #tracked < MAX then
       local key, known = name:lower(), false
-      for _, t in ipairs(tracked) do if t.name:lower() == key then known = true end end
+      for _, t in ipairs(tracked) do if counting(t)[key] then known = true end end
       if not known then
         local mob = old[key] or { name = name, since = time() }
         old[key] = nil
@@ -390,7 +569,7 @@ function T.Set(mobs, add)
     end
   end
   for key in pairs(old) do sight[key] = nil end
-  expandAll()
+  settle()
   if #tracked > 0 then T.ShowNameplates() else restoreNameplates() end
   T.Scan()
   changed()
@@ -400,7 +579,7 @@ end
 function T.Stop(name)
   local tracked = list()
   for i = #tracked, 1, -1 do
-    if not name or tracked[i].name:lower() == name:lower() then forget(i) end
+    if not name or counting(tracked[i])[name:lower()] then forget(i) end
   end
   T.Scan()
   changed()
@@ -422,8 +601,9 @@ function T.State()
   for _, mob in ipairs(list()) do
     local s = sight[mob.name:lower()] or {}
     local alive = s.alive or 0
-    out[#out + 1] = { name = mob.name, label = label(mob), alive = alive, blind = blind and alive == 0,
-                      waiting = blind and alive == 0 and waiting }
+    local near = alive == 0 and s.near or nil
+    out[#out + 1] = { name = mob.name, label = label(mob), alive = alive, near = near,
+                      blind = blind and alive == 0 and not near, waiting = blind and alive == 0 and not near and waiting }
   end
   return out
 end
@@ -471,6 +651,10 @@ function T.Section()
     end
     if s.alive > 0 then
       out[i] = string.format("%s: %d alive in sight now%s%s", head, s.alive, which, s.marked and ", highlighted on the screen" or "")
+    elseif s.near then
+      out[i] = string.format("%s: %s is near but not in sight: the game has a unit of that name in its range, farther "
+        .. "than nameplates reach; whether it is alive and where it stands is not known until the player is closer or "
+        .. "targets it%s", head, s.near, last and ("; " .. last) or "")
     elseif blind then
       out[i] = string.format("%s: not seen, but %s, so one can be near without being seen%s", head, blind,
         last and ("; " .. last) or "")
@@ -490,6 +674,8 @@ function T.Debug()
     tostring(cvar("nameplateShowAll")), "nameplateMaxDistance", tostring(cvar("nameplateMaxDistance")))
   ns.print("units seen (" .. #units .. "):", #names > 0 and table.concat(names, ", ") or "none")
   ns.print("markers shown:", #T.Marked(), "| blocked by the game:", tostring(T.blocked or "nothing"))
+  ns.print("looking by name:", ns.db and ns.db.lookByName == false and "turned off (Settings)"
+    or T.byName == nil and "not tried yet (nothing is tracked)" or T.byName and "works" or "not available in this game")
   for _, line in ipairs(T.Section() or { "nothing is tracked" }) do ns.print(line) end
 end
 
@@ -524,10 +710,18 @@ do -- the quest log changes in bursts: look once they have settled
   -- anything of ours the game refuses is remembered, so that /fai track can say what it was
   local guard = CreateFrame("Frame")
   for _, e in ipairs({ "ADDON_ACTION_FORBIDDEN", "ADDON_ACTION_BLOCKED" }) do pcall(guard.RegisterEvent, guard, e) end
-  guard:SetScript("OnEvent", function(_, _, addon, func)
+  guard:SetScript("OnEvent", function(_, event, addon, func)
+    if addon == ADDON and asking then
+      refused = true -- the answer to a look by name, not a fault
+      return
+    end
     if addon == ADDON then
       T.blocked = tostring(func)
       ns.lastError = "the game blocked " .. tostring(func)
+    end
+    if T.quiet and event == "ADDON_ACTION_FORBIDDEN" then -- the game's own handler is off: hand it on
+      local handler = UIParent and UIParent.GetScript and UIParent:GetScript("OnEvent")
+      if handler then pcall(handler, UIParent, event, addon, func) end
     end
   end)
 end

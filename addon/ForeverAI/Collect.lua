@@ -803,6 +803,17 @@ local function questStatic(qid, questie)
     if okQ and type(qd) == "table" then
       s.questGiver = qd.startedBy and questieNPCs(questie, qd.startedBy[1])
       s.turnIn = qd.finishedBy and questieNPCs(questie, qd.finishedBy[1])
+      -- the quest that follows this one in its chain: taking it at the turn-in is what a route plans for
+      local nextId = tonumber(qd.nextQuestInChain)
+      if nextId and nextId > 0 then
+        local okN, nq = pcall(questie.GetQuest, nextId)
+        if not (okN and type(nq) == "table") then okN, nq = pcall(questie.GetQuest, questie, nextId) end
+        local giver = okN and type(nq) == "table" and nq.name and nq.startedBy and questieNPCs(questie, nq.startedBy[1])
+        if giver then
+          s.next = { id = nextId, minLevel = tonumber(nq.requiredLevel) or 0,
+            text = string.format("[%s]%s from %s", nq.name, nq.questLevel and (" (level " .. nq.questLevel .. ")") or "", giver) }
+        end
+      end
     end
     local okS, sources = pcall(objectiveSources, questie, qid)
     s.sources = okS and sources or nil
@@ -860,6 +871,9 @@ function S.quests()
       local st = questStatic(qid, questie)
       e.objectiveText, e.description, e.rewards = st.objectiveText, st.description, st.rewards
       e.questGiver, e.turnIn = st.questGiver, st.turnIn
+      if st.next and st.next.minLevel <= (UnitLevel("player") or 1) then -- one the character can take already
+        e.next, e.nextId = st.next.text, st.next.id
+      end
       if e.status == "in progress" then e.whereToGet = whereToGet(st.sources, mapID, px, py, area, texts) end
       out[#out + 1] = e
     end

@@ -15,7 +15,7 @@ FAKES = r"""
 local units, plates = {}, {}
 function TEST_show(list)
   units = {}
-  for i, u in ipairs(list) do units["nameplate" .. i] = { name = u.name, dead = u.dead, guid = "Creature-0-1-2-3-" .. i .. "-" .. (u.id or i) } end
+  for i, u in ipairs(list) do units["nameplate" .. i] = { name = u.name, dead = u.dead, guid = "Creature-0-1-2-3-" .. (u.id and ("id-" .. u.id) or (i .. "-" .. i)) } end
 end
 function TEST_marked()
   local out = ForeverAI.Track.Marked()
@@ -140,10 +140,10 @@ ANSWER = """ForeverAI.UI.UpdateAnswer({ final = true, msgId = 1, text = "Go ther
 def test_strip_shows_what_goes_on_and_ends_it(sim, tmp_path):
     sim.slash("/fai")
     sim.lua('SetCVar("nameplateMaxDistance", "100")')  # nothing left to widen: no button on the chip
-    assert "Tracking Strigid" not in shown(sim) and "Route ·" not in shown(sim)
+    assert "Tracking Strigid" not in shown(sim) and "Route (" not in shown(sim)
     sim.lua(ANSWER)
     sim.run(1)
-    assert "Tracking Strigid Screecher (0)" in shown(sim) and "Route · 2 stops" in shown(sim)
+    assert "Tracking Strigid Screecher (0)" in shown(sim) and "Route (2)" in shown(sim)
     assert "Watching for Strigid Screecher: a living one in sight is marked on the screen and announced." in shown(sim)
     sim.lua('TEST_show({ { name = "Strigid Screecher" }, { name = "Strigid Screecher" } })')
     sim.run(1)
@@ -152,11 +152,11 @@ def test_strip_shows_what_goes_on_and_ends_it(sim, tmp_path):
 
     sim.click("x", nth=2)  # the first x closes the window; the chips follow
     sim.run(1)
-    assert "Tracking Strigid" not in shown(sim) and "Route · 2 stops" in shown(sim)
+    assert "Tracking Strigid" not in shown(sim) and "Route (2)" in shown(sim)
     assert text(sim.lua("return TEST_marked()")) == ""
     sim.click("x", nth=2)
     sim.run(1)
-    assert "Route ·" not in shown(sim) and sim.lua("return ForeverAI.Map.Count()") == 0
+    assert "Route (" not in shown(sim) and sim.lua("return ForeverAI.Map.Count()") == 0
     assert sim.errors == []
 
 
@@ -165,13 +165,14 @@ def test_new_marks_without_a_creature_end_the_tracking(sim):
     sim.lua(ANSWER)
     sim.lua('ForeverAI.UI.UpdateAnswer({ final = true, msgId = 2, text = "Turn it in.", marks = { { title = "Dazalar", x = 50, y = 40 } } })')
     sim.run(1)
-    assert "Tracking Strigid" not in shown(sim) and "Route · 1 stop" in shown(sim)
+    assert "Tracking Strigid" not in shown(sim) and "Route (1)" in shown(sim)
     sim.lua(ANSWER.replace("msgId = 1", "msgId = 3, marksReplace = false"))  # an extra stop: the earlier marks stay
     sim.run(1)
-    assert "Tracking Strigid Screecher" in shown(sim) and "Route · 3 stops" in shown(sim)
+    assert "Tracking Strigid Screecher" in shown(sim)
+    assert "Route (2)" in shown(sim)  # Dazalar is on the route already: not marked twice
     sim.slash("/fai stop")
     sim.run(1)
-    assert "Tracking Strigid" not in shown(sim) and "Route ·" not in shown(sim)
+    assert "Tracking Strigid" not in shown(sim) and "Route (" not in shown(sim)
 
 
 # The player's real game showed nameplates only for the target and for units in a fight (nameplateShowAll = 0): the
@@ -385,3 +386,256 @@ def test_a_nameplate_that_comes_or_goes_is_looked_at_at_once(sim):
     sim._wow.fire(b"NAME_PLATE_UNIT_REMOVED")
     sim.run(0.1)
     assert text(sim.lua("return TEST_marked()")) == ""
+
+
+# The player's real game: the route watched for Lasher Sproutling, then the AI added a mark for Wrathvine, which
+# gives the same Dewy Lasher Fronds, and the strip showed "Tracking Dewy Lasher Frond (0)" twice.
+def test_one_objective_is_tracked_once(sim):
+    sim.slash("/fai")
+    sim.lua(QUESTIE)
+    sim.lua(BELTS)
+    sim.run(1)
+    sim.lua('ForeverAI.UI.UpdateAnswer({ final = true, msgId = 2, text = "More of them here.", marksReplace = false, '
+            'marks = { { title = "Bloodfeather Harpy (Bloodfeather Belt)", x = 38.6, y = 40.5, mob = "Bloodfeather Harpy" } }, '
+            'track = { { name = "Bloodfeather Harpy" } } })')
+    sim.run(1)
+    assert shown(sim).count("Tracking Bloodfeather Belt") == 1
+    assert sim.lua("return #ForeverAI.Track.State()") == 1
+
+    # two creatures of one objective in the same answer, and one that has nothing to do with it
+    sim.lua('ForeverAI.Track.Set({ { name = "Bloodfeather Sorceress", quest = "The Enchanted Glade" }, '
+            '{ name = "Bloodfeather Rogue", quest = "The Enchanted Glade" }, { name = "Strigid Owl" } })')
+    names = "local out = {} for i, s in ipairs(ForeverAI.Track.State()) do out[i] = s.name end return table.concat(out, ',')"
+    assert text(sim.lua(names)) == "Bloodfeather Sorceress,Strigid Owl"
+    sim.lua('ForeverAI.Track.Stop("bloodfeather harpy")')  # by any name that counts for it
+    assert text(sim.lua(names)) == "Strigid Owl"
+    assert sim.errors == []
+
+
+MAP = "local s = ForeverAI.Map.Section() return s and table.concat(s, ' | ') or 'nothing'"
+
+
+def test_a_stop_with_a_watched_creature_stays_until_its_objective_is_done(sim):
+    """"Oznacz mi je jeszcze raz": the stop left the map when the player reached it, with 0 of 6 collected."""
+    sim.slash("/fai")
+    sim.lua(QUESTIE)
+    sim._wow.player.x, sim._wow.player.y = 0.30, 0.30
+    sim.lua('ForeverAI.UI.UpdateAnswer({ final = true, msgId = 1, text = "The route.", '
+            'marks = { { title = "1. Bloodfeather Rogue", x = 37.3, y = 37.8, mob = "Bloodfeather Rogue" }, '
+            '{ title = "2. Sentinel Arynia", x = 38.3, y = 34.4 } }, '
+            'track = { { name = "Bloodfeather Rogue", quest = "The Enchanted Glade" } } })')
+    sim._wow.player.x, sim._wow.player.y = 0.373, 0.378  # at the stop: the belts are still to collect
+    sim.run(5)
+    assert text(sim.lua(MAP)).startswith("1. Bloodfeather Rogue — ") and "Route (2)" in shown(sim)
+
+    sim.lua("TEST_belts = 6")  # the objective is done: the stop goes, wherever the player stands
+    sim._wow.player.x = 0.36
+    sim._wow.fire(b"QUEST_LOG_UPDATE")
+    sim.run(3)
+    assert "1. Bloodfeather Rogue — Darkshore 37.3, 37.8 (done) | 2. Sentinel Arynia — " in text(sim.lua(MAP))
+    assert "Tracking" not in shown(sim).replace("Tracking:", "") and "Route (1/2)" in shown(sim)
+    assert "Taken off the route by the player" not in text(sim.lua(MAP))
+
+    sim._wow.player.x, sim._wow.player.y = 0.383, 0.344  # a stop without a creature is done when it is reached
+    sim.run(5)
+    assert text(sim.lua(MAP)).endswith("2. Sentinel Arynia — Darkshore 38.3, 34.4 (done)")
+    assert sim.errors == []
+
+
+def test_every_new_creature_is_announced_but_a_group_only_once(sim):
+    """News is a creature that was not there: the next one after a kill, a group that walks in (one sound), the same
+    ones found again after the player was away from them. At most one sound in five seconds."""
+    sounds = lambda: sim.lua("return TEST_sounds")  # noqa: E731
+    sim.lua(TRACK)
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 1 } })')
+    sim.run(1)
+    assert sounds() == 1
+    # the first one is killed and another walks in a moment later, while the first is still counted in sight
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 1 }, { name = "Strigid Screecher", id = 2 } })')
+    sim.run(1)
+    assert sounds() == 1  # too soon after the last sound: it waits
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 1, dead = true }, { name = "Strigid Screecher", id = 2 } })')
+    sim.run(5)
+    assert sounds() == 2  # and comes once the quiet time is over, because the new one is still there
+    sim.run(10)
+    assert sounds() == 2
+
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 2 }, { name = "Strigid Screecher", id = 3 }, '
+            '{ name = "Strigid Screecher", id = 4 }, { name = "Strigid Screecher", id = 5 } })')
+    sim.run(2)
+    assert sounds() == 3 and "Strigid Screecher is in sight (4)" in shown(sim)  # a group: one sound
+    sim.run(10)
+    assert sounds() == 3
+
+    sim.lua("TEST_show({})")  # the same one out of sight for a while and back (the camera turned): not news
+    sim.run(8)
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 3 } })')
+    sim.run(2)
+    assert sounds() == 3
+    sim.lua("TEST_show({})")  # the player was away from them for a minute: found again, said again
+    sim.run(70)
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 3 } })')
+    sim.run(2)
+    assert sounds() == 4
+
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 3 }, { name = "Strigid Screecher", id = 6 } })')
+    sim.run(1)  # a new one that is gone before the quiet time ends is not announced late
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 3 } })')
+    sim.run(8)
+    assert sounds() == 4
+    assert sim.errors == []
+
+
+# The player's real game: "I stand next to the same creatures and the sound plays again and again." Nameplates come
+# and go with the camera and with every step a creature takes, and so does the difference between "in sight" and
+# "near": none of that is news.
+STAND = r"""
+local seed = 7
+local function rnd(n) seed = (seed * 1103515245 + 12345) % 2147483648 return seed % n end
+function TEST_flicker()  -- which of the three creatures have a nameplate this second, and what the player points at
+  local list = {}
+  for id = 1, 3 do
+    if rnd(3) > 0 then list[#list + 1] = { name = "Strigid Screecher", id = id } end
+  end
+  if rnd(4) == 0 then list[#list + 1] = { name = "Strigid Owl", id = 9 } end
+  TEST_show(list)
+end
+"""
+
+
+def _stand(sim, seconds=150):
+    for _ in range(seconds):
+        sim.lua("TEST_flicker()")
+        sim.run(1)
+    return sim.lua("return TEST_sounds")
+
+
+def test_standing_next_to_the_same_creatures_is_silent(sim):
+    sim.lua(STAND)
+    sim.lua(TRACK)
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 1 }, { name = "Strigid Screecher", id = 2 }, '
+            '{ name = "Strigid Screecher", id = 3 } })')
+    sim.run(2)
+    assert sim.lua("return TEST_sounds") == 1
+    assert _stand(sim) == 1
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 1 }, { name = "Strigid Screecher", id = 4 } })')  # a new one
+    sim.run(6)
+    assert sim.lua("return TEST_sounds") == 2
+    assert sim.errors == []
+
+
+def test_standing_there_is_silent_with_the_search_by_name(sim):
+    """A creature without a nameplate for a moment is "near", then "in sight" again: the same creature all along."""
+    sim.lua(STAND)
+    sim._wow.inRange[b"strigid screecher"] = True
+    sim.lua(TRACK)
+    sim.run(2)
+    assert sim.lua("return TEST_sounds") == 1  # near
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 1 }, { name = "Strigid Screecher", id = 2 }, '
+            '{ name = "Strigid Screecher", id = 3 } })')
+    sim.run(6)
+    assert sim.lua("return TEST_sounds") == 2  # now they are in sight: said once
+    assert _stand(sim) == 2
+    assert sim.errors == []
+
+
+def test_standing_there_is_silent_without_the_search_by_name_and_without_ids(sim):
+    """A game that gives no GUIDs, the search by name turned off: the count is all there is, and the target is not
+    counted twice."""
+    sim.lua(STAND)
+    sim.lua("ForeverAI.db.lookByName = false UnitGUID = function() return nil end")
+    sim.lua(LOOK_AT)
+    sim.lua(TRACK)
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 1 }, { name = "Strigid Screecher", id = 2 }, '
+            '{ name = "Strigid Screecher", id = 3 } })')
+    sim.run(2)
+    assert sim.lua("return TEST_sounds") == 1
+    sim.lua('TEST_unit("target", { name = "Strigid Screecher" }) UnitIsUnit = function(a, b) return a == "target" and b == "nameplate1" end')
+    sim._wow.fire(b"PLAYER_TARGET_CHANGED")
+    sim.run(2)
+    assert text(sim.lua(SECTION)).startswith("Strigid Screecher: 3 alive in sight now")  # the target is one of the three
+    assert _stand(sim) == 1
+    assert sim.errors == []
+
+
+# Nameplates reach about 40 yards in this game whatever the setting says; the creatures stood farther off, in view.
+# The game refuses an add-on's TargetUnit only when a unit of that name is in its range, which is much farther: the
+# refusal is the answer and nothing is targeted. The game's "blocked" popup for it must never be seen.
+POPUP = r"""TEST_popups, TEST_shown = 0, {}
+function StaticPopup_Show(which, addon) TEST_shown[which] = true TEST_popups = TEST_popups + 1 end
+function StaticPopup_Hide(which) TEST_shown[which] = nil end
+function StaticPopup_Visible(which) return TEST_shown[which] end
+UIParent:SetScript("OnEvent", function(_, event, addon) if event == "ADDON_ACTION_FORBIDDEN" then StaticPopup_Show(event, addon) end end)
+UIParent:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+function TEST_seen() local n = 0 for _ in pairs(TEST_shown) do n = n + 1 end return n end"""
+
+
+def test_a_creature_too_far_for_a_nameplate_is_found_by_its_name(sim):
+    sim.lua(POPUP)
+    sim.slash("/fai")
+    sim.lua(ANSWER)
+    sim.run(1)
+    assert "Tracking Strigid Screecher (0)" in shown(sim)
+    sim._wow.inRange[b"strigid screecher"] = True
+    sim.run(2)
+    assert "Tracking Strigid Screecher (near)" in shown(sim)
+    assert "Strigid Screecher is near" in shown(sim) and sim.lua("return TEST_sounds") == 1
+    assert text(sim.lua(SECTION)) == (
+        "Strigid Screecher: Strigid Screecher is near but not in sight: the game has a unit of that name in its range, "
+        "farther than nameplates reach; whether it is alive and where it stands is not known until the player is "
+        "closer or targets it")
+    sim.run(30)
+    assert sim.lua("return TEST_sounds") == 1  # said once while it stays near
+    sim.lua('TEST_show({ { name = "Strigid Screecher", id = 1 } })')  # close enough for a nameplate now
+    sim.run(1)
+    assert "Tracking Strigid Screecher (1)" in shown(sim) and sim.lua("return TEST_sounds") == 2
+    sim.lua("TEST_show({})")
+    sim._wow.inRange[b"strigid screecher"] = None
+    sim.run(2)
+    assert "Tracking Strigid Screecher (0)" in shown(sim)
+    assert sim.lua("return TEST_seen()") == 0  # no popup was left on the screen
+    sim.slash("/fai track")
+    assert "looking by name: works" in shown(sim)
+    sim.lua("ForeverAI.Track.Stop()")
+    sim.run(1)
+    assert sim.lua('return UIParent:IsEventRegistered("ADDON_ACTION_FORBIDDEN")') is True  # the game has its event back
+    assert sim.errors == []
+
+
+def test_a_popup_that_cannot_be_kept_away_ends_the_search_for_good(sim):
+    """The real game showed "ForeverAI has been blocked..." once. If a game shows it whatever the add-on does, the
+    search by name turns itself off, and stays off after a /reload."""
+    sim.lua(POPUP)
+    sim.lua("UIParent.UnregisterEvent = function() end StaticPopup_Hide = function() end")  # this game insists
+    sim.lua(TRACK)
+    sim._wow.inRange[b"strigid screecher"] = True
+    sim.run(3)
+    assert sim.lua("return TEST_popups") == 1  # once, never again
+    assert sim.lua("return ForeverAI.db.lookByName") is False
+    assert text(sim.lua(SECTION)) == "Strigid Screecher: none in sight now; not seen since it is tracked"
+    sim.run(20)
+    assert sim.lua("return TEST_popups") == 1
+
+
+def test_the_search_by_name_can_be_turned_off(sim):
+    sim.lua(POPUP)
+    sim.slash("/fai")
+    sim.click("Settings")
+    sim.run(1)
+    sim.click("Find tracked creatures beyond nameplate range")
+    assert sim.lua("return ForeverAI.db.lookByName") is False
+    sim.lua(TRACK)
+    sim._wow.inRange[b"strigid screecher"] = True
+    sim.run(3)
+    assert text(sim.lua(SECTION)) == "Strigid Screecher: none in sight now; not seen since it is tracked"
+    assert sim.lua("return TEST_popups") == 0
+
+
+def test_a_game_that_answers_differently_is_not_asked(sim):
+    sim.lua("TargetUnit = function() end")  # this game refuses nothing
+    sim.lua(TRACK)
+    sim._wow.inRange[b"strigid screecher"] = True
+    sim.run(2)
+    assert text(sim.lua(SECTION)) == "Strigid Screecher: none in sight now; not seen since it is tracked"
+    sim.slash("/fai track")
+    assert "looking by name: not available in this game" in shown(sim)

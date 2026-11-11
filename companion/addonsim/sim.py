@@ -450,6 +450,7 @@ class Sim:
 
     def render(self) -> Canvas:
         canvas = Canvas(self.screen[0], self.screen[1], self.text)
+        canvas.files = self.game_dir
         self._canvas = canvas
         try:
             self._wow.draw()

@@ -1246,6 +1246,11 @@ function MessageFrame:SetInsertMode() end
 ChatFrame1 = DEFAULT_CHAT_FRAME
 
 -- the game's notices in the upper middle of the screen ("Out of range"); add-ons put their own lines there too
+-- the game's own dialogs ("X has been blocked from an action only available to the Blizzard UI"): none is shown here
+function StaticPopup_Show(which) end
+function StaticPopup_Hide(which) end
+function StaticPopup_Visible(which) return nil end
+
 UIErrorsFrame = CreateFrame("Frame", "UIErrorsFrame", UIParent)
 UIErrorsFrame:SetPoint("TOP", UIParent, "TOP", 0, -122)
 UIErrorsFrame:SetSize(512, 60)
@@ -1910,6 +1915,7 @@ local function labelsOf(w)
     if rs.kind == "FontString" and rs.shown and rs.text ~= "" then out[#out + 1] = stripCodes(rs.text) end
   end
   if s.kind == "EditBox" then out[#out + 1] = stripCodes(s.text) end
+  if type(rawget(w, "tip")) == "string" then out[#out + 1] = stripCodes(w.tip) end -- an icon button: by its tooltip
   return out
 end
 

@@ -457,7 +457,11 @@ function A.Current(action)
   return t[key]
 end
 
-function A.Apply(action)
+-- ``done``: a sale to the vendor takes a few seconds (one stack at a time, each answered by the server); it is
+-- called when the sale is over with (stacks sold, stacks to sell, copper gained, why it ended early or nil).
+local SALE_STEP_S, SALE_SETTLE_S = 0.15, 4 -- between two stacks; how long the last answers are waited for
+
+function A.Apply(action, done)
   local entry = { at = now(), addon = action.addon, op = action.op, path = action.path, command = action.command,
     id = action.id }
   if action.op == "vendor_sell" then
@@ -468,17 +472,57 @@ function A.Apply(action)
     for bag = 0, 5 do
       for slot = 1, (C_Container.GetContainerNumSlots(bag) or 0) do
         local info = C_Container.GetContainerItemInfo(bag, slot)
-        if info and info.itemID and want[info.itemID] and not info.isLocked then queue[#queue + 1] = { bag, slot } end
+        if info and info.itemID and want[info.itemID] and not info.isLocked then
+          queue[#queue + 1] = { bag, slot, info.itemID }
+        end
       end
     end
     if #queue == 0 then return false, "These items are no longer in your bags." end
+    local before = GetMoney()
+    -- a stack is sold when its slot no longer holds the item; one the game still has locked is not answered yet
+    local function left()
+      local there, waiting = 0, 0
+      for _, q in ipairs(queue) do
+        local info = C_Container.GetContainerItemInfo(q[1], q[2])
+        if info and info.itemID == q[3] then
+          there = there + 1
+          if info.isLocked then waiting = waiting + 1 end
+        end
+      end
+      return there, waiting
+    end
+    local function finish(why)
+      local there = left()
+      if done then pcall(done, #queue - there, #queue, GetMoney() - before, why) end
+    end
+    -- The clicks are out: the result is what the bags hold once the game has answered them all. Answered means
+    -- that every stack is gone, or that none is locked and the bags stood still for a moment (a stack the game has
+    -- not answered yet is not one the vendor did not take, and not every game locks it meanwhile).
+    local function settle(why)
+      local waited, last, still = 0, nil, 0
+      local wait
+      wait = C_Timer.NewTicker(0.2, function()
+        waited = waited + 0.2
+        local there, waiting = left()
+        still = there == last and still + 1 or 0
+        last = there
+        if there == 0 or (waiting == 0 and still >= 3) or waited >= SALE_SETTLE_S then
+          wait:Cancel()
+          finish(why)
+        end
+      end)
+    end
     -- one stack at a time, like right-clicking with the vendor open
     local i = 0
     local ticker
-    ticker = C_Timer.NewTicker(0.15, function()
+    ticker = C_Timer.NewTicker(SALE_STEP_S, function()
       i = i + 1
       local q = queue[i]
-      if not q or not ns.MerchantOpen() then ticker:Cancel() return end
+      if not q or not ns.MerchantOpen() then
+        ticker:Cancel()
+        settle(q and "the vendor window was closed" or nil)
+        return
+      end
       C_Container.UseContainerItem(q[1], q[2])
     end)
     entry.old, entry.new = (#queue .. " stacks"), "sold"

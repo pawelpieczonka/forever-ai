@@ -2,13 +2,16 @@
 
 Solid colours (the add-on's WHITE8x8 backdrops and colour textures) and texts are drawn as the game draws them. The
 game's own art cannot be shipped, so the few textures the add-on uses are drawn as look-alikes (check box, size grip)
-and any other texture as a grey placeholder, listed in ``Canvas.placeholders``."""
+and any other texture as a grey placeholder, listed in ``Canvas.placeholders``. A texture an add-on ships in its own
+folder (a .tga under Interface\\AddOns) is drawn from that file, tinted by its vertex colour."""
 
 from __future__ import annotations
 
 import math
 
-from PIL import Image, ImageDraw
+from pathlib import Path
+
+from PIL import Image, ImageChops, ImageDraw
 
 from .text import TextEngine
 
@@ -34,6 +37,8 @@ class Canvas:
         self.draw_ = ImageDraw.Draw(self.im, "RGBA")
         self.text = text
         self.placeholders: set[str] = set()
+        self.files: Path | None = None  # the game folder: textures of the add-ons are read from it
+        self._pictures: dict[str, Image.Image | None] = {}
         self.boxes: dict[str, tuple] = {}
 
     # ------------------------------------------------------------------------------------------- helpers
@@ -128,6 +133,8 @@ class Canvas:
                            width=max(1, int(round(w / 12))))
             if not name.endswith("highlight"):  # the highlight is only shown under the mouse
                 self._paint(box, clip, grip)
+        elif self._picture(path) is not None:
+            self._image(box, clip, color, self._picture(path))
         else:
             self.placeholders.add(path)
 
@@ -135,6 +142,32 @@ class Canvas:
                 d.rectangle((x0 + dx, y0 + dy, x1 + dx - 1, y1 + dy - 1), fill=(120, 120, 130, int(alpha * 0.25)),
                             outline=(160, 160, 170, int(alpha * 0.6)))
             self._paint(box, clip, placeholder)
+
+    def _picture(self, path: str) -> Image.Image | None:
+        """A texture from an add-on's folder (the game reads .tga there): the real picture, or None."""
+        if path not in self._pictures:
+            pic = None
+            parts = path.replace("\\", "/").split("/")
+            if self.files is not None and len(parts) > 2 and parts[0].lower() == "interface" and parts[1].lower() == "addons":
+                f = Path(self.files, *parts)
+                for cand in (f, f.with_name(f.name + ".tga")):
+                    if cand.is_file():
+                        with Image.open(cand) as im:
+                            pic = im.convert("RGBA")
+                        break
+            self._pictures[path] = pic
+        return self._pictures[path]
+
+    def _image(self, box, clip, color, pic: Image.Image) -> None:
+        x0, y0, x1, y1 = box
+        cl = (max(x0, clip[0]), max(y0, clip[1]), min(x1, clip[2]), min(y1, clip[3]))
+        if cl[2] <= cl[0] or cl[3] <= cl[1]:
+            return
+        pic = pic.resize((x1 - x0, y1 - y0), Image.LANCZOS)
+        tinted = ImageChops.multiply(pic, Image.new("RGBA", pic.size, color[:3] + (255,)))
+        tinted.putalpha(pic.getchannel("A").point(lambda v: v * color[3] // 255))
+        part = tinted.crop((cl[0] - x0, cl[1] - y0, cl[2] - x0, cl[3] - y0))
+        self.im.paste(part, cl[:2], part)
 
     def _text(self, box, clip, color, text: bytes, font: bytes, size, flags: bytes, justify_h: bytes,
               justify_v: bytes, wrap, spacing, max_lines, wrap_width, sdx, sdy, sr, sg, sb, sa, scroll_end) -> None:

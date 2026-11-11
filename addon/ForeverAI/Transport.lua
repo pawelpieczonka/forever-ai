@@ -63,6 +63,7 @@ end
 -- The game indexes addon files only when the UI loads, so there is no "ready" signal; instead the companion keeps
 -- the newest reply state in all inboxes ahead of us and we read one inbox every few seconds.
 local FIRST_DELAY, STEP, SLOW_STEP, SLOW_AFTER, GIVE_UP = 2.0, 2.0, 4.0, 60, 300
+local heard = false -- the app has replied to the request that is waited for
 local pollFrame = CreateFrame("Frame")
 local polling, nextReadAt, startedAt, staleReads = false, 0, 0, 0
 
@@ -96,7 +97,7 @@ pollFrame:SetScript("OnUpdate", function()
   local data = readInbox(T.nextInbox)
   local pend = ns.pending
   if data and pend and data.msgId == pend.msgId then
-    staleReads = 0
+    staleReads, heard = 0, true
     ns.Stage(data.final and "showing the final answer" or "showing the answer")
     local t0 = debugprofilestop()
     local ok, err = pcall(ns.OnMessage, data)
@@ -110,7 +111,9 @@ pollFrame:SetScript("OnUpdate", function()
     if pend and staleReads == 3 then
       ns.UI.SetPhase("No response. Is the ForeverAI app running?")
     end
-    if waited > GIVE_UP then
+    -- a request of the add-on's own (the update of a route) does not hold the window for minutes when the app is
+    -- not there: without any reply it gives up after its own, shorter time
+    if waited > GIVE_UP or (not heard and pend and pend.giveUp and waited > pend.giveUp) then
       polling = false
       ns.pending = nil
       ns.UI.FailAnswer("No response. Start the ForeverAI app and ask again.")
@@ -123,7 +126,7 @@ end)
 
 function T.StartPolling()
   startedAt = GetTime()
-  staleReads = 0
+  staleReads, heard = 0, false
   nextReadAt = startedAt + FIRST_DELAY
   polling = true
 end

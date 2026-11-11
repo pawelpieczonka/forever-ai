@@ -1,7 +1,7 @@
 -- ForeverAI: core (namespace, saved variables, events, conversations, requests)
 local ADDON, ns = ...
 ForeverAI = ns
-ns.version = "0.7.1"
+ns.version = "0.7.2"
 
 BINDING_HEADER_FOREVERAI = "ForeverAI"
 BINDING_NAME_FOREVERAI_TOGGLE = "Show/hide ForeverAI"
@@ -15,6 +15,9 @@ ns.defaults = {
   window = { point = "CENTER", x = 260, y = 40, w = 470, h = 600 },
   button = { show = true, point = "TOPRIGHT", x = -24, y = -250 },
   fontSize = 13,
+  autoRoute = false, -- how a new route starts: updated when the quest log changes, or not (Settings; each route has its own switch)
+  lookByName = true, -- tracked creatures are also looked for by name, beyond nameplate range (Settings)
+  routeAlerts = true, -- the screen says when a route is being updated and when it is done (Settings)
 }
 local MAX_CONVS, MAX_ENTRIES = 25, 50
 
@@ -354,7 +357,8 @@ function ns.Request(msg, label)
     ns.UI.Notice(why, "warn")
     return false
   end
-  ns.pending = { msgId = msg.msgId, kind = msg.type, started = GetTime(), label = label }
+  ns.pending = { msgId = msg.msgId, kind = msg.type, started = GetTime(), label = label,
+                 giveUp = msg.news and 45 or nil } -- seconds without any reply from the app
   ns.Transport.Send(msg, function(sent, err)
     if not sent then
       ns.pending = nil
@@ -451,13 +455,16 @@ function ns.Ask(text, opts)
   local msg = ns.BaseMessage("question")
   msg.text = ns.stripCodes(text)
   msg.wantScreen = opts.screen == true or nil
-  if opts.auto then
-    msg.auto = true
+  if opts.auto then msg.auto = true end
+  if opts.news then msg.news = true end -- the add-on's own errand: it does not wait long for the app
+  if opts.news then
+    -- sent by the add-on for a news line (an update of the route): the chat shows the answer only, as one line
+  elseif opts.auto then
     ns.UI.AddSystemNote(text)
   else
     ns.UI.AddQuestion(text)
   end
-  ns.UI.BeginAnswer(msg.msgId)
+  ns.UI.BeginAnswer(msg.msgId, opts.news)
   ns.UI.SetPhase("Reading game data…")
   ns.collecting = true
   ns.UI.UpdateBusy()
@@ -475,6 +482,7 @@ function ns.Ask(text, opts)
     if okT and #tagged > 0 then snap.taggedInQuestion = tagged end
     if not ns.Request(msg, "question") then ns.UI.FailAnswer("Could not send the question.") end
   end)
+  return msg.msgId
 end
 
 ------------------------------------------------------------------------ the player's decisions go back to the AI
@@ -567,7 +575,7 @@ function ns.OnMessage(data)
     ns.UI.UpdateAnswer(data)
     if data.final then
       ns.pending = nil
-      ns.UI.NotifyAnswer()
+      if not (ns.Map and ns.Map.IsUpdate(data.msgId)) then ns.UI.NotifyAnswer() end -- a news line says it itself
     end
   elseif data.kind == "status" then
     if data.text then ns.UI.Notice(data.text, "ok") end

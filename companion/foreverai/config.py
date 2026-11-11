@@ -151,6 +151,9 @@ class Settings:
     gemini_model: str = GEMINI_DEFAULT_MODEL
     claude_model: str = "claude-haiku-5-5"
     claude_effort: str = "high"
+    # the model that answers the add-on's own updates of a route, per provider; none: the model of questions
+    route_model: dict = field(default_factory=dict)
+    route_effort: str = ""  # Claude Code: the thinking level of route updates; "" = the one of questions
     shortcut_offered: bool = False
 
 
