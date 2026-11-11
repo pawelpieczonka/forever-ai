@@ -188,8 +188,8 @@ def test_command_line(tmp_path, capsys):
 
 # globals the add-on reads that the game does not have unless another add-on (or a newer client) provides them
 ABSENT = {"Auctionator", "AUCTIONATOR_PRICE_DATABASE", "AUCTIONATOR_SAVEDVARS", "AuctionFrame", "AuctionHouseFrame",
-          "InspectFrame", "LibStub", "PawnGetItemData", "PawnIsInitialized", "PawnIsItemAnUpgrade", "QuestieLoader",
-          "TomTom", "issecretvalue"}
+          "InspectFrame", "LibStub", "PawnGetItemData", "PawnGetItemDataForInventorySlot", "PawnIsInitialized",
+          "PawnIsItemAnUpgrade", "QuestieLoader", "TomTom", "issecretvalue"}
 # the Classic trade skill and craft API: WoW Forever has only C_TradeSkillUI (Professions.lua uses whichever exists)
 ABSENT |= {"CollapseCraftSkillLine", "CollapseTradeSkillSubClass", "ExpandCraftSkillLine", "ExpandTradeSkillSubClass",
            "GetCraftDisplaySkillLine", "GetCraftInfo", "GetCraftItemLink", "GetCraftNumReagents", "GetCraftReagentInfo",

@@ -114,8 +114,9 @@ class Sim:
 
     def __init__(self, game_dir: Path, *, screen: tuple[int, int] = (1920, 1080), fps: int = 30,
                  realtime: bool = False, clock: datetime | None = None, text: TextEngine | None = None,
-                 seed: int = 1):
+                 seed: int = 1, market: bool = False):
         self.game_dir = make_game_dir(Path(game_dir))
+        self.market = market  # lua/market.lua: Auctionator's prices, swords on offer, things in the bags
         self.addons_dir = self.game_dir / "Interface" / "AddOns"
         self.screens_dir = self.game_dir / "Screenshots"
         self.screen = (int(screen[0]), int(screen[1]))
@@ -268,6 +269,8 @@ class Sim:
         self._lua.execute(b"math.randomseed(...)", self.seed + self.reloads)
         self._wow = self._lua.execute((LUA_DIR / "wow.lua").read_bytes(), self._host())
         self._lua.execute((LUA_DIR / "world.lua").read_bytes(), self._wow)
+        if self.market:
+            self._lua.execute((LUA_DIR / "market.lua").read_bytes(), self._wow)
         if reload:  # the character lives on the server: a /reload keeps what happened to it
             for k, v in self._character.items():
                 self._wow.player[k] = v

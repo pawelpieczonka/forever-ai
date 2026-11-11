@@ -64,6 +64,11 @@ class ScriptedAI:
         question = _question(messages[last_user].get("content"))
         reply = self.app.reply_for(question, str(messages[last_user].get("content"))[:4000])
         tool_round = any(m["role"] == "tool" for m in messages[last_user + 1:])
+        if tool_round:
+            names = {c.get("id"): (c.get("function") or {}).get("name") for m in messages[last_user + 1:]
+                     for c in m.get("tool_calls") or []}
+            self.app.tool_results += [{"tool": names.get(m.get("tool_call_id")), "result": m.get("content")}
+                                      for m in messages[last_user + 1:] if m["role"] == "tool"]
         if reply.get("tools") and not tool_round:
             calls = [ToolCall(f"sim{i}", t["name"], json.dumps(t.get("args", {})))
                      for i, t in enumerate(reply["tools"])]
@@ -105,6 +110,7 @@ class App:
         self.replies: deque[dict] = deque(self._reply(r) for r in replies)
         self.received: list[dict] = []  # messages from the game (without the game data)
         self.activity: list[str] = []
+        self.tool_results: list[dict] = []  # what the app's tools returned to the scripted AI
         self.log_lines: list[str] = []
         self._turns: dict[str, dict] = {}
         self._lock = threading.Lock()
@@ -242,4 +248,4 @@ class App:
     def report(self) -> dict:
         return {"ai": self.ai, "received": [{k: m.get(k) for k in ("type", "text", "value") if m.get(k) is not None}
                                             for m in self.received],
-                "activity": self.activity, "log": str(self.data_dir / "foreverai.log")}
+                "activity": self.activity, "toolResults": self.tool_results, "log": str(self.data_dir / "foreverai.log")}

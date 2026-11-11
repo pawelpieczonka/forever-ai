@@ -74,7 +74,7 @@ The route on the map changes. Nothing is planned from scratch.
 | Gold | "How much gold did I make today, and on what?" | |
 | Professions | "What do I craft to get Leatherworking to 150 with what I have?" | |
 | Auction house | "Find a one-handed sword on the AH that is an upgrade for me, up to 5 gold." | needs an Auctionator scan; Pawn for upgrades |
-| Selling | "My bags are full. What can I sell?" | at a vendor; nothing is sold until you click **Accept** |
+| Selling | "My bags are full. What can I sell?" or "What in my bags is not worth selling on the AH?" | with Auctionator, vendor and auction prices side by side; nothing is sold until you click **Accept** |
 | Places | "Where do I buy Coarse Thread?" or "Where is the hunter trainer? Mark it." | |
 | Memory | "Remember that I play Beast Mastery and level with a friend who plays a mage." | kept for later conversations |
 | One thing | **Alt+click** an item, a spell or a quest | the question is about exactly that one |
@@ -157,8 +157,8 @@ The app finds Claude Code on `PATH`, in `~/.local/bin`, in npm/nvm installs and 
 |---|---|
 | Questie | quests available near you, and where quest creatures, objects and items are |
 | TomTom | its arrow and waypoints for marks and routes (otherwise the game's map pin) |
-| Auctionator | prices from your last scan (open the auction house and scan first); **Search on the AH** under an answer shows the picks in its Shopping tab |
-| Pawn | which items are upgrades for you |
+| Auctionator | prices from your last scan (open the auction house and run a full scan first; what that scan did not see counts as sold); **Search on the AH** under an answer shows the picks in its Shopping tab |
+| Pawn | which items are upgrades for you, and which of a kind are the best for you |
 
 ForeverAI reads other add-ons and never changes their files. Their settings change only through a proposal you accept in the game.
 

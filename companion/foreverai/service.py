@@ -22,8 +22,9 @@ from .memory import ConversationStore, MemoryStore
 from .gemini import Gemini
 from .openrouter import FREE_MODELS, FREE_ROUTER, OpenRouter, is_free
 from .prompt import build_messages, entity_names
-from .tools import (TOOLS, auction_request, format_addon_options, format_auction, next_action_id, remember_options,
-                    run_fetch, run_kb_search, validate_abandon, validate_mark, validate_proposal, validate_vendor)
+from .tools import (TOOLS, auction_request, format_addon_options, format_auction, format_sell_prices, next_action_id,
+                    remember_options, run_fetch, run_kb_search, sell_price_request, validate_abandon, validate_mark,
+                    validate_proposal, validate_vendor)
 from .wowformat import bracket_names, md_to_wow
 
 log = logging.getLogger("foreverai")
@@ -1346,6 +1347,17 @@ class Service:
             if res and res.get("ahOpen") is not None:
                 ctx.ah_open = bool(res.get("ahOpen"))
             return format_auction(res), not res or bool(res.get("error"))
+        if name == "compare_sell_prices":
+            entries, req, err = sell_price_request(ctx.snapshot, args)
+            if err:
+                return err, True
+            res = None
+            if req:
+                ctx.phase_cb("Comparing vendor and auction prices…")
+                res = self.game_call(ctx, "auction_search", req)
+                if res and res.get("ahOpen") is not None:
+                    ctx.ah_open = bool(res.get("ahOpen"))
+            return format_sell_prices(entries, res), False
         if name == "web_search":
             if not ctx.web_search:
                 return "Web search is not available with this AI provider.", True
@@ -1466,9 +1478,9 @@ class Service:
 
     def _claude_system(self, system: str) -> str:
         s = self.store.settings
-        system += ("\n\nThe foreverai MCP server provides: search_knowledge_base, search_auction_house, addon_options, "
-                   "propose_addon_change, propose_quest_abandon, propose_vendor_action, mark_on_map, plan_route, edit_route, "
-                   "save_memory, delete_memory, fetch_url. Read web pages (e.g. build links) only with fetch_url — it gets "
+        system += ("\n\nThe foreverai MCP server provides: search_knowledge_base, search_auction_house, compare_sell_prices, "
+                   "addon_options, propose_addon_change, propose_quest_abandon, propose_vendor_action, mark_on_map, "
+                   "plan_route, edit_route, save_memory, delete_memory, fetch_url. Read web pages (e.g. build links) only with fetch_url — it gets "
                    "past bot blocking.")
         if s.search_mode == "always":
             system += " Always check current information on the web (WebSearch) before answering."
