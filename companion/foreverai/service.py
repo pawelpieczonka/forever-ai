@@ -20,10 +20,11 @@ from .inbox import pool_size, write_inbox
 from .kb.store import KB
 from .memory import ConversationStore, MemoryStore
 from .gemini import Gemini
-from .openrouter import OpenRouter
+from .openrouter import FREE_MODELS, FREE_ROUTER, OpenRouter, is_free
 from .prompt import build_messages, entity_names
-from .tools import (TOOLS, auction_request, format_addon_options, format_auction, next_action_id, remember_options,
-                    run_fetch, run_kb_search, validate_abandon, validate_mark, validate_proposal, validate_vendor)
+from .tools import (TOOLS, auction_request, auctionator_list, format_addon_options, format_auction, format_sell_prices,
+                    next_action_id, remember_options, run_fetch, run_kb_search, sell_price_request, validate_abandon,
+                    validate_mark, validate_proposal, validate_vendor)
 from .wowformat import bracket_names, md_to_wow
 
 log = logging.getLogger("foreverai")
@@ -44,6 +45,9 @@ RETRY_THINKING_S = 3.0  # ... and this soon while the model is still thinking / 
 # often, finds that it can again
 GEMINI_RECHECK_S = 120
 MAX_TOOL_ROUNDS = 5
+# OpenRouter's web search is paid per search, also with a free model: with one it is used only while the balance covers
+# a few searches, since a balance below zero stops free models too
+FREE_SEARCH_MIN_BALANCE = 0.10
 EFFORT_NAMES = {"low": "low", "medium": "medium", "high": "high", "xhigh": "very high", "max": "max"}
 PROVIDER_NAMES = {"openrouter": "OpenRouter", "gemini": "Google Gemini", "claude_code": "Claude Code"}
 SCREEN_NOTE = ("The player attached the current screen as an image (top-left corner blacked out). Use it for what "
@@ -56,6 +60,11 @@ MAX_SESSION_CHARS = 350_000  # ~90k tokens of questions and tool results; answer
 MAX_MARKS = 12  # marks one answer can set by hand
 MAX_ROUTE_MARKS = 20  # ... and the stops of a planned route: one through several zones is long, and loses its end otherwise
 MAX_TRACKED = 5  # creatures the add-on watches for at once
+# a knowledge-base search that found nothing, when the model can search the web: the next step, at the moment it
+# matters (a model that read "not in the knowledge base" used to answer another question instead)
+KB_MISS_WEB = (" When the answer depends on it (an event, a system, a change in Forever), search the web for it "
+               "before you answer: \"it is not in the data\" is no answer while you can look it up, and never answer "
+               "another question in place of the one asked.")
 
 
 def model_name(model_id: str) -> str:
@@ -348,7 +357,9 @@ class TurnContext:
         self.want_screen = bool(msg.get("wantScreen"))
         self.ah_items: dict[str, dict] = {}  # items the auction search returned (name -> id, price)
         self.ah_open: bool | None = None
+        self.ah_list: dict | None = None  # auctionator_list: {"name": the Auctionator list, "items": exact names}
         self.web_search: Callable[[str], tuple[str, list[dict]]] | None = None  # Gemini: grounded search
+        self.web = False  # the model of this answer has a web search (whatever the provider's tool for it is)
         self.conv = str(msg.get("conv") or "default")
         self.tool_calls = 0  # calls of the app's tools that reached the app in this answer (Claude Code)
         self.notes: list[str] = []  # what the answer did that neither marks nor actions show (memory)
@@ -409,13 +420,29 @@ class TurnContext:
             out.append(src)
         return out[:limit]
 
+    def remember_auction(self, res: dict | None) -> None:
+        """The items an auction search returned (for the card) and whether the auction house is open."""
+        for it in (res or {}).get("items") or []:
+            if it.get("name") and it.get("id"):
+                self.ah_items[str(it["name"])] = {"id": it["id"], "name": it["name"], "price": it.get("price")}
+        if res and res.get("ahOpen") is not None:
+            self.ah_open = bool(res.get("ahOpen"))
+
     def auction_card(self, answer: str) -> list[dict] | None:
-        """Auction items the answer recommends (named in [brackets]), for the "Search on the AH" card."""
-        if not self.ah_items:
-            return None
+        """Items for the Auction house card ("Search on the AH", "Save as list"): the ones the model put on it with
+        auctionator_list, priced where the auction search found them, or else the auction items the answer
+        recommends (named in [brackets])."""
+        found = {k.lower(): v for k, v in self.ah_items.items()}
+        if self.ah_list:
+            return [found.get(n.lower()) or {"name": n} for n in self.ah_list["items"]]
         named = {n.lower() for n in bracket_names(answer or "")}
-        picked = [v for k, v in self.ah_items.items() if k.lower() in named]
+        picked = [v for k, v in found.items() if k in named]
         return picked[:10] or None
+
+    def auction_list(self) -> dict:
+        """The name the card saves its items under in Auctionator, when the model gave the list; else the add-on
+        uses its own."""
+        return {"auctionList": self.ah_list["name"]} if self.ah_list else {}
 
     def add_source(self, src: dict) -> None:
         if src.get("url") and all(x["url"] != src["url"] for x in self.sources):
@@ -438,6 +465,7 @@ class Service:
         self._char = "?"
         self.last_cost: float | None = None
         self._balance: tuple[float, float] | None = None  # (value, fetched_at)
+        self._key_info: tuple[dict, float] | None = None  # OpenRouter's /key: the free models' requests of the day
         self._models: tuple[list[dict], float] | None = None
         self._gemini_models: tuple[list[dict], float] | None = None
         self._gemini_down: dict[str, float] = {}  # model the fallback answers for -> when it is checked again
@@ -652,12 +680,37 @@ class Service:
         if provider == "gemini":
             return [dict(m, price=None) for m in self.gemini_status()["models"]]
         by_id = {m["id"]: m for m in self.models()} if config.read_key("openrouter") else {}
+        ids = [s.model] + [f for f in s.favorites if f != s.model][:9]
+        ids += [f for f in self.free_models(by_id) if f not in ids]
+        free_note = self.free_note() if any(is_free(mid) for mid in ids) else None
         out = []
-        for mid in [s.model] + [f for f in s.favorites if f != s.model]:
+        for mid in ids:
             m = by_id.get(mid)
-            price = f"${m['in']:.2f} / ${m['out']:.2f} per 1M tokens" if m and m.get("in") is not None else None
+            if is_free(mid):
+                price = free_note
+            else:
+                price = f"${m['in']:.2f} / ${m['out']:.2f} per 1M tokens" if m and m.get("in") is not None else None
             out.append({"id": mid, "name": mid, "price": price})
-        return out[:10]
+        return out
+
+    @staticmethod
+    def free_models(by_id: dict[str, dict]) -> list[str]:
+        """The free OpenRouter models that chat and call tools: the most used first (FREE_MODELS), newer ones after
+        them, the free router last. Only the ones OpenRouter still lists, once its list is known."""
+        if not by_id:
+            return FREE_MODELS + [FREE_ROUTER]
+        usable = [mid for mid, m in by_id.items() if is_free(mid) and m.get("free", True) and m.get("tools", True)
+                  and m.get("text", True)]
+        known = [mid for mid in FREE_MODELS if mid in usable]
+        return known + [mid for mid in usable if mid not in known and mid != FREE_ROUTER] + \
+            [mid for mid in usable if mid == FREE_ROUTER]
+
+    def free_note(self) -> str:
+        """What a free model costs: nothing, within OpenRouter's limit of requests."""
+        left = self.free_requests()
+        if left:
+            return f"Free · {left['left']} of {left['limit']} requests left today"
+        return "Free · 50 requests a day, 20 a minute"
 
     def save_key(self, provider: str, key: str, use: bool = False) -> tuple[bool, str]:
         """Check the key with the provider and save it; ``use`` also switches to that provider.
@@ -675,7 +728,7 @@ class Service:
         if not where and config.secure_keys():
             activity.warning("No system keyring available: the key is in %s, readable only by you", config.env_path())
         if provider == "openrouter":
-            self._balance = self._models = None
+            self._balance = self._models = self._key_info = None
         else:
             self._gemini_models = None
         if use:
@@ -693,12 +746,17 @@ class Service:
                 self._gemini_models = (self.gemini_factory(key).models(), time.time())
             elif what == "models":
                 self._models = (self.client_factory(key).models(), time.time())
+            elif what == "key":
+                self._key_info = (self.client_factory(key).key_info(), time.time())
             else:
                 self._balance = (self.client_factory(key).credits(), time.time())
         except Exception as e:
-            log.warning("%s refresh failed: %s", what, e)
+            # the free requests left are only shown: without them the window says what the limit is
+            (log.info if what == "key" else log.warning)("%s refresh failed: %s", what, e)
             if what == "gemini_models" and self._gemini_models is None:
                 self._gemini_models = ([], time.time() - 3300)  # do not block every status; retry in 5 minutes
+            if what == "key" and self._key_info is None:
+                self._key_info = ({}, time.time())  # not known; asked again in the background after a minute
 
     def _refresh_later(self, what: str) -> None:
         """Refresh a cached value in the background so replies never wait on the network."""
@@ -745,20 +803,51 @@ class Service:
             self._refresh_later("balance")
         return self._balance[0] if self._balance else None
 
-    def _spent(self, cost: float | None) -> None:
-        """Apply the known cost of an answer to the cached balance and verify it in the background."""
+    def free_requests(self, fresh: bool = False, cached: bool = False) -> dict | None:
+        """{"left", "limit"}: the free models' requests left today on OpenRouter (None: not known); ``cached`` never
+        asks OpenRouter."""
+        if not cached and config.read_key("openrouter"):
+            if self._key_info is None or fresh:
+                self._refresh("key")
+            elif time.time() - self._key_info[1] > 60:
+                self._refresh_later("key")
+        info = (self._key_info[0] if self._key_info else {}).get("free_model_daily_requests") or {}
+        try:
+            return {"left": max(0, int(info["remaining"])), "limit": int(info["limit"])}
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def search_mode(self, model: str | None = None) -> str:
+        """The web search an answer from ``model`` (the model of questions when not given) uses: the chosen one, but
+        none with a free OpenRouter model while the balance (the one known now) does not cover a few paid searches."""
+        s = self.store.settings
+        if s.provider == "openrouter" and is_free(model or s.model) and s.search_mode != "never":
+            bal = self._balance[0] if self._balance else None
+            if bal is None or bal < FREE_SEARCH_MIN_BALANCE:
+                return "never"
+        return s.search_mode
+
+    def _spent(self, cost: float | None, free_requests: int = 0) -> None:
+        """Apply the known cost of an answer to the cached balance (and the requests of a free model to the ones left
+        today) and verify it in the background."""
         if self._balance and cost:
             self._balance = (self._balance[0] - cost, self._balance[1])
         self._refresh_later("balance")
+        if free_requests:
+            info = (self._key_info[0] if self._key_info else {}).get("free_model_daily_requests")
+            if isinstance(info, dict) and isinstance(info.get("remaining"), int):
+                info["remaining"] = max(0, info["remaining"] - free_requests)
+            self._refresh_later("key")
 
-    def _status_after(self, cost: float | None) -> dict:
-        self._spent(cost)
+    def _status_after(self, cost: float | None, free_requests: int = 0) -> dict:
+        self._spent(cost, free_requests)
         return self.status()
 
     def status(self, fresh: bool = False) -> dict:
         """What the add-on shows (the AI in use, balance, memory); the AI settings themselves are in the app window."""
         s = self.store.settings
         bal = self.balance(fresh) if config.read_key("openrouter") else None
+        free = s.provider == "openrouter" and is_free(s.model)
         return {
             "balance": round(bal, 4) if bal is not None else None,
             "balanceAt": datetime.now().strftime("%H:%M"),
@@ -770,12 +859,14 @@ class Service:
             "addonSV": self.addon_sv(),
             "memory": self.memory.get(self._char),
             **self.ai_status(),
+            # a free model: the requests left today instead of the balance ({} while not known)
+            **({"free": self.free_requests(fresh) or {}} if free else {}),
         }
 
     def ai_status(self) -> dict:
         """The AI in use, as the game header and the minimap button show it."""
         s = self.store.settings
-        return {"provider": s.provider, "model": s.model, "searchMode": s.search_mode,
+        return {"provider": s.provider, "model": s.model, "searchMode": self.search_mode(),
                 "claude": {"model": s.claude_model, "effort": s.claude_effort}, "gemini": {"model": s.gemini_model}}
 
     def addon_sv(self) -> dict:
@@ -859,7 +950,17 @@ class Service:
             return
         client = (self.gemini_factory if is_gemini else self.client_factory)(key)
         model = self.model_for(msg, provider)
-        fallback = gemini.FALLBACK_MODEL if is_gemini else s.fallback_model
+        free = not is_gemini and is_free(model)
+        # a free model is followed by the free router, never by a paid model
+        fallback = gemini.FALLBACK_MODEL if is_gemini else FREE_ROUTER if free else s.fallback_model
+        if free and self._key_info is None:
+            self._refresh_later("key")  # the free requests left, for the reply
+        if free and s.search_mode != "never":
+            self.balance()  # paid web search with a free model needs a known balance
+        search_mode = s.search_mode if is_gemini else self.search_mode(model)
+        if search_mode != s.search_mode:
+            log.info("web search off: %s is free and the balance does not cover paid searches", model)
+        ctx.web = search_mode != "never"
         if is_gemini and model in self._gemini_down:
             log.info("%s could not answer recently: %s answers", model, fallback)
             self._recheck_gemini(client, model)
@@ -885,6 +986,8 @@ class Service:
         started = time.monotonic()
         last_sent = [0.0, "", ""]  # time, text, phase
         tried_fallback = False
+        answered_by = None  # the model OpenRouter says answered (the free router picks one)
+        requests = 0
 
         def flush(force: bool = False) -> None:
             now = time.monotonic()
@@ -913,7 +1016,8 @@ class Service:
             round_text = ""
             error = None
             unavailable = False  # Gemini: this model cannot answer now, another one may
-            for kind, val in client.chat_stream(model, messages, TOOLS, s.search_mode, s.max_answer_tokens):
+            requests += 1
+            for kind, val in client.chat_stream(model, messages, TOOLS, search_mode, s.max_answer_tokens):
                 if cancel.is_set():
                     log.info("answer %s cancelled", msg_id)
                     return
@@ -932,6 +1036,8 @@ class Service:
                     cost += float(val.get("cost") or 0)
                 elif kind == "tool_calls":
                     calls = val
+                elif kind == "model":
+                    answered_by = val
                 elif kind in ("error", "unavailable"):
                     error, unavailable = val, kind == "unavailable"
             if error:
@@ -963,6 +1069,9 @@ class Service:
                 result, _ = self.run_tool(ctx, c.name, c.args())
                 messages.append({"role": "tool", "tool_call_id": c.id or f"call_{i}", "content": result})
         self.last_cost = None if is_gemini else round(cost, 6)
+        if free and answered_by:
+            model = answered_by
+        no_cost = free and not cost
         self.ensure_marks(ctx, text)
         self._keep_turn(ctx, question, text)
         final_text = md_to_wow(text) if text else "(no answer)"
@@ -970,12 +1079,13 @@ class Service:
                      "actions": ctx.actions, "marks": ctx.marks, "marksReplace": ctx.replaces_marks,
                      "track": ctx.track, "route": ctx.route_edit, "untrack": ctx.untrack,
                      "routePlanned": ctx.route_marked and bool(ctx.marks),
-                     "cost": self.last_cost, "model": model,
-                     **({"costNote": "Gemini API"} if is_gemini else {}),
-                     "links": self.links(text, ctx), "auction": ctx.auction_card(text),
+                     "cost": None if no_cost else self.last_cost, "model": model,
+                     **({"costNote": "Gemini API"} if is_gemini else {"costNote": "no cost"} if no_cost else {}),
+                     "links": self.links(text, ctx), "auction": ctx.auction_card(text), **ctx.auction_list(),
                      "secs": round(time.monotonic() - started, 1),
-                     "status": self.status() if is_gemini else self._status_after(cost)})
-        self.on_event(f"Last answer: {model}" + ("" if is_gemini else f", ${self.last_cost:.4f}"))
+                     "status": self.status() if is_gemini else self._status_after(cost, requests if free else 0)})
+        self.on_event(f"Last answer: {model}" + ("" if is_gemini else ", no cost" if no_cost
+                                                 else f", ${self.last_cost:.4f}"))
 
     def _recheck_gemini(self, client: Gemini, model: str) -> None:
         """Probe a Gemini model that could not answer, in the background so that no question waits for it, at most
@@ -1169,6 +1279,8 @@ class Service:
             query = str(args.get("query", ""))
             ctx.phase_cb(f"Searching knowledge base: {query[:40]}")
             text, found = run_kb_search(self.kb, query)
+            if not found and ctx.web:
+                text += KB_MISS_WEB
             for f in found:  # search hits count as sources only if the answer actually talks about them
                 ctx.add_source(f)
                 ctx.pre_urls.add(f["url"])
@@ -1255,12 +1367,33 @@ class Service:
                 return err, True
             ctx.phase_cb("Searching the auction house…")
             res = self.game_call(ctx, "auction_search", req)
-            for it in (res or {}).get("items") or []:
-                if it.get("name") and it.get("id"):
-                    ctx.ah_items[str(it["name"])] = {"id": it["id"], "name": it["name"], "price": it.get("price")}
-            if res and res.get("ahOpen") is not None:
-                ctx.ah_open = bool(res.get("ahOpen"))
+            ctx.remember_auction(res)
             return format_auction(res), not res or bool(res.get("error"))
+        if name == "compare_sell_prices":
+            entries, req, err = sell_price_request(ctx.snapshot, args)
+            if err:
+                return err, True
+            res = None
+            if req:
+                ctx.phase_cb("Comparing vendor and auction prices…")
+                res = self.game_call(ctx, "auction_search", req)
+                if res and res.get("ahOpen") is not None:
+                    ctx.ah_open = bool(res.get("ahOpen"))
+            return format_sell_prices(entries, res), False
+        if name == "auctionator_list":
+            lst, text = auctionator_list(args, ctx.snapshot)
+            if not lst:
+                return text, True
+            ctx.ah_list = lst
+            # the card's prices, and the names the price data does not know (a quest's name, a translated page's)
+            priced = {k.lower() for k in ctx.ah_items}
+            req, _ = auction_request({"items": [n for n in lst["items"] if n.lower() not in priced]})
+            if req:
+                ctx.phase_cb("Looking up the auction prices…")
+                res = self.game_call(ctx, "auction_search", req)
+                ctx.remember_auction(res)
+                text += "\n\nWhat the last scan of the player's auction add-on says about them:\n" + format_auction(res)
+            return text, False
         if name == "web_search":
             if not ctx.web_search:
                 return "Web search is not available with this AI provider.", True
@@ -1381,10 +1514,10 @@ class Service:
 
     def _claude_system(self, system: str) -> str:
         s = self.store.settings
-        system += ("\n\nThe foreverai MCP server provides: search_knowledge_base, search_auction_house, addon_options, "
-                   "propose_addon_change, propose_quest_abandon, propose_vendor_action, mark_on_map, plan_route, edit_route, "
-                   "save_memory, delete_memory, fetch_url. Read web pages (e.g. build links) only with fetch_url — it gets "
-                   "past bot blocking.")
+        system += ("\n\nThe foreverai MCP server provides: search_knowledge_base, search_auction_house, compare_sell_prices, "
+                   "addon_options, propose_addon_change, propose_quest_abandon, propose_vendor_action, mark_on_map, "
+                   "auctionator_list, plan_route, edit_route, save_memory, delete_memory, fetch_url. Read web pages "
+                   "(e.g. build links) only with fetch_url — it gets past bot blocking.")
         if s.search_mode == "always":
             system += " Always check current information on the web (WebSearch) before answering."
         return system
@@ -1486,6 +1619,7 @@ class Service:
                                  "the AI provider to OpenRouter or Gemini in Settings."})
             return
         session, continues = got
+        ctx.web = s.search_mode != "never"  # the session's WebSearch
         # a session that already holds this conversation only needs the new question
         _, prompt = claude_code.flatten_messages([messages[0], messages[-1]] if continues else messages)
         shot = self.screen_image(ctx)
@@ -1554,7 +1688,7 @@ class Service:
         self.last_cost = None
         writer.send({"kind": "answer", "final": True, "msgId": msg_id,
                      "text": md_to_wow(text) if text else "(no answer)", "links": self.links(text, ctx),
-                     "auction": ctx.auction_card(text),
+                     "auction": ctx.auction_card(text), **ctx.auction_list(),
                      "marks": ctx.marks, "marksReplace": ctx.replaces_marks, "track": ctx.track,
                      "route": ctx.route_edit, "untrack": ctx.untrack,
                      "routePlanned": ctx.route_marked and bool(ctx.marks),

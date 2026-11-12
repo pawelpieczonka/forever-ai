@@ -25,6 +25,7 @@ from foreverai.openrouter import ToolCall
 from foreverai.setup_game import prepare_game
 
 SCRIPTED_MODEL = "sim/scripted-ai"
+SCRIPTED_FREE_MODEL = "sim/scripted-ai:free"  # answers like the other one, as a free OpenRouter model (model=...)
 
 
 class MemoryKeyring:
@@ -51,16 +52,23 @@ class ScriptedAI:
         return 5.0
 
     def models(self) -> list[dict]:
-        return [{"id": SCRIPTED_MODEL, "name": "Scripted AI (simulator)", "in": 0.0, "out": 0.0}]
+        return [{"id": SCRIPTED_MODEL, "name": "Scripted AI (simulator)", "in": 0.0, "out": 0.0},
+                {"id": SCRIPTED_FREE_MODEL, "name": "Scripted AI (simulator, free)", "in": 0.0, "out": 0.0,
+                 "free": True, "tools": True}]
 
     def key_info(self) -> dict:
-        return {"label": "simulator"}
+        return {"label": "simulator", "free_model_daily_requests": {"used": 13, "limit": 50, "remaining": 37}}
 
     def chat_stream(self, model, messages, tools=None, search_mode="auto", max_tokens=1800):
         last_user = max(i for i, m in enumerate(messages) if m["role"] == "user")
         question = _question(messages[last_user].get("content"))
         reply = self.app.reply_for(question, str(messages[last_user].get("content"))[:4000])
         tool_round = any(m["role"] == "tool" for m in messages[last_user + 1:])
+        if tool_round:
+            names = {c.get("id"): (c.get("function") or {}).get("name") for m in messages[last_user + 1:]
+                     for c in m.get("tool_calls") or []}
+            self.app.tool_results += [{"tool": names.get(m.get("tool_call_id")), "result": m.get("content")}
+                                      for m in messages[last_user + 1:] if m["role"] == "tool"]
         if reply.get("tools") and not tool_round:
             calls = [ToolCall(f"sim{i}", t["name"], json.dumps(t.get("args", {})))
                      for i, t in enumerate(reply["tools"])]
@@ -88,9 +96,11 @@ def default_reply(question: str) -> dict:
 
 class App:
     def __init__(self, game_dir: Path, data_dir: Path, *, ai: str = "scripted", replies=(),
-                 addon_dir: Path | None = None, kb: bool = True, pool: int = 300, stream_delay: float = 0.03):
+                 addon_dir: Path | None = None, kb: bool = True, pool: int = 300, stream_delay: float = 0.03,
+                 model: str = SCRIPTED_MODEL):
         if ai not in ("scripted", "live"):
             raise ValueError("ai: scripted or live")
+        self.model = model  # the scripted AI's model id (ai="scripted")
         self.game_dir, self.data_dir = Path(game_dir), Path(data_dir)
         self.ai = ai
         self.addon_dir = Path(addon_dir) if addon_dir else None
@@ -100,6 +110,7 @@ class App:
         self.replies: deque[dict] = deque(self._reply(r) for r in replies)
         self.received: list[dict] = []  # messages from the game (without the game data)
         self.activity: list[str] = []
+        self.tool_results: list[dict] = []  # what the app's tools returned to the scripted AI
         self.log_lines: list[str] = []
         self._turns: dict[str, dict] = {}
         self._lock = threading.Lock()
@@ -173,7 +184,7 @@ class App:
         if self.ai == "scripted":
             self._patch(claude_code, "detect", lambda force=False: None)
             env_file.write_text("OPENROUTER_API_KEY=sim-scripted-ai\n", encoding="utf-8")
-            store.update(provider="openrouter", model=SCRIPTED_MODEL, fallback_model=SCRIPTED_MODEL)
+            store.update(provider="openrouter", model=self.model, fallback_model=SCRIPTED_MODEL)
             factory = lambda key: ScriptedAI(key, self)  # noqa: E731
         else:
             provider = config.choose_provider(store.settings, claude_code.detect(force=True))
@@ -237,4 +248,4 @@ class App:
     def report(self) -> dict:
         return {"ai": self.ai, "received": [{k: m.get(k) for k in ("type", "text", "value") if m.get(k) is not None}
                                             for m in self.received],
-                "activity": self.activity, "log": str(self.data_dir / "foreverai.log")}
+                "activity": self.activity, "toolResults": self.tool_results, "log": str(self.data_dir / "foreverai.log")}

@@ -462,7 +462,7 @@ function UI.UpdateAnswer(data)
       if ns.Map.Left() > 0 then ns.Map.DropDone() end
       ns.Map.UpdateAnswered()
     end
-    if type(data.auction) == "table" and #data.auction > 0 then UI.AuctionCard(data.auction) end
+    if type(data.auction) == "table" and #data.auction > 0 then UI.AuctionCard(data.auction, data.auctionList) end
     currentAnswer = nil
   elseif not e.news then -- a news line waits for the whole answer
     e.body = ns.Links.Linkify(data.text or "", nil)
@@ -699,11 +699,13 @@ function UI.MarksCard(marks, replace, track, quiet)
   relayout()
 end
 
--- items the answer recommends from the auction search: one click shows them in Auctionator's Shopping tab
-function UI.AuctionCard(items)
+-- items the answer recommends: one click shows them in Auctionator's Shopping tab, or saves them as a shopping list
+function UI.AuctionCard(items, listName)
   local lines, names = {}, {}
   for i, it in ipairs(items) do
-    lines[#lines + 1] = string.format("• %s  |cffffd100%s|r", esc(it.name or "?"), esc(it.price or ""))
+    local price = it.price and it.price ~= "" and ("|cffffd100" .. esc(it.price) .. "|r")
+      or "|cff6a7380no price in the last scan|r"
+    lines[#lines + 1] = string.format("• %s  %s", esc(it.name or "?"), price)
     names[i] = it.name
   end
   card("|cffffd27aAuction house|r |cff6a7380(prices from the last Auctionator scan)|r\n" .. table.concat(lines, "\n"),
@@ -712,6 +714,14 @@ function UI.AuctionCard(items)
       local ok, err = ns.Auction.ShowInAuctionator(names)
       if ok then self:Done("|cff5dff9dShown in Auctionator (Shopping tab).|r") else UI.Notice(err, "warn") end
     end, "primary" },
+    { "Save as list", 100, function(self)
+      local ok, saved = ns.Auction.SaveAsList(listName, names)
+      if ok then
+        self:Done("|cff5dff9dSaved as the Auctionator shopping list|r " .. esc(saved) .. "|cff5dff9d (Shopping tab).|r")
+      else
+        UI.Notice(saved, "warn")
+      end
+    end },
     { "Dismiss", 80, function(self) self:Done("|cff8a93a0Dismissed.|r") end },
   })
   relayout()
@@ -732,7 +742,16 @@ function UI.UpdateHeader()
   end
   local left = ns.Transport.InboxLeft()
   local parts = {}
-  if (s.provider == nil or s.provider == "openrouter") and s.balance then
+  if (s.provider == nil or s.provider == "openrouter") and type(s.free) == "table" then
+    -- a free model: OpenRouter's requests of the day count, not the balance
+    local f = s.free
+    if tonumber(f.left) and tonumber(f.limit) then
+      parts[#parts + 1] = string.format("%sfree: %d of %d left today|r",
+        tonumber(f.left) < 5 and "|cffff5555" or "|cff5dff9d", f.left, f.limit)
+    else
+      parts[#parts + 1] = "|cff5dff9dfree|r"
+    end
+  elseif (s.provider == nil or s.provider == "openrouter") and s.balance then
     local low = s.lowBalance and s.balance < s.lowBalance
     parts[#parts + 1] = string.format("%s$%.2f|r", low and "|cffff5555" or "|cff5dff9d", s.balance)
   elseif s.provider == "claude_code" then
@@ -1318,17 +1337,31 @@ local function build()
   end)
   local title = label(hb, "ForeverAI", F.title)
   title:SetPoint("LEFT", 12, 0)
+  local version = label(hb, "v" .. tostring(ns.version), F.small) -- this copy of the add-on (the app's may be newer: /reload)
+  version:SetPoint("LEFT", title, "RIGHT", 5, -1)
   local pillBg = CreateFrame("Frame", nil, hb, "BackdropTemplate")
   backdrop(pillBg, { 1, 1, 1, 0.05 })
   pill = label(pillBg, "", F.small)
   pill:SetPoint("CENTER")
-  pillBg:SetPoint("LEFT", title, "RIGHT", 10, 0)
+  pill:SetWordWrap(false)
+  pillBg:SetPoint("LEFT", version, "RIGHT", 10, 1)
   pillBg:SetSize(180, 20)
-  hooksecurefunc(pill, "SetText", function() pillBg:SetWidth(math.min(240, pill:GetStringWidth() + 18)) end)
   local close = Btn(hb, "x", 26, 26, function() main:Hide() end, "ghost", "Close (Esc)")
   close:SetPoint("RIGHT", -4, 0)
   local new = Btn(hb, "+ New", 66, 24, function() ns.NewConversation() end, "ghost", "New conversation")
   new:SetPoint("RIGHT", close, "LEFT", -4, 0)
+  -- the pill ends before "+ New": in a narrow window a long model name is cut short
+  local function fitPill()
+    pill:SetWidth(0)
+    local natural = pill.GetUnboundedStringWidth and pill:GetUnboundedStringWidth() or pill:GetStringWidth()
+    local room = hb:GetWidth() - (12 + title:GetStringWidth() + 5 + version:GetStringWidth() + 10)
+                 - (8 + new:GetWidth() + 4 + close:GetWidth() + 4)
+    local w = math.max(40, math.min(240, natural + 18, room))
+    pillBg:SetWidth(w)
+    pill:SetWidth(w - 12)
+  end
+  hooksecurefunc(pill, "SetText", fitPill)
+  hb:SetScript("OnSizeChanged", fitPill)
 
   -- tabs
   tabs = {}

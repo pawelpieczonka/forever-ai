@@ -7,7 +7,7 @@ import pytest
 
 from foreverai import claude_code, config
 
-from test_service import env  # noqa: F401  (fixture)
+from test_service import FreeClient, env, free_env  # noqa: F401  (fixtures)
 
 
 @pytest.fixture
@@ -118,6 +118,35 @@ def _texts(widget):
     return out
 
 
+def test_free_models_in_the_ai_settings(free_env, tk_root, monkeypatch):  # noqa: F811
+    """The free OpenRouter models are in the model list; a free one shows the requests left today, and the panel says
+    that web search is paid with it."""
+    from foreverai import window
+    svc, _, _ = free_env
+    svc.prewarm_later = lambda: None
+    monkeypatch.setattr(claude_code, "_detect_cache", None)
+    panel = window.AISettings(tk_root, lambda provider=None: None)
+    panel.frame.pack()
+    panel.attach(types.SimpleNamespace(store=svc.store, service=svc))
+    s = svc.store.settings
+    assert _pump(tk_root, lambda: panel.choices and panel.note.cget("text"))
+    values = list(panel.model.cget("values"))
+    assert values[-2:] == ["acme/new-model:free", "openrouter/free"] and "google/gemma-4-31b-it:free" in values
+    assert int(panel.model.cget("height")) == len(values) == 11  # up to 15 rows, then the drop-down scrolls
+    assert panel.msg.cget("text") == ""  # a paid model: no word about free models
+    _choose(panel.model, "google/gemma-4-31b-it:free")
+    assert _pump(tk_root, lambda: not panel.busy and s.model == "google/gemma-4-31b-it:free")
+    assert panel.note.cget("text") == "Free · 37 of 50 requests left today"
+    panel._msg_until = 0
+    panel.sync()
+    assert "web search is paid per search" in panel.msg.cget("text") and "$0.10" in panel.msg.cget("text")
+    _choose(panel.search, "Off")
+    assert _pump(tk_root, lambda: not panel.busy and s.search_mode == "never")
+    panel._msg_until = 0
+    panel.sync()
+    assert panel.msg.cget("text") == ""
+
+
 def test_app_window_shows_the_ai_settings(env, monkeypatch):  # noqa: F811
     """The whole window with the panel refreshes without errors; the key dialog opens from the panel."""
     import tkinter as tk
@@ -215,3 +244,21 @@ def test_the_thinking_level_of_route_updates_is_next_to_their_model(env, tk_root
     _choose(panel.route_effort, "Same thinking")
     assert _pump(tk_root, lambda: not panel.busy and s.route_effort == "")
     assert panel.route_effort.get() == "Same thinking"
+
+
+def test_the_window_shows_the_app_version_next_to_its_title():
+    import tkinter as tk
+
+    from foreverai import __version__, window
+    try:
+        w = window.AppWindow()
+    except tk.TclError:
+        pytest.skip("no display")
+    try:
+        w.root.withdraw()
+        header = w.version.master.pack_slaves()
+        assert [str(s.cget("text")) for s in header[:2]] == ["ForeverAI", f"v{__version__}"]
+        assert w.version.cget("fg") == window.DIM  # small and dimmed, not a second title
+        assert w.version.cget("font") != header[0].cget("font")
+    finally:
+        w.root.destroy()

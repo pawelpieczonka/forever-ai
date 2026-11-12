@@ -189,3 +189,60 @@ def test_spell_description_only_from_its_own_tooltip(sim):
     """)
     assert sim.lua("return ForeverAI.Collect.TipShows(FakeTip, 1)") is True
     assert sim.lua("return ForeverAI.Collect.TipShows(FakeTip, 2)") is False  # still shows the spell read before it
+
+
+ITEM_TYPES = """
+  -- id = { name, class id, subclass id, type, subtype, equip slot }
+  local kinds = {
+    [1] = { "Glinting Steel Sword", 2, 7, "Weapon", "One-Handed Swords", "INVTYPE_WEAPON" },
+    [2] = { "Heavy Claymore", 2, 8, "Weapon", "Two-Handed Swords", "INVTYPE_2HWEAPON" },
+    [3] = { "Woodsman Hatchet", 2, 0, "Weapon", "One-Handed Axes", "INVTYPE_WEAPON" },
+    [4] = { "Bandit Knife", 2, 15, "Weapon", "Daggers", "INVTYPE_WEAPON" },
+    [5] = { "Strong Fishing Pole", 2, 20, "Weapon", "Fishing Poles", "INVTYPE_2HWEAPON" },
+    [6] = { "Chainmail Vest", 4, 3, "Armor", "Mail", "INVTYPE_CHEST" },
+    [7] = { "Padded Boots", 4, 2, "Armor", "Leather", "INVTYPE_FEET" },
+    [8] = { "Iron Breastplate", 4, 4, "Armor", "Plate", "INVTYPE_CHEST" },
+    [9] = { "Wooden Shield", 4, 6, "Armor", "Shields", "INVTYPE_SHIELD" },
+  }
+  C_Item.GetItemInfo = function(link)
+    local id = tonumber(tostring(link):match("item:(%d+)"))
+    local k = kinds[id]
+    if not k then return nil end
+    return k[1], link, 2, 20, 15, k[4], k[5], 1, k[6], 0, 100, k[2], k[3]
+  end
+  function CannotUse()
+    local out = {}
+    for id = 1, #kinds do
+      local f = ForeverAI.Collect.ItemFacts("|cff1eff00|Hitem:" .. id .. "::::|h[" .. kinds[id][1] .. "]|h|r")
+      out[#out + 1] = kinds[id][1] .. "=" .. tostring(f.cannotUse)
+    end
+    return table.concat(out, "|")
+  end
+"""
+
+
+def test_weapons_need_the_skill_the_skill_window_names(sim):
+    """The skill window says "Swords" where a one-handed sword says "One-Handed Swords": the add-on told the model a
+    mage with Swords could not wear any one-handed sword, and the auction search left all of them out."""
+    sim.lua(ITEM_TYPES)
+    # the simulated hunter (the Classic skill window): Bows, Daggers, Swords, Cloth, Leather
+    assert text(sim.lua("return CannotUse()")).split("|") == [
+        "Glinting Steel Sword=nil", "Heavy Claymore=missing skill: Two-Handed Swords",
+        "Woodsman Hatchet=missing skill: One-Handed Axes", "Bandit Knife=nil", "Strong Fishing Pole=nil",
+        "Chainmail Vest=missing skill: Mail", "Padded Boots=nil", "Iron Breastplate=missing skill: Plate",
+        "Wooden Shield=missing skill: Shields"]
+
+
+def test_weapon_skills_from_the_skill_info_api(sim):
+    # a client with C_SkillInfo, as WoW Forever 1.60.1 (the mage's "Swords 1/105"): its names come first, the
+    # Classic window is not asked
+    sim.lua("""
+      local lines = { "Axes", "Plate Mail", "Shield", "Mail", "Swords" }
+      C_SkillInfo.GetNumSkillLines = function() return #lines end
+      C_SkillInfo.GetSkillLineInfo = function(i) return { skillName = lines[i], skillRank = 1, skillMaxRank = 1 } end
+    """)
+    sim.lua(ITEM_TYPES)
+    assert text(sim.lua("return CannotUse()")).split("|") == [
+        "Glinting Steel Sword=nil", "Heavy Claymore=missing skill: Two-Handed Swords", "Woodsman Hatchet=nil",
+        "Bandit Knife=missing skill: Daggers", "Strong Fishing Pole=nil", "Chainmail Vest=nil",
+        "Padded Boots=missing skill: Leather", "Iron Breastplate=nil", "Wooden Shield=nil"]

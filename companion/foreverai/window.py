@@ -12,7 +12,8 @@ import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from . import claude_code, config
+from . import __version__, claude_code, config
+from .openrouter import is_free
 from .osutil import WINDOWS, open_path, open_terminal
 
 log = logging.getLogger("foreverai")
@@ -118,6 +119,8 @@ class AppWindow:
         top = tk.Frame(self.root, bg=BG)
         top.pack(fill="x", padx=16, pady=(14, 4))
         tk.Label(top, text="ForeverAI", bg=BG, fg=ACCENT, font=TITLE).pack(side="left")
+        self.version = tk.Label(top, text=f"v{__version__}", bg=BG, fg=DIM, font=(UI, 9))
+        self.version.pack(side="left", anchor="s", padx=(6, 0), pady=(0, 3))
         self.state = tk.Label(top, text="● Starting…", bg=BG, fg=WARN, font=(UI, 10))
         self.state.pack(side="right")
 
@@ -265,7 +268,9 @@ class AppWindow:
                 ai = f"{who} · {names.get(s.claude_model, s.claude_model)} · thinking {s.claude_effort}"
             else:
                 bal = c.service._balance[0] if c.service._balance else None
-                ai = f"OpenRouter · {s.model}" + (f" · balance ${bal:.2f}" if bal is not None else "")
+                left = c.service.free_requests(cached=True) if is_free(s.model) else None
+                ai = f"OpenRouter · {s.model}" + (f" · {left['left']} of {left['limit']} free requests left today"
+                                                  if left else f" · balance ${bal:.2f}" if bal is not None else "")
             self.rows["ai"].configure(text=ai, fg=WARN if c.needs_key else FG)
             import time as _t
             if not getattr(self, "_kb_at", 0) or _t.time() - self._kb_at > 5 or c.syncing != getattr(self, "_kb_sync", None):
@@ -410,7 +415,13 @@ class AISettings:
             return True
 
     def _hint(self) -> str:
-        """Claude Code signed in but not used: say what it is good for (this was a card in the game before)."""
+        """A free OpenRouter model with web search: the search is paid. Claude Code signed in but not used: say what
+        it is good for (this was a card in the game before)."""
+        from .service import FREE_SEARCH_MIN_BALANCE
+        s = self._settings()
+        if s.provider == "openrouter" and is_free(s.model) and s.search_mode != "never":
+            return (f"Free models cost nothing, but web search is paid per search: with one it is used only while the "
+                    f"OpenRouter balance is at least ${FREE_SEARCH_MIN_BALANCE:.2f}.")
         info = claude_code._detect_cache[0] if claude_code._detect_cache else None
         if info and info.get("loggedIn") and self._settings().provider != "claude_code":
             return ("Claude Code is signed in: choose it as the provider to use your Claude subscription "
@@ -491,8 +502,8 @@ class AISettings:
                     if self.comp and value == self._settings().provider:
                         self.choices = result
                         names = [c["name"] for c in result]
-                        self.model.configure(values=names, height=min(10, max(1, len(names))))
-                        self.route.configure(values=[self.SAME] + names, height=min(11, len(names) + 1))
+                        self.model.configure(values=names, height=min(15, max(1, len(names))))
+                        self.route.configure(values=[self.SAME] + names, height=min(16, len(names) + 1))
                         self._show_route()
                         if not self._editing():
                             self._show_model()
@@ -544,7 +555,7 @@ class KeyDialog:
         if provider not in self.LINKS:
             provider = "gemini" if comp.store.settings.provider == "gemini" else "openrouter"
         self.provider = tk.StringVar(value=provider)
-        for value, text in (("openrouter", "OpenRouter — many models, pay per use"),
+        for value, text in (("openrouter", "OpenRouter — many models, pay per use or free"),
                             ("gemini", "Google Gemini — key from Google AI Studio")):
             row = tk.Frame(top, bg=BG)
             row.pack(fill="x", **pad)

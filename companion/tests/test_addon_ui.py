@@ -4,6 +4,7 @@ sends no AI settings (they are chosen in the app window) and shows the AI the ap
 from datetime import datetime
 
 from addonsim import Sim, install_game
+from addonsim.sim import _s
 
 # every Button and CheckButton on the Settings tab, in the order they were made, by their label
 CONTROLS = r"""
@@ -216,3 +217,78 @@ def test_data_check_boxes_fit_the_window(tmp_path):
     assert seen[(300, 15)] < 3  # how many fit at 380 depends on the font (the simulator uses an installed one)
     assert sim.errors == []
     sim.close()
+
+
+def test_the_header_shows_the_free_requests_of_a_free_model(tmp_path):
+    """A free OpenRouter model costs nothing: the header shows the free requests left today, not the balance (and no
+    low-balance warning); a paid model shows the balance as before."""
+    install_game(tmp_path / "game", pool=40)
+    sim = Sim(tmp_path / "game", clock=datetime(2026, 11, 10, 12, 0)).start()
+    sim.slash("/fai")
+    sim.run(1)
+    base = {"provider": "openrouter", "model": "google/gemma-4-31b-it:free", "searchMode": "never",
+            "balance": 0.0, "lowBalance": 1.0}
+
+    def header(status):  # the footer line, with its colour codes
+        sim.lua("ForeverAIDB.status = ...; ForeverAI.UI.UpdateHeader()", status)
+        texts = [_s(item.text) for item in sim._wow.visibleTexts().values()]
+        return [t for t in texts if "web search:" in t and "In use" not in t]
+
+    assert header({**base, "free": {"left": 37, "limit": 50}}) == [
+        "|cff5dff9dfree: 37 of 50 left today|r   web search: off"]
+    assert "OpenRouter  gemma-4-31b-it:free" in " ".join(sim.texts())
+    # few left: red, as a low balance is
+    assert header({**base, "free": {"left": 3, "limit": 50}})[0].startswith("|cffff5555free: 3 of 50 left today|r")
+    # not known yet (an empty table from the app)
+    assert header({**base, "free": {}})[0].startswith("|cff5dff9dfree|r   ")
+    # a paid model: the balance, red below the low-balance mark
+    paid = {**base, "model": "openai/gpt-6-luna", "searchMode": "auto"}
+    assert header(paid) == ["|cffff5555$0.00|r   web search: auto"]
+    assert header({**paid, "balance": 6.17}) == ["|cff5dff9d$6.17|r   web search: auto"]
+
+
+# the header: the version label, the pill's right edge and text, and the left edge of "+ New"
+HEADER = r"""
+local ver, pill, new
+local f = EnumerateFrames()
+while f do
+  if f:GetObjectType() == "Button" and f:GetText() == "+ New" then new = f end
+  for _, r in ipairs({ f:GetRegions() }) do
+    if r:GetObjectType() == "FontString" then
+      local t = r:GetText() or ""
+      if t:find("OpenRouter", 1, true) and r:GetParent() ~= f:GetParent() and t:find("|r  ", 1, true) then pill = r end
+      if t:find("^v%d") then ver = r end
+    end
+  end
+  f = EnumerateFrames(f)
+end
+return ver and ver:GetText(), pill:GetParent():GetRight(), new:GetLeft(), pill:IsTruncated(), ver and ver:GetRight(),
+       pill:GetParent():GetLeft()
+"""
+
+
+def test_the_header_shows_the_version_and_fits_a_long_model_name(tmp_path):
+    """The window's title has the add-on's version next to it; the model's pill ends before "+ New", and in a narrow
+    window a long model name is cut short instead of running under the button."""
+    import re
+    from pathlib import Path
+    toc = (Path(__file__).resolve().parents[2] / "addon" / "ForeverAI" / "ForeverAI.toc").read_text()
+    version = re.search(r"^## Version: (\S+)", toc, re.M).group(1)
+    install_game(tmp_path / "game", pool=40)
+    sim = Sim(tmp_path / "game", clock=datetime(2026, 11, 10, 12, 0)).start()
+    sim.slash("/fai")
+    sim.run(1)
+    sim.lua("ForeverAIDB.status = ...; ForeverAI.UI.UpdateHeader()",
+            {"provider": "openrouter", "model": "nvidia/nemotron-3-ultra-550b-a55b:free", "searchMode": "never"})
+    sim.run(1)
+    text, pill_right, new_left, cut, ver_right, pill_left = sim.lua(HEADER)
+    assert _s(text) == f"v{version}"
+    assert ver_right < pill_left  # the version comes before the pill
+    assert pill_right < new_left and not cut  # the default window has room for the whole name
+    sim.lua("ForeverAIFrame:SetSize(380, 500)")  # the narrowest window
+    sim.run(1)
+    text, pill_right, new_left, cut, _, _ = sim.lua(HEADER)
+    assert pill_right <= new_left and cut
+    sim.lua("ForeverAIFrame:SetSize(700, 500)")  # wider again: the whole name is back
+    sim.run(1)
+    assert not sim.lua(HEADER)[3]

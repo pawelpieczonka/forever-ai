@@ -363,14 +363,17 @@ TOOLS.append({
     "function": {
         "name": "search_auction_house",
         "description": "Search the auction house prices IN THE GAME: the player's auction add-on (Auctionator) keeps the "
-                       "lowest buyout of every item from its last scan. Returns matching items with price, how many days "
-                       "ago it was seen, stats, required level, the comparison with the equipped item (vsEquipped) and, "
-                       "with the Pawn add-on, the upgrade in percent. Use it for every question about buying on the AH "
-                       "(upgrades, best item for a budget, cheapest materials, prices). Give filters, not only a name: "
-                       "e.g. 'best one-handed sword up to 100 gold' = weapon_type 1h_sword, slot one-hand, "
-                       "max_price_gold 100, upgrades_only true. For the prices of KNOWN items (a profession's reagents "
-                       "and crafted items, a shopping list) give items instead: exact names or item ids, up to 40 in "
-                       "one call; each comes back with its price or why it has none.",
+                       "lowest buyout of every item from its last scan; items the last full scan did not see are no "
+                       "longer listed and are left out. Returns matching items, best first for gear, with price, how "
+                       "many days ago it was seen, stats, required level, the comparison with the equipped item "
+                       "(vsEquipped) and, with the Pawn add-on, the upgrade in percent and the item's value. Use it "
+                       "for every question about buying on the AH (upgrades, best item for a budget, cheapest "
+                       "materials, prices). Give filters, not only a name: e.g. 'best one-handed swords I can wear up "
+                       "to 100 gold' = weapon_type 1h_sword, max_price_gold 100 (the best come first, each says "
+                       "whether it beats the equipped item); upgrades_only true only when the player asks for "
+                       "upgrades. For the prices of KNOWN items (a profession's reagents and crafted items, a "
+                       "shopping list) give items instead: exact names or item ids, up to 40 in one call; each comes "
+                       "back with its price or why it has none. What to sell from the bags: compare_sell_prices.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -387,7 +390,8 @@ TOOLS.append({
                 "max_price_gold": {"type": "number"},
                 "min_price_gold": {"type": "number"},
                 "usable_only": {"type": "boolean", "description": "Only items the player can use now (default true)"},
-                "upgrades_only": {"type": "boolean", "description": "Only upgrades over the equipped item"},
+                "upgrades_only": {"type": "boolean", "description": "Only upgrades over the equipped item (only when "
+                                                                    "the player asks for upgrades)"},
                 "max_age_days": {"type": "integer", "description": "Only prices seen in the last N days (default 7)"},
                 "sort": {"type": "string", "enum": ["upgrade", "price", "ilvl"]},
                 "limit": {"type": "integer", "description": "Max items returned (default 15, max 30)"},
@@ -519,8 +523,9 @@ def format_auction(res: dict | None) -> str:
             + (f" (realm {res['realm']})" if res.get("realm") else "")
             + (f"; last scan: {res['lastScan']}" if res.get("lastScan") else "") + "."]
     if res.get("exact"):
-        head.append(f"Prices of the requested items: the lowest buyout of the last scan that saw each item (prices "
-                    f"seen in the last {res.get('maxAgeDays', 30)} days); listings may have sold or changed since.")
+        head.append(f"Prices of the requested items: the lowest buyout when each was last seen on offer (the last "
+                    f"full scan or a search since, in the last {res.get('maxAgeDays', 30)} days); listings may have "
+                    "sold or changed since.")
         lines = []
         for it in items:
             seen = it.get("seen")
@@ -531,7 +536,9 @@ def format_auction(res: dict | None) -> str:
             ident = f"[{m.get('name')}]" if m.get("name") else "?"
             if m.get("id"):
                 ident += f" (item {m['id']})"
-            lines.append(f"- {ident}: {m.get('why') or 'no price'}")
+            gone = (f" (last seen {m.get('lastSeen', '?')} at {m['lastPrice']}; that offer is gone)"
+                    if m.get("lastPrice") else "")
+            lines.append(f"- {ident}: {m.get('why') or 'no price'}{gone}")
         if not lines:
             lines.append("No prices found.")
         if res.get("ahOpen"):
@@ -539,10 +546,14 @@ def format_auction(res: dict | None) -> str:
                          "Auctionator.")
         return "\n".join(head + lines)
     head.append(f"{res.get('dbItems', '?')} items in the price data, {res.get('matched', len(items))} match the filters, "
-                f"showing {len(items)} (sorted by {res.get('sort', 'upgrade')}). A price is the lowest buyout of the last "
-                "scan that saw the item; listings may have sold or changed since.")
+                f"showing {len(items)} (sorted by {res.get('sort', 'upgrade')}). A price is the lowest buyout when the "
+                "item was last seen on offer (the last full scan or a search since); listings may have sold or "
+                "changed since.")
     if res.get("upgradeMethod"):
         head.append(f"Upgrade check: {res['upgradeMethod']}.")
+        if res.get("sort", "upgrade") == "upgrade" and str(res["upgradeMethod"]).startswith("Pawn"):
+            head.append("Order: the upgrades first (the biggest first), then the other items by their Pawn value in "
+                        "the player's scale (higher is better; compare with the equipped item's value).")
     if res.get("skipped"):
         head.append("Left out: " + ", ".join(f"{n} {why}" for why, n in sorted(res["skipped"].items()) if n) + ".")
     if res.get("notLoaded"):
@@ -575,6 +586,201 @@ def format_auction(res: dict | None) -> str:
     if res.get("ahOpen"):
         lines.append("The auction house window is open: the game offers to search the items you recommend in Auctionator.")
     return "\n".join(head + lines)
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "compare_sell_prices",
+        "description": "Where the items in the player's bags sell for more: what a vendor pays next to the auction "
+                       "house's lowest buyout from the last scan of the player's auction add-on, after the auction "
+                       "house's 5% cut, sorted into lists (better at a vendor, worth the auction house, soulbound, "
+                       "vendors do not buy). Call it once for every question about what to sell at a vendor or on "
+                       "the auction house; it prices the whole bags in one call.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "items": {"type": "array", "items": {"type": "string"},
+                          "description": "Optional: only these bag items (names or ids from the bags section)"},
+            },
+        },
+    },
+})
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "auctionator_list",
+        "description": "Put items on the Auction house card under your answer: with one click the player searches "
+                       "them all on the auction house (Auctionator's Shopping tab) or saves them as an Auctionator "
+                       "shopping list. Use it when the player asks for a list, a filter or a search in Auctionator, "
+                       "or when you recommend buying items that search_auction_house did not price. Exact item "
+                       "names as the game shows them: the item, not the quest that wants it ([Small Furry Paw], not "
+                       "Small Furry Paws). It returns their prices from the last scan and the names the price data "
+                       "does not know (check those). Items search_auction_house returned in this answer go on the "
+                       "card by themselves when the answer names them in [brackets].",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "items": {"type": "array", "items": {"type": "string"}, "description": "Exact item names"},
+                "name": {"type": "string", "description": "A few words naming the list in English, e.g. "
+                                                          "'Darkmoon Faire turn-ins'"},
+            },
+            "required": ["items"],
+        },
+    },
+})
+AUCTIONATOR_LIST_MAX = 20  # items on one card
+
+
+def auctionator_list(args: dict, snapshot: dict) -> tuple[dict | None, str]:
+    """(the list for the Auction house card, text for the model)."""
+    installed = {str(a.get("name")) for a in (snapshot.get("addons") or []) if isinstance(a, dict)}
+    if installed and "Auctionator" not in installed:
+        return None, "Not shown: Auctionator is not installed, so there is nothing to search or save the items in."
+    raw = args.get("items")
+    names: list[str] = []
+    for n in raw if isinstance(raw, list) else [raw] if isinstance(raw, str) else []:
+        # Auctionator's search strings use " ; ^ for exact, terms and categories
+        n = re.sub(r'["^;]', "", str(n or "")).strip().strip("[]").strip()[:80]
+        if n and n.lower() not in {x.lower() for x in names}:
+            names.append(n)
+    if not names:
+        return None, "Not shown: give the exact item names."
+    if len(names) > AUCTIONATOR_LIST_MAX:
+        return None, f"Not shown: a card holds at most {AUCTIONATOR_LIST_MAX} items; give the ones worth buying."
+    title = re.sub(r"\s+", " ", re.sub(r'["^;|]', "", str(args.get("name") or ""))).strip()[:40] or "Shopping"
+    lst = {"name": f"ForeverAI: {title}", "items": names}
+    return lst, (f"The Auction house card under your answer holds {len(names)} items: the player searches them on "
+                 f"the auction house with one click or saves them as the Auctionator shopping list "
+                 f"\"{lst['name']}\". Say so in a few words; do not tell them to make the list by hand.")
+
+
+AH_CUT = 0.05  # the auction house keeps 5% of a sale
+# the auction house is worth a listing (the trip, the wait and a deposit lost when nothing sells) only when the whole
+# stack brings at least this much more there than at a vendor: 10% and 50 copper
+AH_GAIN_SHARE, AH_GAIN_COPPER = 0.10, 50
+SELL_PRICE_MAX = 100  # items priced in one game call (what Auction.lua takes)
+
+
+def _bag_name(it: dict) -> str:
+    return str(it.get("item") or "").strip("[] ")
+
+
+def sell_price_request(snapshot: dict, args: dict) -> tuple[list[dict], dict | None, str | None]:
+    """The bag items to price and the game's auction_search request for those the auction house can take.
+    Returns (entries, request or None, error). Quest items and items without any sale value are left out."""
+    bags = (snapshot.get("bags") or {}).get("items") if isinstance(snapshot.get("bags"), dict) else None
+    if not bags:
+        return [], None, "Rejected: the game data has no bags section (the bags are empty or were not read)."
+    only = args.get("items")
+    if isinstance(only, (str, int)):
+        only = [only]
+    want = {str(x).strip("[] ").lower() for x in only} if isinstance(only, list) and only else None
+    entries, skipped = [], []
+    for it in bags:
+        if not isinstance(it, dict) or not it.get("item"):
+            continue
+        name = _bag_name(it)
+        if want is not None and name.lower() not in want and str(it.get("id")) not in want:
+            continue
+        tip = str(it.get("tooltip") or "")
+        sell = int(it.get("sellCopper") or 0)
+        if not sell and (it.get("bound") or "Conjured Item" in tip):
+            skipped.append(name)  # quest items, the Hearthstone, conjured food: nothing to sell
+            continue
+        entries.append({"id": it.get("id"), "name": name, "count": int(it.get("count") or 1), "sell": sell,
+                        "bound": bool(it.get("bound")), "junk": bool(it.get("junk")),
+                        "material": "Crafting Reagent" in tip, "quality": it.get("quality")})
+    if want is not None and not entries:
+        return [], None, "Rejected: none of these items is in the bags with a sale value: " + ", ".join(map(str, only))
+    priced = [e for e in entries if not e["bound"] and e.get("id")][:SELL_PRICE_MAX]
+    req = {"items": [{"id": int(e["id"])} for e in priced], "maxAgeDays": 30} if priced else None
+    if skipped and want is None:
+        entries.append({"skipped": skipped})
+    return entries, req, None
+
+
+def _each(copper: int, count: int) -> str:
+    return f" ({money(copper)} each)" if count > 1 else ""
+
+
+def format_sell_prices(entries: list[dict], res: dict | None) -> str:
+    """Bag items with their vendor and auction prices -> the lists for the model."""
+    skipped = next((e["skipped"] for e in entries if "skipped" in e), [])
+    entries = [e for e in entries if "skipped" not in e]
+    ah_error = None
+    if not res:
+        ah_error = "the game did not respond in time"
+    elif res.get("error"):
+        ah_error = str(res["error"])
+    prices = {int(it["id"]): it for it in (res or {}).get("items") or [] if it.get("id") and it.get("copper")}
+    missing = {int(m["id"]): m for m in (res or {}).get("missing") or [] if m.get("id")}
+    groups: dict[str, list[tuple[int, str]]] = {"vendor": [], "ah": [], "bound": [], "nobuy": []}
+    totals = {"vendor": 0, "ah": 0, "bound": 0}
+    for e in entries:
+        n, sell = e["count"], e["sell"]
+        label = f"[{e['name']}]" + (f" x{n}" if n > 1 else "")
+        notes = ", ".join(x for x in ("junk" if e["junk"] else "", "crafting material" if e["material"] else "",
+                                      e["quality"] if e["quality"] in ("uncommon", "rare", "epic") else "") if x)
+        label += f" ({notes})" if notes else ""
+        vendor = f"vendor {money(sell * n)}{_each(sell, n)}" if sell else ""
+        if e["bound"]:
+            groups["bound"].append((sell * n, f"- {label} — {vendor}"))
+            totals["bound"] += sell * n
+            continue
+        p = prices.get(int(e["id"])) if e.get("id") else None
+        if p:
+            net = int(int(p["copper"]) * (1 - AH_CUT))
+            seen = ", ".join(x for x in (f"seen {p['seen']}" if p.get("seen") else "",
+                                         f"{p['available']} listed" if p.get("available") else "") if x)
+            ah = f"AH {money(net * n)} after the cut{_each(net, n)}" + (f", {seen}" if seen else "")
+            if not sell:
+                groups["nobuy"].append((net * n, f"- {label} — {ah}; vendors do not buy it"))
+            elif net * n - sell * n >= max(AH_GAIN_COPPER, sell * n * AH_GAIN_SHARE):
+                groups["ah"].append((net * n - sell * n, f"- {label} — {ah}; {vendor}"))
+                totals["ah"] += net * n
+            else:
+                groups["vendor"].append((sell * n, f"- {label} — {vendor}; {ah}"))
+                totals["vendor"] += sell * n
+            continue
+        m = missing.get(int(e["id"])) if e.get("id") else None
+        if ah_error:
+            why = "auction price not known"
+        elif m and m.get("lastPrice"):
+            why = f"not listed on the AH in the last scan (last seen {m.get('lastSeen', '?')} at {m['lastPrice']})"
+        elif m:
+            why = "nobody listed it on the AH in the last 30 days"
+        else:  # beyond what one call prices, or an add-on from before /reload that prices fewer items
+            why = "auction price not checked"
+        if sell:
+            groups["vendor"].append((sell * n, f"- {label} — {vendor}; {why}"))
+            totals["vendor"] += sell * n
+        else:
+            groups["nobuy"].append((0, f"- {label} — vendors do not buy it; {why}"))
+    head = [f"The player's bag items: what a vendor pays and what the auction house pays after its {int(AH_CUT * 100)}% "
+            f"cut (the lowest buyout in {(res or {}).get('source') or 'the auction add-on'}"
+            + (f"; last scan: {res['lastScan']}" if res and res.get("lastScan") else "") + "). An item is worth "
+            f"the auction house when the whole stack brings at least {int(AH_GAIN_SHARE * 100)}% and "
+            f"{money(AH_GAIN_COPPER)} more there; a listing also costs a deposit that is lost when it does not sell."]
+    if ah_error:
+        head.append(f"Auction prices could not be read ({ah_error}): only the vendor prices are known.")
+    titles = {"vendor": "What a vendor pays (not compared with the auction house)" if ah_error else
+              "Better sold to a vendor", "ah": "Worth the auction house",
+              "bound": "Soulbound (only a vendor buys these)", "nobuy": "Vendors do not buy these"}
+    out = head
+    for key in ("vendor", "ah", "bound", "nobuy"):
+        rows = sorted(groups[key], key=lambda r: -r[0])
+        if not rows:
+            continue
+        total = f"; together {money(totals[key])}" if totals.get(key) else ""
+        out.append(f"\n{titles[key]} ({len(rows)}{total}):")
+        out += [r[1] for r in rows]
+    if skipped:
+        out.append("\nNot priced (quest items, conjured items, no sale value): " + ", ".join(f"[{s}]" for s in skipped))
+    out.append("\nThese lists only compare prices. Before you tell the player to sell an item, check that this character "
+               "has no use for it (Bags and selling); leave those out and say in one line which ones you kept.")
+    return "\n".join(out)
 
 
 def validate_vendor(args: dict, snapshot: dict) -> tuple[dict | None, str]:

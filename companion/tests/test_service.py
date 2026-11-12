@@ -9,7 +9,7 @@ import pytest
 from foreverai import config
 from foreverai.frames import decode_frame, encode_frames
 from foreverai.inbox import ensure_pool
-from foreverai.openrouter import ToolCall
+from foreverai.openrouter import ToolCall, is_free
 from foreverai.service import Service
 from foreverai.tools import validate_proposal
 
@@ -297,7 +297,7 @@ def test_mcp_server_protocol():
     names = [t["name"] for t in srv.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]]
     assert names == ["search_knowledge_base", "propose_addon_change", "save_memory", "delete_memory", "fetch_url",
                      "mark_on_map", "edit_route", "plan_route", "addon_options", "propose_quest_abandon", "propose_vendor_action",
-                     "search_auction_house"]
+                     "search_auction_house", "compare_sell_prices", "auctionator_list"]
     res = srv.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                       "params": {"name": "addon_options", "arguments": {"addon": "Questie"}}})
     assert res["result"] == {"content": [{"type": "text", "text": "ok addon_options"}], "isError": False}
@@ -1513,3 +1513,291 @@ def test_a_long_route_is_marked_to_its_end(env):
     ctx = _ctx(svc, addons, {"player": {"coords": "5.0, 50.0", "map": "Teldrassil"}, "quests": quests})
     text, _ = svc.run_tool(ctx, "plan_route", {})
     assert len(ctx.marks) == 16 and ctx.marks[-1]["title"] == "16. Clerk 16" and "The 16 stops are marked" in text
+
+
+class FreeClient(FakeClient):
+    """OpenRouter with free models: a balance of ``balance``, 37 of 50 free requests left today before the requests
+    made here."""
+    balance = 0.0
+    seen: list = []  # (model, web search) of every request
+    answer_as = "nvidia/nemotron-3.5-lightning:free"
+    fail: set = set()  # models that answer with an error
+
+    def credits(self):
+        return FreeClient.balance
+
+    def models(self):
+        from foreverai.openrouter import FREE_ROUTER
+        return [{"id": "openai/gpt-6-luna", "in": 0.1, "out": 0.5, "free": False, "tools": True},
+                {"id": "acme/new-model:free", "in": 0, "out": 0, "free": True, "tools": True},  # not in FREE_MODELS
+                {"id": FREE_ROUTER, "in": 0, "out": 0, "free": True, "tools": True},
+                {"id": "google/gemma-4-31b-it:free", "in": 0, "out": 0, "free": True, "tools": True},
+                {"id": "nvidia/nemotron-3-ultra-550b-a55b:free", "in": 0, "out": 0, "free": True, "tools": True},
+                {"id": "acme/no-tools:free", "in": 0, "out": 0, "free": True, "tools": False},
+                {"id": "acme/music:free", "in": 0, "out": 0, "free": True, "tools": True, "text": False}]
+
+    def key_info(self):
+        used = 13 + sum(is_free(m) for m, _ in FreeClient.seen)
+        return {"label": "x", "free_model_daily_requests": {"used": used, "limit": 50, "remaining": 50 - used}}
+
+    def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+        FreeClient.seen.append((model, search_mode))
+        if model in FreeClient.fail:
+            yield "error", "Model not available (404): No endpoints found"
+            return
+        yield "model", FreeClient.answer_as
+        if not any(m["role"] == "tool" for m in messages):
+            yield "tool_calls", [ToolCall("c1", "search_knowledge_base", '{"query":"Balance of Nature"}')]
+            yield "done", "tool_calls"
+            return
+        yield "text", "Kill 7 wolves."
+        yield "usage", {"cost": 0}
+        yield "done", "stop"
+
+
+@pytest.fixture
+def free_env(env):
+    svc, addons, tmp = env
+    svc.client_factory = FreeClient
+    FreeClient.balance, FreeClient.seen, FreeClient.fail = 0.0, [], set()
+    return svc, addons, tmp
+
+
+def _answer(svc, addons, msg_id=7):
+    _send(svc, {"type": "question", "msgId": msg_id, "session": "S", "nextInbox": 1, "conv": "c", "text": "hi",
+                "snapshot": {}})
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        d = _read_inbox(addons, 1)
+        if d.get("final") and d.get("msgId") == msg_id:
+            return d
+        time.sleep(0.01)
+    raise AssertionError("no final answer")
+
+
+def test_the_free_models_of_openrouter_in_the_app(free_env):
+    from foreverai.openrouter import FREE_ROUTER
+    svc, addons, _ = free_env
+    choices = svc.model_choices("openrouter")
+    ids = [c["id"] for c in choices]
+    # the chosen model and the favorites first, then the free models that chat and call tools: the most used first,
+    # newer ones after them, the free router last; free models OpenRouter no longer lists are left out
+    free = ["nvidia/nemotron-3-ultra-550b-a55b:free", "google/gemma-4-31b-it:free", "acme/new-model:free", FREE_ROUTER]
+    assert ids[0] == config.DEFAULT_MODEL and ids[-4:] == free and len(set(ids)) == len(ids)
+    assert ids[:len(config.FAVORITE_MODELS)] == config.FAVORITE_MODELS
+    assert not {"acme/no-tools:free", "acme/music:free", "nvidia/nemotron-3.5-lightning:free"} & set(ids)
+    by_id = {c["id"]: c for c in choices}
+    assert by_id["google/gemma-4-31b-it:free"]["price"] == "Free · 37 of 50 requests left today"
+    assert by_id["openai/gpt-6-luna"]["price"] == "$0.10 / $0.50 per 1M tokens"
+    # a paid model: the balance, no free requests
+    assert "free" not in svc.status()
+    assert svc.set_model("google/gemma-4-31b-it:free") == (True, "Model: google/gemma-4-31b-it:free")
+    st = svc.status()
+    assert st["free"] == {"left": 37, "limit": 50} and st["balance"] == 0.0
+    # web search is paid per search: with a free model and no balance the game is told it is off
+    assert st["searchMode"] == "never" and svc.store.settings.search_mode == "auto"
+    FreeClient.balance = 5.0
+    assert svc.status(fresh=True)["searchMode"] == "auto"
+    # without OpenRouter's list (no key yet) the free models of the list are offered
+    assert svc.free_models({}) == __import__("foreverai.openrouter").openrouter.FREE_MODELS + [FREE_ROUTER]
+
+
+def test_a_free_model_answers_at_no_cost_without_paid_search(free_env):
+    svc, addons, _ = free_env
+    svc.store.update(model="google/gemma-4-31b-it:free")
+    assert svc.free_requests() == {"left": 37, "limit": 50}
+    d = _answer(svc, addons)
+    assert d["kind"] == "answer" and "Kill 7 wolves." in d["text"]
+    # no balance: the answer goes without OpenRouter's paid web search, in both rounds of the answer
+    assert FreeClient.seen == [("google/gemma-4-31b-it:free", "never")] * 2
+    # the model OpenRouter says answered (the chosen one was busy and the free router stepped in), no cost
+    assert d["model"] == "nvidia/nemotron-3.5-lightning:free"
+    assert d["cost"] is None and d["costNote"] == "no cost"
+    # the two requests of the answer count toward the free requests of the day, before OpenRouter is asked again
+    assert d["status"]["free"] == {"left": 35, "limit": 50}
+    assert svc.free_requests(cached=True) == {"left": 35, "limit": 50}
+    # with a balance that covers a few searches, the web search chosen in the app is used
+    FreeClient.balance, FreeClient.seen = 5.0, []
+    svc.balance(fresh=True)
+    _answer(svc, addons, msg_id=8)
+    assert FreeClient.seen == [("google/gemma-4-31b-it:free", "auto")] * 2
+
+
+def test_a_free_model_that_cannot_answer_is_followed_by_the_free_router(free_env):
+    from foreverai.openrouter import FREE_ROUTER
+    svc, addons, _ = free_env
+    svc.store.update(model="google/gemma-4-31b-it:free", fallback_model="deepseek/deepseek-v4-flash")
+    FreeClient.fail = {"google/gemma-4-31b-it:free"}
+    d = _answer(svc, addons)
+    # never the paid fallback model: it would cost
+    assert [m for m, _ in FreeClient.seen] == ["google/gemma-4-31b-it:free", FREE_ROUTER, FREE_ROUTER]
+    assert d["kind"] == "answer" and d["model"] == FreeClient.answer_as and d["cost"] is None
+    # the free router itself has no fallback: its error reaches the player
+    svc.store.update(model=FREE_ROUTER)
+    FreeClient.fail, FreeClient.seen = {FREE_ROUTER}, []
+    d = _answer(svc, addons, msg_id=8)
+    assert d["kind"] == "error" and "404" in d["text"] and [m for m, _ in FreeClient.seen] == [FREE_ROUTER]
+    # a paid model keeps its own fallback
+    svc.store.update(model="openai/gpt-6-luna")
+    FreeClient.fail, FreeClient.seen = {"openai/gpt-6-luna"}, []
+    d = _answer(svc, addons, msg_id=9)
+    assert [m for m, _ in FreeClient.seen][:2] == ["openai/gpt-6-luna", "deepseek/deepseek-v4-flash"]
+    assert d["model"] == "deepseek/deepseek-v4-flash"  # a paid answer names the model it asked
+
+
+def test_free_requests_that_cannot_be_read_are_not_asked_for_again_at_once(free_env):
+    """OpenRouter does not tell the free requests left (network, a key it does not know): the model list asks once,
+    not for every free model, and the next ask waits a minute, in the background."""
+    svc, addons, _ = free_env
+    asked = []
+
+    def key_info(self):
+        asked.append(1)
+        raise RuntimeError("401: User not found")
+    original, FreeClient.key_info = FreeClient.key_info, key_info
+    try:
+        choices = svc.model_choices("openrouter")
+        assert [c["price"] for c in choices if c["id"].endswith(":free")][0] == "Free · 50 requests a day, 20 a minute"
+        assert svc.free_requests() is None and svc.status().get("free") is None
+        assert len(asked) == 1
+    finally:
+        FreeClient.key_info = original
+
+
+def test_a_free_model_for_route_updates_follows_the_rules_of_free_models(free_env):
+    """Questions and the add-on's updates of the route can have different models, one free and one paid: each answer
+    follows the rules of its own model."""
+    from foreverai.openrouter import FREE_ROUTER
+    svc, addons, _ = free_env
+    svc.store.update(model="openai/gpt-6-luna", search_mode="auto")
+    assert svc.set_route_model("google/gemma-4-31b-it:free")[0]
+
+    def ask(n, text, **more):
+        FreeClient.seen = []
+        svc.handle({"type": "question", "msgId": n, "session": "S", "nextInbox": n, "conv": "c", "text": text,
+                    "snapshot": {}, **more})
+        return _wait_final(addons, n)
+
+    # the free model of updates is busy: the free router answers, with no paid search (no balance) and at no cost
+    FreeClient.fail = {"google/gemma-4-31b-it:free"}
+    d = ask(2, UPDATE, auto=True, news=True)
+    assert FreeClient.seen == [("google/gemma-4-31b-it:free", "never")] + [(FREE_ROUTER, "never")] * 2
+    assert d["cost"] is None and d["costNote"] == "no cost" and d["model"] == FreeClient.answer_as
+    # a question: the paid model with the web search chosen in the app
+    d = ask(5, "Where is Byancie?")
+    assert FreeClient.seen == [("openai/gpt-6-luna", "auto")] * 2
+    assert d["model"] == "openai/gpt-6-luna" and "costNote" not in d
+    # the other way round: a free model for questions and a paid one for updates
+    FreeClient.fail = set()
+    svc.store.update(model="google/gemma-4-31b-it:free")
+    assert svc.set_route_model("openai/gpt-6-luna")[0]
+    ask(8, UPDATE, auto=True, news=True)
+    assert FreeClient.seen == [("openai/gpt-6-luna", "auto")] * 2
+    ask(11, "Where is Byancie?")
+    assert FreeClient.seen == [("google/gemma-4-31b-it:free", "never")] * 2
+
+
+def test_a_knowledge_base_search_that_finds_nothing_names_the_web_as_the_next_step(env, tmp_path):
+    """The real answer: "Which items are best to hand in at the Darkmoon Faire for the bag? Take the AH prices." The
+    model searched the knowledge base, read "No results in the local knowledge base." and answered another question
+    (what to sell on the auction house) without searching the web. With a web search the result now says to use it;
+    without one it stays as it was."""
+    from foreverai.kb.store import KB
+    svc, addons, _ = env
+    kb = KB(tmp_path / "empty.sqlite")
+    kb.upsert_page("wiki", "1", "Skyborne", "https://warcraft.wiki.gg/wiki/Skyborne", "1", "s", "t",
+                   "The Skyborne are a playable race in World of Warcraft: Forever with wings of their own.")
+
+    class Client(FakeClient):
+        results: list = []
+        query = "Darkmoon Faire"
+
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            done = [m["content"] for m in messages if m["role"] == "tool"]
+            if not done:
+                yield "tool_calls", [ToolCall("c1", "search_knowledge_base", json.dumps({"query": Client.query}))]
+                return
+            Client.results.append((search_mode, done[-1]))
+            yield "text", "Done."
+
+    svc = Service(svc.store, kb, addons, client_factory=Client, lookahead=4)
+
+    def ask(n):
+        svc.handle({"type": "question", "msgId": n, "session": "S", "nextInbox": n, "conv": "c", "text": "q",
+                    "snapshot": {}})
+        _wait_final(addons, n)
+        return Client.results[-1]
+
+    mode, text = ask(3)
+    assert mode == "auto" and text.startswith("No results in the local knowledge base. When the answer depends on it")
+    assert "search the web for it before you answer" in text and "never answer another question" in text
+    Client.query = "Skyborne wings"  # found: the pages, and nothing about the web
+    mode, text = ask(7)
+    assert "[Skyborne |" in text and "search the web" not in text
+    Client.query = "Darkmoon Faire"
+    assert svc.set_search_mode("never")[0]
+    assert ask(11) == ("never", "No results in the local knowledge base.")
+    assert svc.set_search_mode("always")[0]
+    assert ask(15)[1].startswith("No results in the local knowledge base. When the answer depends on it")
+
+
+def test_a_free_model_without_a_paid_search_gets_no_web_step(env, tmp_path):
+    from foreverai.kb.store import KB
+    svc, addons, _ = env
+
+    class Client(FreeClient):
+        results: list = []
+
+        def chat_stream(self, model, messages, tools, search_mode, max_tokens):
+            done = [m["content"] for m in messages if m["role"] == "tool"]
+            if not done:
+                yield "tool_calls", [ToolCall("c1", "search_knowledge_base", '{"query": "Darkmoon Faire"}')]
+                return
+            Client.results.append((search_mode, done[-1]))
+            yield "text", "Done."
+
+    FreeClient.balance, FreeClient.seen, FreeClient.fail = 0.0, [], set()
+    svc = Service(svc.store, KB(tmp_path / "empty.sqlite"), addons, client_factory=Client, lookahead=4)
+    assert svc.set_model("google/gemma-4-31b-it:free")[0]
+    svc.handle({"type": "question", "msgId": 3, "session": "S", "nextInbox": 3, "conv": "c", "text": "q", "snapshot": {}})
+    _wait_final(addons, 3)
+    assert Client.results == [("never", "No results in the local knowledge base.")]
+
+
+def test_claude_code_gets_the_web_step_while_its_websearch_is_on(env, tmp_path, monkeypatch):
+    from foreverai import claude_code
+    from foreverai.kb.store import KB
+    svc, addons, _ = env
+    svc.kb = KB(tmp_path / "empty.sqlite")
+    monkeypatch.setattr(claude_code, "detect", lambda force=False: {"path": "claude", "version": "2.1.304",
+                                                                    "loggedIn": True, "subscription": "max"})
+    seen = {"results": []}
+
+    class FakeSession:
+        def __init__(self, exe, workdir, system, model, effort, search_mode, bridge_url, bridge_token):
+            seen["bridge"] = bridge_url
+            self.key = (model, effort, search_mode, system)
+            self.workdir, self.conv, self.turns, self.busy = workdir, None, 0, False
+
+        def alive(self):
+            return True
+
+        def close(self):
+            pass
+
+        def turn(self, prompt, images=None):
+            from foreverai.mcp_server import http_bridge
+            call = http_bridge(seen["bridge"].replace("/mcp", "/tool"), svc._bridge.token)
+            seen["results"].append(call("search_knowledge_base", {"query": "Darkmoon Faire"}))
+            yield "final", "Done."
+
+    monkeypatch.setattr(claude_code, "ClaudeSession", FakeSession)
+    assert svc.set_provider("claude_code")[0]
+    for n, mode in ((3, "auto"), (7, "never")):
+        assert svc.set_search_mode(mode)[0]
+        svc.handle({"type": "question", "msgId": n, "session": "S", "nextInbox": n, "conv": "c", "text": "q",
+                    "snapshot": {}})
+        _wait_final(addons, n)
+    (auto, auto_err), (never, never_err) = seen["results"]
+    assert not auto_err and "search the web for it before you answer" in auto
+    assert not never_err and never == "No results in the local knowledge base."

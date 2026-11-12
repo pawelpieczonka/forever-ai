@@ -269,6 +269,9 @@ Enum.ItemQuality = { Poor = 0, Common = 1, Uncommon = 2, Rare = 3, Epic = 4, Leg
 Enum.PowerType = { Mana = 0, Rage = 1, Focus = 2, Energy = 3 }
 
 RANGE_INDICATOR = "●"
+for q, name in pairs({ [0] = "Poor", "Common", "Uncommon", "Rare", "Epic", "Legendary", "Artifact", "Heirloom" }) do
+  _G["ITEM_QUALITY" .. q .. "_DESC"] = name
+end
 COMBATLOG_XPGAIN_FIRSTPERSON = "%s dies, you gain %d experience."
 NORMAL_FONT_COLOR = { r = 1, g = 0.82, b = 0 }
 HIGHLIGHT_FONT_COLOR = { r = 1, g = 1, b = 1 }

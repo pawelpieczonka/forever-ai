@@ -92,6 +92,11 @@ local EQUIP_SLOTS = {
 }
 local NO_SKILL_NEEDED = { INVTYPE_NECK = true, INVTYPE_FINGER = true, INVTYPE_TRINKET = true, INVTYPE_CLOAK = true,
   INVTYPE_BODY = true, INVTYPE_TABARD = true, INVTYPE_HOLDABLE = true }
+-- item types whose skill has another name: the skill window says "Swords" where the item says "One-Handed Swords",
+-- "Plate Mail" for "Plate", "Shield" for "Shields"; anyone can equip a fishing pole or a miscellaneous item
+local SKILL_OF_TYPE = { ["one-handed swords"] = "swords", ["one-handed axes"] = "axes", ["one-handed maces"] = "maces",
+  plate = "plate mail", shields = "shield" }
+local NO_SKILL_TYPE = { miscellaneous = true, ["fishing poles"] = true, ["fishing pole"] = true }
 
 local statsCache = {} -- item link -> stats (an item's stats never change)
 local function itemStats(link)
@@ -130,6 +135,12 @@ local function skillSet()
       if name then set[name:lower()] = true end
     end
   end
+  if not next(set) and GetNumSkillLines and GetSkillLineInfo then -- the Classic skill window, as S.skills reads it
+    for i = 1, math.min(80, safe(GetNumSkillLines) or 0) do
+      local name, header = safe(GetSkillLineInfo, i)
+      if type(name) == "string" and not header then set[name:lower()] = true end
+    end
+  end
   skillSetCache, skillSetAt = set, GetTime()
   return set
 end
@@ -157,7 +168,7 @@ function C.ItemFacts(link, compare)
     if (classID == 2 or classID == 4) and not NO_SKILL_NEEDED[equipLoc] and subType and subType ~= "" then
       local need = subType:lower()
       local have = skillSet()
-      local ok = have[need] or have[need .. " mail"] or (need == "miscellaneous") or (need == "shields" and have["shield"])
+      local ok = have[need] or have[SKILL_OF_TYPE[need] or need] or NO_SKILL_TYPE[need]
       if next(have) and not ok then f.cannotUse = "missing skill: " .. subType end
     end
     if compare then

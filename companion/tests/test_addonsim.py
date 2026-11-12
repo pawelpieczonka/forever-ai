@@ -188,8 +188,8 @@ def test_command_line(tmp_path, capsys):
 
 # globals the add-on reads that the game does not have unless another add-on (or a newer client) provides them
 ABSENT = {"Auctionator", "AUCTIONATOR_PRICE_DATABASE", "AUCTIONATOR_SAVEDVARS", "AuctionFrame", "AuctionHouseFrame",
-          "InspectFrame", "LibStub", "PawnGetItemData", "PawnIsInitialized", "PawnIsItemAnUpgrade", "QuestieLoader",
-          "TomTom", "issecretvalue"}
+          "InspectFrame", "LibStub", "PawnGetItemData", "PawnGetItemDataForInventorySlot", "PawnIsInitialized",
+          "PawnIsItemAnUpgrade", "QuestieLoader", "TomTom", "issecretvalue"}
 # the Classic trade skill and craft API: WoW Forever has only C_TradeSkillUI (Professions.lua uses whichever exists)
 ABSENT |= {"CollapseCraftSkillLine", "CollapseTradeSkillSubClass", "ExpandCraftSkillLine", "ExpandTradeSkillSubClass",
            "GetCraftDisplaySkillLine", "GetCraftInfo", "GetCraftItemLink", "GetCraftNumReagents", "GetCraftReagentInfo",
@@ -279,3 +279,28 @@ def test_marks_stay_after_reload_and_are_done_when_reached(sim):
     sim.lua("ForeverAI.Map.Clear()")
     assert sim.lua(SECTION) == b"none" and sim.lua(ON_THE_MAP) == b""
     assert sim.errors == []
+
+
+def test_the_auction_card_saves_the_items_as_an_auctionator_list(tmp_path):
+    """The real conversation: the player asked for a filter in Auctionator for the Darkmoon Faire's items, and the
+    answer told them to type the list by hand. Now the model puts the items on the Auction house card, the app looks up
+    their prices in Auctionator's data, and a click saves them as a shopping list through Auctionator's public API."""
+    game, data = tmp_path / "game", tmp_path / "data"
+    reply = {"text": "The turn-in items are on the card below.",
+             "tools": [{"name": "auctionator_list", "args": {"items": ["Small Furry Paw", "Linen Cloth"],
+                                                             "name": "Darkmoon Faire"}}]}
+    with App(game, data, replies=[reply], pool=60) as app:
+        sim = Sim(game, realtime=True, clock=CLOCK, market=True).start()
+        try:
+            sim.ask("Make an Auctionator filter for these items")
+            sim.wait_answer(60)
+            card = next(t for t in sim.texts() if t.startswith("Auction house"))
+            assert card.splitlines()[1:] == ["• Small Furry Paw  no price in the last scan", "• Linen Cloth  11c"]
+            assert "[Linen Cloth] (item 2589) — 11c" in app.tool_results[0]["result"]
+            sim.click("Save as list")
+            assert "Saved as the Auctionator shopping list ForeverAI: Darkmoon Faire (Shopping tab)." in "\n".join(sim.texts())
+            saved = sim.lua('return Auctionator.API.v1.GetShoppingListItems("test", "ForeverAI: Darkmoon Faire")')
+            assert sim.to_py(saved) == ['"Small Furry Paw"', '"Linen Cloth"']
+            assert "Save as list" not in sim.texts() and sim.errors == []
+        finally:
+            sim.close()
