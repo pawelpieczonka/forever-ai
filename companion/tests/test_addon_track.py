@@ -343,22 +343,36 @@ def test_the_same_creature_tracked_again_stays_as_it_was(sim):
     assert text(sim.lua(SECTION)) == "Befouled Webwood: none in sight now; not seen since it is tracked"
 
 
-def test_the_strip_says_why_nothing_can_be_seen(sim):
+def test_nameplates_turned_off_while_tracking_are_turned_on_again(sim):
+    """"Jak to może być wyłączone, jak śledzimy": the game data said "nameplates off" in the middle of tracking, so
+    the creatures came back without a marker and only the search by name made a sound. Whatever turns them off (a
+    key, another add-on), they are on again within a second, and in a fight as soon as it is over."""
+    sim.lua('SetCVar("nameplateShowEnemies", "0")')  # the player's own setting
     sim.slash("/fai")
     sim.lua(ANSWER)
     sim.run(3)
     assert shown(sim).count("the nameplates of all enemies are shown while a creature is tracked") == 1  # said once
-    sim.lua('SetCVar("nameplateShowEnemies", "0")')  # the player's own key for hiding nameplates
-    sim.run(1)
-    assert "Tracking Strigid Screecher · nameplates off" in shown(sim)
+    sim.lua('SetCVar("nameplateShowEnemies", "0")')
+    sim.run(1.5)
+    assert sim.lua('return GetCVar("nameplateShowEnemies")') == b"1" and "Tracking Strigid Screecher (0)" in shown(sim)
+    sim.lua('SetCVar("nameplateShowAll", "0")')
+    sim.run(1.5)
+    assert sim.lua('return GetCVar("nameplateShowAll")') == b"1"
+    # the game does not let them change in a fight: the strip says so, and they come on when it is over
     sim.lua("InCombatLockdown = function() return true end")
     sim._wow.fire(b"PLAYER_REGEN_DISABLED")
-    sim.run(1)
-    assert "Tracking Strigid Screecher · after the fight" in shown(sim)  # they come back on when the fight is over
+    sim.lua('SetCVar("nameplateShowEnemies", "0")')
+    sim.run(2)
+    assert sim.lua('return GetCVar("nameplateShowEnemies")') == b"0" and "Tracking Strigid Screecher · after the fight" in shown(sim)
     sim.lua("InCombatLockdown = function() return false end")
     sim._wow.fire(b"PLAYER_REGEN_ENABLED")
     sim.run(1)
-    assert "Tracking Strigid Screecher (0)" in shown(sim)
+    assert sim.lua('return GetCVar("nameplateShowEnemies")') == b"1" and "Tracking Strigid Screecher (0)" in shown(sim)
+    assert shown(sim).count("the nameplates of all enemies are shown while a creature is tracked") == 1
+    # tracking ends: the player's own settings come back, and stay
+    sim.lua("ForeverAI.Track.Stop()")
+    sim.run(2)
+    assert sim.lua('return GetCVar("nameplateShowEnemies")') == b"0" and sim.errors == []
 
 
 def test_an_empty_quest_log_right_after_login_ends_nothing(sim):
@@ -436,8 +450,12 @@ def test_a_stop_with_a_watched_creature_stays_until_its_objective_is_done(sim):
     assert "Tracking" not in shown(sim).replace("Tracking:", "") and "Route (1/2)" in shown(sim)
     assert "Taken off the route by the player" not in text(sim.lua(MAP))
 
-    sim._wow.player.x, sim._wow.player.y = 0.383, 0.344  # a stop without a creature is done when it is reached
+    # a stop without a creature is done when it is reached (the quest add-on of this test knows no NPC there: the
+    # stop waits a moment for its data, then counts as a place)
+    sim._wow.player.x, sim._wow.player.y = 0.383, 0.344
     sim.run(5)
+    assert text(sim.lua(MAP)).endswith("2. Sentinel Arynia — Darkshore 38.3, 34.4 (0 m)")
+    sim.run(22)
     assert text(sim.lua(MAP)).endswith("2. Sentinel Arynia — Darkshore 38.3, 34.4 (done)")
     assert sim.errors == []
 
@@ -634,3 +652,39 @@ def test_a_game_that_answers_differently_is_not_asked(sim):
     assert text(sim.lua(SECTION)) == "Strigid Screecher: none in sight now; not seen since it is tracked"
     sim.slash("/fai track")
     assert "looking by name: not available in this game" in shown(sim)
+
+
+def test_what_tracking_sees_goes_to_the_app_live(sim):
+    """"Żebyś miał więcej logów debug do podglądania na żywo": with the app asking for it (it runs from source), what
+    tracking sees and does is sent to the app every few seconds, without the player sending anything."""
+    sim.slash("/fai")
+    sim.lua("ForeverAI.db.status = { debugLog = true }")
+    sim.lua(TRACK)
+    sim.lua('SetCVar("nameplateShowEnemies", "0")')
+    sim.run(2)
+    sim.lua('TEST_show({ { name = "Strigid Screecher" } })')
+    sim.run(12)
+    sent = [m for m in sim.sent_messages() if m.get("type") == "debug"]
+    lines = [e["k"] + ": " + e["m"] for m in sent for e in m["entries"]]
+    assert "track: tracking Strigid Screecher (counts: strigid screecher)" in lines
+    assert any("| units: Strigid Screecher" in line for line in lines)
+    assert any(line.startswith("track: nameplates were off (enemies 0,") and line.endswith("turned on again") for line in lines)
+    assert any(line.startswith("track: Strigid Screecher: 1 in sight, marked") for line in lines)
+    assert all(m.get("snapshot") is None for m in sent)  # a few lines, not the game data
+    # nothing new, nothing sent; and the player's question goes first
+    sim.run(12)
+    assert [m for m in sim.sent_messages() if m.get("type") == "debug"] == []
+    sim.lua("ForeverAI.db.status = { debugLog = false }")
+    sim.lua('TEST_show({})')
+    sim.run(12)
+    assert [m for m in sim.sent_messages() if m.get("type") == "debug"] == []  # the app does not ask: nothing goes
+    assert "Strigid Screecher: 0 in sight" in text(sim.lua("return table.concat(ForeverAI.DebugLog.Lines(5), ' | ')"))
+    assert sim.errors == []
+
+
+def test_an_error_inside_the_scan_is_logged(sim):
+    sim.slash("/fai")
+    sim.lua(TRACK)
+    sim.lua('TEST_show({ { name = "Strigid Screecher" } }) tContains = function() error("broken") end')
+    sim.run(2)
+    assert "error: Track.Scan" in text(sim.lua("return table.concat(ForeverAI.DebugLog.Lines(10), ' | ')"))

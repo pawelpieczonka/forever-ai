@@ -135,7 +135,7 @@ local handlers = {}
 function ns.On(event, fn)
   if not handlers[event] then
     handlers[event] = {}
-    frame:RegisterEvent(event)
+    pcall(frame.RegisterEvent, frame, event) -- an event this client does not know must not stop the file that asks
   end
   table.insert(handlers[event], fn)
 end
@@ -228,6 +228,29 @@ local function pruneConvs()
   end
 end
 
+-- What the add-on showed the player and what the player did with it since their last message to the AI (a route
+-- alert, a click on a card, a card dismissed, the route cleared): the AI gets it with the next message, as the
+-- section "sinceLastAnswer". Without it the AI did not know how the player took what it gave them.
+local SEEN_MAX = 20
+function ns.Seen(line)
+  if not ns.char then return end
+  local seen = ns.char.seen or {}
+  seen[#seen + 1] = { t = time(), line = tostring(line):sub(1, 200) }
+  while #seen > SEEN_MAX do table.remove(seen, 1) end
+  ns.char.seen = seen
+end
+
+function ns.SeenSection()
+  local seen = ns.char and ns.char.seen
+  if not seen or #seen == 0 then return nil end
+  local out, now = {}, time()
+  for i, e in ipairs(seen) do
+    local ago = math.max(0, now - (e.t or now))
+    out[i] = (ago < 90 and (ago .. " s ago") or (math.floor(ago / 60 + 0.5) .. " min ago")) .. ": " .. tostring(e.line)
+  end
+  return out
+end
+
 function ns.RecordEntry(entry)
   local c = ns.CurrentConv()
   entry.at = date("%H:%M")
@@ -303,10 +326,12 @@ SlashCmdList.FOREVERAI = function(msg)
     ns.Button.Refresh()
   elseif msg == "stop" then -- ends what the add-on keeps doing: the watch for creatures and the marks on the map
     if ns.Track then ns.Track.Stop() end
-    if ns.Map then ns.Map.Clear() end
+    if ns.Map then ns.Map.Clear("the player (/fai stop)") end
     ns.print("Tracking stopped and marks cleared.")
   elseif msg == "track" then
     if ns.Track then ns.Track.Debug() end
+  elseif msg == "log" then -- the last lines of what the add-on saw and decided
+    for _, line in ipairs(ns.DebugLog and ns.DebugLog.Lines(25) or {}) do ns.print(line) end
   elseif msg == "progress" then
     if ns.Progress then ns.Progress.Debug() end
   elseif msg == "professions" then
@@ -344,7 +369,7 @@ end
 
 function ns.CanSend()
   if ns.pending then return false, "Wait for the current answer to finish." end
-  if ns.collecting or ns.Transport.sending then return false, "The previous question is still being sent." end
+  if ns.collecting or ns.Transport.Busy() then return false, "The previous question is still being sent." end
   if ns.Transport.InboxLeft() < 3 then
     return false, "Type /reload to continue."
   end
@@ -368,7 +393,7 @@ function ns.Request(msg, label)
     end
     if msg.deleteConvs then wipe(ns.db.pendingDeletes) end
     if label == "question" then ns.UI.SetPhase("Sent…") end
-    ns.Transport.StartPolling()
+    ns.Transport.StartPolling(msg.fast and 0.6 or nil)
   end)
   ns.UI.UpdateBusy()
   return true
@@ -457,6 +482,8 @@ function ns.Ask(text, opts)
   msg.wantScreen = opts.screen == true or nil
   if opts.auto then msg.auto = true end
   if opts.news then msg.news = true end -- the add-on's own errand: it does not wait long for the app
+  if opts.fast then msg.fast = true end -- the app answers at once (its planner): the first look comes soon
+  if opts.check then msg.check = true end -- the AI checks what the planner did: only a change is news
   if opts.news then
     -- sent by the add-on for a news line (an update of the route): the chat shows the answer only, as one line
   elseif opts.auto then
@@ -464,7 +491,7 @@ function ns.Ask(text, opts)
   else
     ns.UI.AddQuestion(text)
   end
-  ns.UI.BeginAnswer(msg.msgId, opts.news)
+  ns.UI.BeginAnswer(msg.msgId, opts.news, opts.check)
   ns.UI.SetPhase("Reading game data…")
   ns.collecting = true
   ns.UI.UpdateBusy()
@@ -474,6 +501,7 @@ function ns.Ask(text, opts)
   ns.Collect.SnapshotAsync(function(snap, perf)
     ns.collecting = false
     msg.snapshot = snap
+    if ns.char then ns.char.seen = nil end -- (told with this message)
     perf.previousSend = ns.lastSend
     msg.perf = perf
     ns.lastPerf = perf
@@ -521,31 +549,76 @@ end
 ------------------------------------------------------------------------ work the AI asks the game to do
 -- (e.g. reading another add-on's options); results go back as their own frames while the answer is being written
 ns.handledRequests = {}
-local resultQueue = {}
-local function flushResults()
+-- Every message to the app is a screenshot, and the game takes one a second at most (their names go by the second). So
+-- the results of requests that came together go back together: while another request is still being worked on, a
+-- result waits for it, RESULTS_WAIT_S at most, and all that are through by then leave as one message.
+local RESULTS_WAIT_S = 1.0
+local WORK_S = 45 -- a request without an answer after this long is not waited for (the app gave it up by then)
+local resultQueue, inWork, firstQueuedAt, flushPlanned, handling = {}, {}, nil, false, false
+local function working()
+  local n, now = 0, GetTime()
+  for id, since in pairs(inWork) do
+    if now - since < WORK_S then n = n + 1 else inWork[id] = nil end
+  end
+  return n
+end
+local flushResults
+local function flushLater(seconds)
+  if flushPlanned then return end
+  flushPlanned = true
+  C_Timer.After(seconds, function()
+    flushPlanned = false
+    flushResults()
+  end)
+end
+flushResults = function()
   if #resultQueue == 0 then return end
-  if ns.Transport.sending then C_Timer.After(0.25, flushResults) return end
-  local msg = table.remove(resultQueue, 1)
+  if ns.Transport.sending then flushLater(0.1) return end
+  if working() > 0 and firstQueuedAt and GetTime() - firstQueuedAt < RESULTS_WAIT_S then flushLater(0.1) return end
+  local msg
+  if #resultQueue == 1 then
+    msg = resultQueue[1]
+  else
+    local results = {}
+    for i, r in ipairs(resultQueue) do results[i] = { id = r.id, result = r.result } end
+    msg = { v = 1, type = "game_results", msgId = ns.NewMsgId(), session = ns.session, results = results }
+  end
+  resultQueue, firstQueuedAt = {}, nil
   ns.Transport.Send(msg, function(ok, err)
     if not ok then ns.lastError = "game_result: " .. tostring(err) end
-    if #resultQueue > 0 then C_Timer.After(0.1, flushResults) end
+    if #resultQueue > 0 then flushLater(0.1) end
   end)
 end
 
 function ns.HandleRequests(list)
+  handling = true -- (the answers given at once leave together, after the last of them)
   for _, req in ipairs(list) do
     if type(req) == "table" and req.id and not ns.handledRequests[req.id] then
       ns.handledRequests[req.id] = true
+      inWork[req.id] = GetTime()
+      local replied = false
       local function reply(result)
+        if replied then return end
+        replied = true
+        inWork[req.id] = nil
         resultQueue[#resultQueue + 1] = { v = 1, type = "game_result", msgId = ns.NewMsgId(), session = ns.session,
                                           id = req.id, result = result }
-        flushResults()
+        firstQueuedAt = firstQueuedAt or GetTime()
+        if not handling then flushResults() end
       end
       local ok, err = pcall(function()
         if req.op == "addon_options" and ns.Addons then
           reply(ns.Addons.FindOptions(req.addon, req.query))
+        elseif req.op == "zone_quests" and ns.Collect then
+          reply(ns.Collect.ZoneQuests(req.zone))
+        elseif req.op == "gear_upgrades" and ns.Gear then
+          reply(ns.Gear.Upgrades(req.slot))
         elseif req.op == "auction_search" and ns.Auction then
           ns.Auction.Search(req, reply) -- replies when the search is done (it runs over several frames)
+        elseif req.op == "auction_check" and ns.Market then
+          ns.Market.Check(req, reply) -- one search of the auction house per item: replies when all are answered
+        elseif req.op == "auction_owned" and ns.Market then
+          ns.Market.Owned(reply)
         else
           reply({ error = "unknown request " .. tostring(req.op) })
         end
@@ -553,6 +626,8 @@ function ns.HandleRequests(list)
       if not ok then reply({ error = tostring(err) }) end
     end
   end
+  handling = false
+  flushResults()
 end
 
 ------------------------------------------------------------------------ incoming

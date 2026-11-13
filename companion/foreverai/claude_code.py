@@ -37,7 +37,10 @@ MCP_TOOLS = ["mcp__foreverai__search_knowledge_base", "mcp__foreverai__propose_a
              "mcp__foreverai__mark_on_map", "mcp__foreverai__addon_options", "mcp__foreverai__propose_quest_abandon",
              "mcp__foreverai__propose_vendor_action", "mcp__foreverai__search_auction_house",
              "mcp__foreverai__compare_sell_prices", "mcp__foreverai__auctionator_list", "mcp__foreverai__plan_route",
-             "mcp__foreverai__edit_route"]
+             "mcp__foreverai__edit_route", "mcp__foreverai__zone_quests",
+             "mcp__foreverai__gear_upgrades", "mcp__foreverai__map_notes", "mcp__foreverai__pet_abilities",
+             "mcp__foreverai__way_to", "mcp__foreverai__propose_auctions", "mcp__foreverai__my_auctions",
+             "mcp__foreverai__propose_auction_cancel"]
 TIMEOUT_S = 300
 
 
@@ -220,6 +223,26 @@ def flatten_messages(messages: list[dict]) -> tuple[str, str]:
     return system, "\n".join(parts)
 
 
+def ask_once(exe: str, workdir: Path, system: str, prompt: str, model: str = DEFAULT_MODEL, effort: str = "low",
+             timeout: float = 120.0) -> str | None:
+    """One question without tools, answered as text (the app's own errands: the notes of a conversation). None when
+    Claude Code did not answer."""
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    (workdir / "system.txt").write_text(system, encoding="utf-8")
+    cmd = [exe, "-p", "--output-format", "text", "--model", model, "--effort", effort,
+           "--system-prompt-file", str(workdir / "system.txt"), "--tools", "", "--permission-prompts", "none",
+           "--setting-sources", "project", "--no-session-persistence", "--disable-slash-commands"]
+    try:
+        done = subprocess.run(cmd, cwd=str(workdir), input=prompt.encode("utf-8"), stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, env=_env(exe, PYTHONIOENCODING="utf-8"),
+                              creationflags=NO_WINDOW, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = done.stdout.decode("utf-8", errors="replace").strip()
+    return text if done.returncode == 0 and text else None
+
+
 def _parse_stream(get_event, on_tool) -> Iterator[tuple[str, object]]:
     """Shared parser of Claude Code stream-json events for one turn.
     Yields ("text", full_text) / ("phase", str) / ("final", text) / ("error", str); stops at the end of the turn.
@@ -229,7 +252,10 @@ def _parse_stream(get_event, on_tool) -> Iterator[tuple[str, object]]:
     while True:
         ev = get_event()
         if ev is None:
-            yield "error", "Claude Code ended without an answer."
+            yield "ended", "Claude Code ended without an answer."
+            return
+        if ev.get("type") == "_timeout":
+            yield "error", "Claude Code did not answer in time."
             return
         kind = ev.get("type")
         if kind == "stream_event":
@@ -278,14 +304,22 @@ def tool_phase(name: str) -> str | None:
                        ("propose_vendor_action", "Preparing vendor list…"),
                        ("search_auction_house", "Searching the auction house…"),
                        ("compare_sell_prices", "Comparing vendor and auction prices…"),
-                       ("auctionator_list", "Preparing the auction list…"),
-                       ("plan_route", "Planning the route…"), ("edit_route", "Changing the route…")):
+                       ("auctionator_list", "Checking the prices…"),
+                       ("plan_route", "Planning the route…"), ("edit_route", "Changing the route…"),
+                       ("zone_quests", "Reading the quests of the zone…"),
+                       ("gear_upgrades", "Reading the gear list…"), ("map_notes", "Reading the map notes…"),
+                       ("pet_abilities", "Reading the pet abilities…"), ("way_to", "Finding the way…"),
+                       ("propose_auction_cancel", "Reading your auctions…"), ("my_auctions", "Reading your auctions…"),
+                       ("propose_auctions", "Checking the auction house prices…")):
         if key in name:
             return phase
     if "web" in name.lower():
         return "Searching the web…"
     return None
 
+
+# how long a turn waits for the end (`result`) of the session's previous answer, which comes after its text
+SETTLE_S = 20.0
 
 class ClaudeSession:
     """A long-lived `claude -p --input-format stream-json` process: no start-up cost per question, the conversation
@@ -336,6 +370,11 @@ class ClaudeSession:
                     self.mcp_status = status
                     log.log(logging.WARNING if any(v != "connected" for v in status.values()) else logging.INFO,
                             "claude session mcp: %s", status)
+                missing = [t for t in MCP_TOOLS if t not in (ev.get("tools") or [])]
+                if ev.get("tools") is not None and missing != getattr(self, "mcp_missing", []):
+                    self.mcp_missing = missing  # tools the model was not given this turn
+                    if missing:
+                        log.warning("claude session lacks tools: %s", ", ".join(missing))
             self.queue.put(ev)
         self.queue.put(None)
 
@@ -350,7 +389,7 @@ class ClaudeSession:
                 pass
             self.proc.kill()
 
-    def _settle(self, timeout: float = 8.0) -> bool:
+    def _settle(self, timeout: float = SETTLE_S) -> bool:
         """Consume what is left of the previous turn (post-turn summary, `result`) before the next one starts."""
         import queue
         if not self._unfinished:
@@ -373,7 +412,8 @@ class ClaudeSession:
              timeout: float = TIMEOUT_S) -> Iterator[tuple[str, object]]:
         import queue
         if not self._settle():
-            yield "error", "Claude Code did not finish the previous answer."
+            # (the service asks the question again on a new session: this one is in no known state)
+            yield "unsettled", "Claude Code did not finish the previous answer."
             return
         content: list[dict] = [{"type": "text", "text": prompt}] + list(images or [])
         line = json.dumps({"type": "user", "message": {"role": "user", "content": content}}, ensure_ascii=False)
@@ -393,7 +433,7 @@ class ClaudeSession:
             try:
                 ev = self.queue.get(timeout=max(0.1, deadline - time.time()))
             except queue.Empty:
-                return None
+                return {"type": "_timeout"}  # (told apart from a session that ended)
             if ev is None:
                 self.queue.put(None)
             return ev

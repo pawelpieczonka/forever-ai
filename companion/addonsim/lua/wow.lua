@@ -829,7 +829,12 @@ function Frame:HookScript(name, fn)
   self:SetScript(name, old and function(...) old(...) fn(...) end or fn)
 end
 
+sim.unknownEvents = { AUCTION_ITEM_LIST_UPDATE = true, AUCTION_OWNED_LIST_UPDATE = true, AUCTION_BIDDER_LIST_UPDATE = true,
+                      NEW_AUCTION_UPDATE = true }
 function Frame:RegisterEvent(event)
+  if sim.unknownEvents[event] then
+    error('Frame:RegisterEvent(): Attempt to register unknown event "' .. tostring(event) .. '"', 2)
+  end
   local s = st(self)
   s.events = s.events or {}
   if s.events[event] then return true end

@@ -318,9 +318,7 @@ def test_an_update_is_a_news_line_and_an_alert_on_the_screen(sim):
     take_a_quest(sim)
     (update,) = [m for m in sim.sent_messages() if m.get("type") == "question"]
     assert "Updating the route" in shown(sim) and "[Quest log changed]" not in shown(sim)
-    assert notices(sim) == []  # an update that changes nothing is answered at once: the screen waits a moment
-    sim.run(4)
-    assert notices(sim) == ["ForeverAI: updating the route…"]
+    assert notices(sim) == ["ForeverAI: updating the route…"]  # no answer for a while: the screen says it is coming
     sim.deliver({"kind": "answer", "final": True, "msgId": update["msgId"], "model": "Sonnet 5.5", "secs": 7.1,
                  "text": "Corithras is off the route, 2 stops left.\n\nMore advice that is not news.",
                  "routePlanned": True, "marks": [{"title": "1. Lasher Sproutling", "x": 56.6, "y": 61.3},
@@ -520,6 +518,7 @@ def test_a_change_the_route_already_holds_does_not_ask_the_ai(sim):
 
 
 def test_quests_taken_one_after_another_are_one_update(sim):
+    """Three quests taken at one NPC, one click after another: one update."""
     sim.lua("ForeverAI.db.autoRoute = true")
     sim.lua(TASK_ROUTE)
     sim.run(1)
@@ -527,9 +526,8 @@ def test_quests_taken_one_after_another_are_one_update(sim):
         sim.lua('table.insert(TEST_log, { id = %d, title = "%s", objectives = {} })' % (qid, title))
         sim._wow.fire(b"QUEST_ACCEPTED")
         sim._wow.fire(b"QUEST_LOG_UPDATE")  # the game says both; the second must not cut the wait short
-        sim.run(5)
-        assert [m for m in sim.sent_messages(remove=False) if m.get("type") == "question"] == []
-    sim.run(5)
+        sim.run(0.6)
+    sim.run(3)
     assert asked(sim) == ["auto: [Quest log changed] took [Crown of the Earth], [The Balance of Nature], "
                           "[Twisted Hatred]. Update the route on the map."]
 
@@ -570,7 +568,9 @@ def test_an_update_that_changes_nothing_is_quiet(sim):
     sim.lua(TASK_ROUTE)
     sim.run(1)
     for qid, title in ((939, "Crown of the Earth"), (940, "The Balance of Nature")):
-        take_a_quest(sim, qid, title)
+        sim.lua('table.insert(TEST_log, { id = %d, title = "%s", objectives = {} })' % (qid, title))
+        sim._wow.fire(b"QUEST_ACCEPTED")
+        sim.run(2)
         (update,) = [m for m in sim.sent_messages() if m.get("type") == "question"]
         sim.deliver({"kind": "answer", "final": True, "msgId": update["msgId"], "routeUnchanged": True,
                      "text": "Route checked: nothing to change."})
@@ -681,4 +681,533 @@ def test_a_stop_done_by_what_the_player_did_is_told(sim):
     sim.click("Settings")
     sim.run(1)
     sim.click("Show route updates on screen")
+    assert sim.errors == []
+
+
+def test_a_quest_taken_changes_the_route_at_once_and_the_ai_checks_it_after(sim):
+    """"To powinno iść insta, być szybkie, smooth": the update came eight seconds after the quest was taken and then
+    waited for a model. The app's planner answers at once; the AI looks at the result a moment later, and only a
+    change of its own is news."""
+    sim.lua(NOTICES)
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim.lua(TASK_ROUTE)
+    sim.run(1)
+    sim.lua('table.insert(TEST_log, { id = 939, title = "Crown of the Earth", objectives = {} })')
+    sim._wow.fire(b"QUEST_ACCEPTED")
+    sim.run(2.5)
+    (update,) = [m for m in sim.sent_messages() if m.get("type") == "question"]
+    assert update["fast"] is True and update["text"] == "[Quest log changed] took [Crown of the Earth]. Update the route on the map."
+    sim.deliver({"kind": "answer", "final": True, "msgId": update["msgId"], "text": "Route updated: + Corithras Moonrage.",
+                 "routePlanned": True, "check": True, "marks": [{"title": "1. Corithras Moonrage", "x": 56.1, "y": 61.7},
+                                                                {"title": "2. Byancie", "x": 55.3, "y": 56.8}]})
+    sim.run(3)
+    assert text(sim.lua(SECTION)).startswith("1. Corithras Moonrage") and "Route updated: + Corithras Moonrage." in shown(sim)
+    assert notices(sim) == ["ForeverAI: route updated"]  # at once: no "updating…" first
+    # a moment later the AI checks it: nothing on the screen, and the line stays as it is when it agrees
+    sim.run(4)
+    (check,) = [m for m in sim.sent_messages() if m.get("type") == "question"]
+    assert check.get("check") is True and not check.get("fast")
+    assert check["text"] == "[Route check] took [Crown of the Earth]. Check the route on the map."
+    sim.deliver({"kind": "answer", "final": True, "msgId": check["msgId"], "text": "Route checked: nothing to change.",
+                 "routeUnchanged": True})
+    sim.run(3)
+    assert shown(sim).count("Route updated: + Corithras Moonrage.") == 1 and "Route checked" not in shown(sim)
+    assert notices(sim) == ["ForeverAI: route updated"] and text(sim.lua(SECTION)).startswith("1. Corithras Moonrage")
+    # a check that changes the route: its words take the line, and the screen says so
+    sim.lua('table.insert(TEST_log, { id = 941, title = "Twisted Hatred", objectives = {} })')
+    sim._wow.fire(b"QUEST_ACCEPTED")
+    sim.run(2.5)
+    (update,) = [m for m in sim.sent_messages() if m.get("type") == "question"]
+    sim.deliver({"kind": "answer", "final": True, "msgId": update["msgId"], "text": "Route updated: + Xethorr.",
+                 "routePlanned": True, "check": True, "marks": [{"title": "1. Xethorr", "x": 51.4, "y": 50.0},
+                                                                {"title": "2. Corithras Moonrage", "x": 56.1, "y": 61.7}]})
+    sim.run(6.5)
+    (check,) = [m for m in sim.sent_messages() if m.get("type") == "question"]
+    sim.deliver({"kind": "answer", "final": True, "msgId": check["msgId"], "routePlanned": True,
+                 "text": "Twisted Hatred is an elite quest: left off the route.",
+                 "marks": [{"title": "1. Corithras Moonrage", "x": 56.1, "y": 61.7}]})
+    sim.run(3)
+    assert "Twisted Hatred is an elite quest: left off the route." in shown(sim) and "Route updated: + Xethorr." not in shown(sim)
+    assert text(sim.lua(SECTION)).startswith("1. Corithras Moonrage") and notices(sim)[-1] == "ForeverAI: route updated"
+    assert sim.errors == []
+
+
+def test_a_stop_added_for_an_objective_goes_before_its_turn_in(sim):
+    """In the game the bears for Buzzbox 525 went in after the Buzzbox (that is where they cost the least way, on the way
+    back north): the route had the player turn the quest in before having the scalps."""
+    sim._wow.player.x, sim._wow.player.y = 0.522, 0.369  # by Den Mother, Darkshore
+    sim.lua('table.insert(TEST_log, { id = 1003, title = "Buzzbox 525", objectives = { { text = "0/4 Grizzled Scalp", '
+            'finished = false } } })')
+    sim.run(3)
+    sim.lua('ForeverAI.UI.UpdateAnswer({ final = true, msgId = 1, text = "The route.", routePlanned = true, marks = { '
+            '{ title = "1. Buzzbox 525", x = 41.4, y = 80.6, tasks = { { kind = "turn_in", quest = "Buzzbox 525" } } }, '
+            '{ title = "2. Hippogryph Master", x = 36.3, y = 45.6 } } })')
+    sim.run(1)
+    sim.lua('ForeverAI.UI.UpdateAnswer({ final = true, msgId = 2, text = "Bears.", marksReplace = false, marks = { '
+            '{ title = "Grizzled Thistle Bears", x = 39.1, y = 70.0, tasks = { { kind = "objective", quest = "Buzzbox 525" } } } } })')
+    sim.run(1)
+    stops = [line.split(" — ")[0] for line in text(sim.lua(SECTION)).split(" | ") if line[:1].isdigit()]
+    assert stops == ["1. Grizzled Thistle Bears", "2. Buzzbox 525", "3. Hippogryph Master"]
+    # a stop that is not for a quest goes where the way alone puts it: on the way back north, after the Buzzbox
+    sim.lua('ForeverAI.UI.UpdateAnswer({ final = true, msgId = 3, text = "Camp.", marksReplace = false, marks = { '
+            '{ title = "Camp", x = 38.5, y = 66.0 } } })')
+    sim.run(1)
+    stops = [line.split(" — ")[0] for line in text(sim.lua(SECTION)).split(" | ") if line[:1].isdigit()]
+    assert stops == ["1. Grizzled Thistle Bears", "2. Buzzbox 525", "3. Camp", "4. Hippogryph Master"]
+    assert sim.errors == []
+
+
+# ---------------------------------------------------------------- in step with the stops of the route
+# The player's words: "Route się aktualizuje nie po wykonaniu checkpointa, ale po wykonaniu np. jednej przyjętej misji.
+# To powinno być synchro z tym wykonywaniem checkpointów, a nie swoim życiem. I jeżeli auto route nie musi, to niech nie
+# usuwa starych punktów, tylko wplata nowe w obecny plan; względem obecnego checkpointa powinien to liczyć i pozycji
+# gracza." From the game's log: "update asked: took [Collecting Memories]" two seconds before "stop done: 1. Wilder
+# Thistlenettle", and a second update a moment later for the second quest of the same stop.
+PICKUPS = """ForeverAI.UI.UpdateAnswer({ final = true, msgId = 1, text = "The route.", routePlanned = true, marks = {
+  { title = "1. Wilder Thistlenettle", x = 40, y = 40, tasks = { { kind = "pick_up", quest = "Oh Brother. . .", id = 167 },
+                                                                { kind = "pick_up", quest = "Collecting Memories", id = 168 } } },
+  { title = "2. The cave mouth", x = 60, y = 60 }, { title = "3. The old mill", x = 70, y = 70 } } })"""
+STOPS = ("local out = {} for i, s in ipairs(ForeverAI.Map.List()) do out[#out + 1] = s.title .. (s.done and ' (done)' or '') "
+         ".. (s.current and ' <' or '') end return table.concat(out, ', ')")
+WILDER = {"title": "Wilder Thistlenettle", "x": 40, "y": 40, "tasks": [
+    {"kind": "pick_up", "quest": "Oh Brother. . .", "id": 167}, {"kind": "pick_up", "quest": "Collecting Memories", "id": 168}]}
+
+
+def _accept(sim, qid, title):
+    sim.lua('table.insert(TEST_log, { id = %d, title = "%s", objectives = {} })' % (qid, title))
+    sim._wow.fire(b"QUEST_ACCEPTED")
+    sim._wow.fire(b"QUEST_LOG_UPDATE")
+
+
+def _pickups(sim, x=0.40, y=0.40):
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim._wow.player.x, sim._wow.player.y = x, y
+    sim.lua(PICKUPS)
+    sim.run(1)
+
+
+def test_an_update_waits_until_the_stop_the_player_is_at_is_done(sim):
+    _pickups(sim)
+    _accept(sim, 168, "Collecting Memories")  # one of the two quests of this stop
+    sim.run(10)
+    assert asked(sim) == [] and "Wilder Thistlenettle <" in text(sim.lua(STOPS))
+    _accept(sim, 167, "Oh Brother. . .")
+    sim.run(5)
+    assert text(sim.lua(STOPS)).startswith("Wilder Thistlenettle (done), The cave mouth <")
+    # one update, for the stop as a whole
+    assert asked(sim) == ["auto: [Quest log changed] took [Collecting Memories], [Oh Brother. . .]. "
+                          "Update the route on the map."]
+    sim.run(6)
+    assert asked(sim) == [] and sim.errors == []
+
+
+def test_an_update_does_not_wait_for_a_stop_the_player_walked_away_from(sim):
+    _pickups(sim)
+    _accept(sim, 168, "Collecting Memories")
+    sim.run(6)
+    assert asked(sim) == []
+    sim._wow.player.x, sim._wow.player.y = 0.50, 0.45  # left him with the other quest not taken
+    sim.run(5)
+    assert asked(sim) == ["auto: [Quest log changed] took [Collecting Memories]. Update the route on the map."]
+    assert "Wilder Thistlenettle <" in text(sim.lua(STOPS))  # the stop still waits for the other quest
+
+
+def test_a_quest_taken_away_from_every_stop_is_asked_at_once(sim):
+    _pickups(sim, 0.20, 0.20)
+    _accept(sim, 950, "Flight to Auberdine")
+    sim.run(4)
+    assert asked(sim) == ["auto: [Quest log changed] took [Flight to Auberdine]. Update the route on the map."]
+
+
+def test_an_update_weaves_its_new_stops_into_the_route_on_the_map(sim):
+    _pickups(sim, 0.20, 0.20)
+    sim.lua("ForeverAI.Map.Lock(2, true) ForeverAI.Map.SetCurrent(3)")  # the player's own: a lock, and where they walk to
+    sim.run(1)
+    assert text(sim.lua(STOPS)) == "Wilder Thistlenettle, The cave mouth, The old mill <"
+    # the plan, made from where the player stands, has the stops in another order, a new one, and no cave mouth
+    _update(sim, routePlanned=True, marks=[
+        {"title": "1. The old mill", "x": 70, "y": 70}, {"title": "2. The lake", "x": 65, "y": 65},
+        dict(WILDER, title="3. Wilder Thistlenettle"), {"title": "4. Flight master", "x": 36.3, "y": 45.6}])
+    # the stops that stay are where they were, the arrow too; each new stop comes after the one the plan put it behind
+    assert text(sim.lua(STOPS)) == "Wilder Thistlenettle, Flight master, The cave mouth, The old mill <, The lake"
+    assert "Locked by the player (these stops stay on the route until they unlock them): The cave mouth" in text(sim.lua(SECTION))
+    # a stop the plan no longer has leaves (it is not locked now)
+    sim.lua("ForeverAI.Map.Lock(3, false)")
+    _update(sim, routePlanned=True, marks=[
+        {"title": "1. The old mill", "x": 70, "y": 70}, {"title": "2. The lake", "x": 65, "y": 65},
+        dict(WILDER, title="3. Wilder Thistlenettle"), {"title": "4. Flight master", "x": 36.3, "y": 45.6}])
+    assert text(sim.lua(STOPS)) == "Wilder Thistlenettle, Flight master, The old mill <, The lake" and sim.errors == []
+
+
+def test_an_update_keeps_what_the_player_did_at_a_stop(sim):
+    """The stop of a quest giver with one quest taken is the same stop after the update: it waits for the other one."""
+    _pickups(sim, 0.20, 0.20)
+    _accept(sim, 168, "Collecting Memories")  # taken somewhere else (shared by a friend)
+    sim.run(4)
+    (update,) = [m for m in sim.sent_messages() if m.get("type") == "question"]
+    sim.deliver({"kind": "answer", "final": True, "msgId": update["msgId"], "text": "News.", "routePlanned": True, "marks": [
+        dict(WILDER, title="1. Wilder Thistlenettle"), {"title": "2. The cave mouth", "x": 60, "y": 60},
+        {"title": "3. The old mill", "x": 70, "y": 70}]})
+    sim.run(2)
+    assert text(sim.lua(STOPS)) == "Wilder Thistlenettle <, The cave mouth, The old mill"
+    _accept(sim, 167, "Oh Brother. . .")
+    sim.run(5)
+    assert text(sim.lua(STOPS)).startswith("Wilder Thistlenettle (done)")
+
+
+def test_an_order_that_cannot_be_walked_any_more_gives_way_to_the_plans(sim):
+    """A new quest is picked up at a new stop, and what it wants is at a stop the route had before: kept in its old
+    place, that stop would wait for a quest the player does not have yet."""
+    _pickups(sim, 0.20, 0.20)
+    _update(sim, routePlanned=True, marks=[
+        {"title": "1. The old mill", "x": 70, "y": 70},
+        {"title": "2. Elder", "x": 66, "y": 66, "tasks": [{"kind": "pick_up", "quest": "Lost Tools", "id": 9}]},
+        {"title": "3. Wilder Thistlenettle", "x": 40, "y": 40, "tasks": WILDER["tasks"] + [
+            {"kind": "objective", "quest": "Lost Tools", "id": 9, "label": "Toolbox"}]},
+        {"title": "4. The cave mouth", "x": 60, "y": 60}])
+    assert text(sim.lua(STOPS)) == "The old mill <, Elder, Wilder Thistlenettle, The cave mouth" and sim.errors == []
+
+
+def test_a_quest_planned_whole_is_no_news_when_it_is_taken(sim):
+    """A route made with all of a quest (where it is taken, what it wants, where it is turned in) has what comes next
+    the moment the quest is in the log: the AI is not asked. A quest the route only says to pick up still asks."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim._wow.player.x, sim._wow.player.y = 0.20, 0.20
+    sim.lua("""ForeverAI.UI.UpdateAnswer({ final = true, msgId = 1, text = "The route.", routePlanned = true, marks = {
+      { title = "1. Clerk", x = 40, y = 40, tasks = { { kind = "pick_up", quest = "Pests", id = 21 } } },
+      { title = "2. Rat", x = 60, y = 60, tasks = { { kind = "objective", quest = "Pests", id = 21, label = "Rat" } } },
+      { title = "3. Clerk", x = 40, y = 40, tasks = { { kind = "turn_in", quest = "Pests", id = 21 } } },
+      { title = "4. Elder", x = 70, y = 70, tasks = { { kind = "pick_up", quest = "A Letter", id = 22 } } } } })""")
+    sim.run(1)
+    sim.lua('table.insert(TEST_log, { id = 21, title = "Pests", objectives = { { text = "0/8 Rat", finished = false } } })')
+    sim._wow.fire(b"QUEST_ACCEPTED")
+    sim._wow.fire(b"QUEST_LOG_UPDATE")
+    sim.run(6)
+    assert asked(sim) == [] and "Clerk (done)" in text(sim.lua(STOPS))
+    _accept(sim, 22, "A Letter")  # the route has nothing of it but the stop it is taken at
+    sim.run(6)
+    assert asked(sim) == ["auto: [Quest log changed] took [A Letter]. Update the route on the map."] and sim.errors == []
+
+
+def test_leaving_the_route_for_another_zone_asks_for_an_update_once(sim):
+    """Found by walking a route: the player flew away from a zone with stops still to do there; nothing in the quest
+    log changed, so no update was asked, and the arrow kept pointing back. Crossing a border for a moment, a flight,
+    a dungeon ask nothing; staying asks once for that zone."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim.lua(ROUTE)
+    sim.run(1)
+    asked(sim)
+    sim._wow.player.mapID, sim._wow.player.zone = 1440, b"Ashenvale"
+    sim.run(6)
+    sim._wow.player.mapID, sim._wow.player.zone = 1439, b"Darkshore"  # back at once
+    sim.run(20)
+    assert asked(sim) == []
+    sim.lua("UnitOnTaxi = function() return true end")
+    sim._wow.player.mapID, sim._wow.player.zone = 1440, b"Ashenvale"
+    sim.run(30)
+    assert asked(sim) == []  # on a flight
+    sim.lua("UnitOnTaxi = function() return false end")
+    sim.run(20)
+    assert asked(sim) == ["auto: [Quest log changed] the player went to Ashenvale, away from the route. Update the route on the map."]
+    sim.run(40)
+    assert asked(sim) == [] and sim.errors == []  # once for that zone
+
+
+def test_an_update_cut_to_the_stops_the_map_holds_keeps_the_others(sim):
+    """Found by walking the game's own Westfall: a plan longer than the map holds was cut to its first stops; planned
+    from elsewhere, the turn-ins at its end were left out of the cut, and the update took them off the route."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim._wow.player.x, sim._wow.player.y = 0.20, 0.20
+    sim.lua(PICKUPS)
+    sim.run(1)
+    marks = [{"title": "1. The old mill", "x": 70, "y": 70}, {"title": "2. The lake", "x": 65, "y": 65}]
+    sim.lua("ForeverAI.Map.Merge(..., true)", marks)
+    sim.run(2)
+    titles = text(sim.lua(STOPS))
+    assert "Wilder Thistlenettle" in titles and "The cave mouth" in titles and "The lake" in titles, titles
+    # without more to come, what the plan does not have leaves
+    sim.lua("ForeverAI.Map.Merge(...)", [{"title": "1. The old mill", "x": 70, "y": 70}])
+    sim.run(1)
+    assert "The cave mouth" not in text(sim.lua(STOPS)) and sim.errors == []
+
+
+
+def test_an_update_cut_to_the_map_drops_a_stop_whose_task_moved(sim):
+    """Found by walking the game's own Goldshire: an update took [Rough Wolf Pelts] from the Prowlers to the Gray
+    Forest Wolves. The plan was longer than the map holds, the old Prowler stop was kept as one of its later stops,
+    and it stood after the turn-in of the quest it was for."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim._wow.player.x, sim._wow.player.y = 0.20, 0.20
+    sim.run(1)
+    first = [{"title": "1. Helene", "x": 30, "y": 30, "tasks": [{"kind": "pick_up", "quest": "Rough Wolf Pelts", "id": 33}]},
+             {"title": "2. Prowler", "x": 75, "y": 76, "mob": "Prowler", "tasks": [{"kind": "objective", "quest": "Rough Wolf Pelts", "id": 33, "label": "Rough Wolf Pelt"}]},
+             {"title": "3. Helene", "x": 30, "y": 30, "tasks": [{"kind": "turn_in", "quest": "Rough Wolf Pelts", "id": 33}]},
+             {"title": "4. The old mill", "x": 70, "y": 70}]
+    sim.lua("ForeverAI.UI.UpdateAnswer(...)", {"final": True, "msgId": 50, "text": "x", "routePlanned": True, "marks": first})
+    sim.run(2)
+    # the update: the wolves instead, and the map holds only the first part of the plan
+    again = [{"title": "1. Helene", "x": 30, "y": 30, "tasks": [{"kind": "pick_up", "quest": "Rough Wolf Pelts", "id": 33}]},
+             {"title": "2. Gray Forest Wolf", "x": 74, "y": 69, "mob": "Gray Forest Wolf", "tasks": [
+                 {"kind": "objective", "quest": "Taming the Beast", "id": 34, "label": "Gray Forest Wolf"},
+                 {"kind": "objective", "quest": "Rough Wolf Pelts", "id": 33, "label": "Rough Wolf Pelt"}]},
+             {"title": "3. Helene", "x": 30, "y": 30, "tasks": [{"kind": "turn_in", "quest": "Rough Wolf Pelts", "id": 33}]}]
+    sim.lua("ForeverAI.Map.Merge(...)", again, True)  # (what an update's answer does: UI.MarksCard)
+    sim.run(2)
+    titles = text(sim.lua(STOPS))
+    assert "Prowler" not in titles and "Gray Forest Wolf" in titles, titles
+    assert "The old mill" in titles and sim.errors == []  # (a place: the plan's later part may have it)
+
+
+
+def test_an_update_that_names_another_creature_moves_the_stop_there(sim):
+    """Found by walking the game's own Goldshire: an update named Kobold Geomancers for the gold dust instead of Kobold
+    Miners; the stop took the new name and kept the miners' ground. And a stop for the same objective a little
+    further off is the one kept, not a stop for something else at the new spot."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim._wow.player.x, sim._wow.player.y = 0.20, 0.20
+    sim.run(1)
+    for qid, title, what in ((47, "Gold Dust Exchange", "Gold Dust"), (99, "Slimy Menace", "Murloc"),
+                             (112, "Collecting Kelp", "Crystal Kelp Frond")):
+        sim.lua('table.insert(TEST_log, { id = %d, title = "%s", objectives = { { text = "%s: 0/8", finished = false } } })'
+                % (qid, title, what))
+    sim._wow.fire(b"QUEST_LOG_UPDATE")
+    sim.run(1)
+    dust = {"kind": "objective", "quest": "Gold Dust Exchange", "id": 47, "label": "Gold Dust"}
+    slime = {"kind": "objective", "quest": "Slimy Menace", "id": 99, "label": "Murloc"}
+    kelp = {"kind": "objective", "quest": "Collecting Kelp", "id": 112, "label": "Crystal Kelp Frond"}
+    first = [{"title": "1. Kobold Miner", "x": 36, "y": 82.7, "mob": "Kobold Miner", "tasks": [dust]},
+             {"title": "2. Murloc", "x": 53.8, "y": 65.5, "mob": "Murloc", "tasks": [slime]},
+             {"title": "3. Murloc", "x": 56.7, "y": 66.3, "mob": "Murloc", "tasks": [kelp]},
+             {"title": "4. Remy", "x": 42.1, "y": 67.3, "tasks": [{"kind": "turn_in", "quest": "Gold Dust Exchange", "id": 47}]}]
+    sim.lua("ForeverAI.UI.UpdateAnswer(...)", {"final": True, "msgId": 50, "text": "x", "routePlanned": True, "marks": first})
+    sim.run(2)
+    again = [{"title": "1. Kobold Geomancer", "x": 63.5, "y": 58.3, "mob": "Kobold Geomancer", "tasks": [dust]},
+             {"title": "2. Murloc", "x": 57.0, "y": 67.2, "mob": "Murloc", "tasks": [slime]},
+             {"title": "3. Murloc Streamrunner", "x": 58.3, "y": 67.9, "mob": "Murloc Streamrunner", "tasks": [kelp]},
+             {"title": "4. Remy", "x": 42.1, "y": 67.3, "tasks": [{"kind": "turn_in", "quest": "Gold Dust Exchange", "id": 47}]}]
+    sim.lua("ForeverAI.Map.Merge(...)", again)
+    sim.run(2)
+    where = ("local out = {} for _, s in ipairs(ForeverAICharDB.marks or {}) do if not s.done then out[#out + 1] = "
+             "string.format('%s %.1f,%.1f', tostring(s.title):gsub('^%d+[%.%)]%s*', ''), s.x, s.y) end end "
+             "return table.concat(out, ' | ')")
+    stops = text(sim.lua(where))
+    assert "Kobold Geomancer 63.5,58.3" in stops, stops  # where the geomancers are
+    assert "Murloc 53.8,65.5" in stops, stops  # the slime's murlocs: the stop that was for them, where it was
+    assert "Murloc Streamrunner 58.3,67.9" in stops and sim.errors == [], stops
+
+
+
+def test_a_stop_matched_by_place_keeps_what_the_plan_has_later(sim):
+    """Found by walking the game's own Goldshire: Ma Stonefield and "Auntie" Bernice Stonefield stand side by side.
+    An update planned Ma early and the turn-in at Bernice after the stops the map holds; the new stop took Bernice's
+    place with its own tasks only, and the turn-in of [Goldtooth] was off the map."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim._wow.player.x, sim._wow.player.y = 0.20, 0.20
+    sim.lua('table.insert(TEST_log, { id = 87, title = "Goldtooth", objectives = {}, complete = true })')
+    sim._wow.fire(b"QUEST_LOG_UPDATE")
+    sim.run(1)
+    first = [{"title": "1. Kobold Miner", "x": 40.5, "y": 80.3},
+             {"title": '2. "Auntie" Bernice Stonefield', "x": 34.5, "y": 84.2, "tasks": [
+                 {"kind": "pick_up", "quest": "Princess Must Die!", "id": 88}, {"kind": "turn_in", "quest": "Goldtooth", "id": 87}]}]
+    sim.lua("ForeverAI.UI.UpdateAnswer(...)", {"final": True, "msgId": 50, "text": "x", "routePlanned": True, "marks": first})
+    sim.run(2)
+    again = [{"title": "1. Kobold Miner", "x": 40.5, "y": 80.3},
+             {"title": "2. Ma Stonefield", "x": 34.7, "y": 84.5, "tasks": [{"kind": "pick_up", "quest": "Princess Must Die!", "id": 88}]}]
+    sim.lua("ForeverAI.Map.Merge(...)", again, True)
+    sim.run(2)
+    what = "for _, s in ipairs(ForeverAI.Map.List()) do if s.title == 'Ma Stonefield' then return s.what end end"
+    assert text(sim.lua(what)) == 'pick up Princess Must Die!; turn in Goldtooth ("Auntie" Bernice Stonefield)', text(sim.lua(what))
+    # turned in since: not kept
+    sim.lua("ForeverAI.Map.Merge(...)", first)
+    sim.run(1)
+    sim.lua("table.remove(TEST_log)")  # turned in: it left the log
+    sim._wow.fire(b"QUEST_LOG_UPDATE")
+    sim.run(2)
+    sim.lua("ForeverAI.Map.Merge(...)", again, True)
+    sim.run(2)
+    assert text(sim.lua(what)) == "pick up Princess Must Die!", text(sim.lua(what))
+    # the whole plan sent: what it does not have is gone
+    sim.lua("ForeverAI.Map.Merge(...)", again)
+    sim.run(2)
+    assert text(sim.lua(what)) == "pick up Princess Must Die!" and sim.errors == []
+
+
+
+def test_an_update_planned_in_another_zone_is_asked_again(sim):
+    """Found by the seeded replays of the game's own Redridge: the update was asked in Elwynn and planned from there;
+    before its answer came the player had gone on into Westfall. The answer went on the map, and the arrow led to a
+    stop in Elwynn from Westfall."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim.lua(ROUTE)
+    sim.run(2)
+    sim.lua('table.insert(TEST_log, { id = 939, title = "Crown of the Earth", objectives = {} })')
+    sim._wow.fire(b"QUEST_ACCEPTED")
+    sim.run(10)
+    (update,) = [m for m in sim.sent_messages() if m.get("type") == "question"]
+    sim._wow.player.mapID, sim._wow.player.zone = 1457, b"Darnassus"  # through a portal while it is written
+    sim.run(1)
+    sim.deliver({"kind": "answer", "final": True, "msgId": update["msgId"], "text": "Route updated.", "routePlanned": True,
+                 "marks": [{"title": "1. Corithras Moonrage", "x": 56.1, "y": 61.7}]})
+    sim.run(10)
+    again = [m for m in sim.sent_messages() if m.get("type") == "question"]
+    assert again and "Crown of the Earth" in again[0]["text"], again  # asked again, from where the player is
+    assert "Corithras Moonrage" not in text(sim.lua(STOPS)) and sim.errors == []
+
+
+
+def test_after_an_update_the_arrow_follows_the_plan_unless_the_player_chose(sim):
+    """Found by the seeded replays of the game's own Redridge: after the player's own stop the arrow went on to the
+    stop after it; the update, planned from where the player was, put the stops left behind first. The arrow stayed
+    on the stop after the player's own, and led them away from the plan."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim._wow.player.x, sim._wow.player.y = 0.20, 0.20
+    sim.run(1)
+    first = [{"title": "1. Rogue", "x": 37.3, "y": 37.8}, {"title": "2. Byancie", "x": 55.3, "y": 56.8},
+             {"title": "3. Smith", "x": 60, "y": 60}, {"title": "4. Camp", "x": 70, "y": 70}]
+    sim.lua("ForeverAI.UI.UpdateAnswer(...)", {"final": True, "msgId": 50, "text": "x", "routePlanned": True, "marks": first})
+    sim.run(2)
+    sim.lua("ForeverAI.Map.SetCurrent(3)")  # their own way: the smith first
+    sim._wow.player.x, sim._wow.player.y = 0.60, 0.60
+    sim.run(4)
+    now = "for i, s in ipairs(ForeverAI.Map.List()) do if s.current then return s.title end end"
+    assert text(sim.lua(now)) == "Camp"  # on to the stop after it
+    # the update, planned from the smith: the stops left behind first
+    plan = [{"title": "1. Byancie", "x": 55.3, "y": 56.8}, {"title": "2. Rogue", "x": 37.3, "y": 37.8},
+            {"title": "3. Camp", "x": 70, "y": 70}]
+    sim.lua("ForeverAI.Map.Merge(...)", plan)
+    sim.run(2)
+    assert text(sim.lua(now)) in ("Byancie", "Rogue"), text(sim.lua(now))
+    # a stop the player clicked stays the arrow's
+    sim.lua("for i, s in ipairs(ForeverAI.Map.List()) do if s.title == 'Camp' then ForeverAI.Map.SetCurrent(i) end end")
+    sim.lua("ForeverAI.Map.Merge(...)", plan)
+    sim.run(2)
+    assert text(sim.lua(now)) == "Camp" and sim.errors == []
+
+
+
+def test_through_a_way_into_a_zone_the_route_has_nothing_next_in_asks_at_once(sim):
+    """Found by the seeded replays of the game's own Redridge: back in the zone, the player went out again through the
+    last way of the route; the stops left were in the zone behind them, and the arrow led there with no way. The
+    update came only after the quarter of a minute the add-on waits when a border is crossed for a moment."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim._wow.player.mapID, sim._wow.player.zone = 1457, b"Darnassus"
+    sim._wow.player.x, sim._wow.player.y = 0.30, 0.41
+    sim.run(2)
+    sim.lua("""ForeverAI.UI.UpdateAnswer({ final = true, msgId = 5, text = "The route.", routePlanned = true, marks = {
+      { title = "1. Jocaste", x = 40.4, y = 8.6, zone = "Darnassus", tasks = { { kind = "turn_in", quest = "The Enchanted Glade" } } },
+      { title = "2. Portal back", x = 30, y = 41, zone = "Darnassus", tasks = { { kind = "travel", zone = "Darkshore" } } } } })""")
+    sim.run(2)
+    sim.sent_messages()
+    sim.lua("ForeverAI.Map.SetCurrent(2)")  # out again before Jocaste
+    sim.run(1)
+    sim._wow.player.mapID, sim._wow.player.zone = 1439, b"Darkshore"
+    sim._wow.player.x, sim._wow.player.y = 0.37, 0.44
+    sim.run(6)
+    asked = [m.get("text", "") for m in sim.sent_messages() if m.get("type") == "question"]
+    assert any("away from the route" in t for t in asked), asked
+    assert sim.errors == []
+
+
+
+def test_a_stop_chosen_before_a_flight_elsewhere_gives_way_to_the_plan(sim):
+    """Found by the seeded replays of the game's own Redridge: the player clicked a stop in Redridge, then flew to
+    Westfall; the update planned from Westfall, and the arrow stayed on the stop they had chosen, in Redridge, with no
+    way there."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim._wow.player.mapID, sim._wow.player.zone = 1457, b"Darnassus"
+    sim._wow.player.x, sim._wow.player.y = 0.30, 0.41
+    sim.run(2)
+    sim.lua("""ForeverAI.UI.UpdateAnswer({ final = true, msgId = 5, text = "The route.", routePlanned = true, marks = {
+      { title = "1. Jocaste", x = 40.4, y = 8.6, zone = "Darnassus" },
+      { title = "2. Sister Aquinne", x = 28.9, y = 45.8, zone = "Darnassus" } } })""")
+    sim.run(2)
+    sim.lua("ForeverAI.Map.SetCurrent(2)")
+    sim._wow.player.mapID, sim._wow.player.zone = 1439, b"Darkshore"  # a flight elsewhere
+    sim._wow.player.x, sim._wow.player.y = 0.37, 0.44
+    sim.run(1)
+    sim.lua("ForeverAI.Map.Merge(...)", [
+        {"title": "1. Portal to Darnassus", "x": 37.1, "y": 44.1, "zone": "Darkshore", "tasks": [{"kind": "travel", "zone": "Darnassus"}]},
+        {"title": "2. Jocaste", "x": 40.4, "y": 8.6, "zone": "Darnassus"},
+        {"title": "3. Sister Aquinne", "x": 28.9, "y": 45.8, "zone": "Darnassus"}])
+    sim.run(2)
+    now = "for i, s in ipairs(ForeverAI.Map.List()) do if s.current then return s.title end end"
+    assert text(sim.lua(now)) == "Portal to Darnassus", text(sim.lua(now))
+    assert sim.errors == []
+
+
+def test_a_flight_of_the_route_out_of_order_asks_the_update_on_landing(sim):
+    """Found by a live journey on the game's own Redridge: the player took the route's flight early; on landing the
+    stops left were in the zone behind them, and the update came only a quarter of a minute later: the add-on had
+    let go of "through a way of the route" while the flight was still on."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim._wow.player.mapID, sim._wow.player.zone = 1457, b"Darnassus"
+    sim._wow.player.x, sim._wow.player.y = 0.30, 0.41
+    sim.run(2)
+    sim.lua("""ForeverAI.UI.UpdateAnswer({ final = true, msgId = 5, text = "The route.", routePlanned = true, marks = {
+      { title = "1. Jocaste", x = 40.4, y = 8.6, zone = "Darnassus", tasks = { { kind = "turn_in", quest = "The Enchanted Glade" } } },
+      { title = "2. Hippogryph master", x = 30, y = 41, zone = "Darnassus", tasks = { { kind = "travel", zone = "Darkshore" } } } } })""")
+    sim.run(2)
+    sim.sent_messages()
+    sim.lua("ForeverAI.Map.SetCurrent(2)")
+    sim.run(1)
+    sim.lua("UnitOnTaxi = function() return true end")
+    sim._wow.player.mapID, sim._wow.player.zone = 1439, b"Darkshore"
+    sim._wow.player.x, sim._wow.player.y = 0.37, 0.44
+    sim.run(5)  # still on the flight
+    sim.lua("UnitOnTaxi = function() return false end")
+    sim.run(4)  # landed
+    asked = [m.get("text", "") for m in sim.sent_messages() if m.get("type") == "question"]
+    assert any("away from the route" in t for t in asked), asked
+    assert sim.errors == []
+
+
+
+def test_a_stop_matched_by_place_does_not_keep_a_turn_in_whose_objective_comes_later(sim):
+    """Found by the seeded replays of the game's own Goldshire: the update planned Ma Stonefield early (pick up), the
+    turn-in of [Goldtooth] beside her after the stops the map holds. Kept on her stop, the turn-in came before the
+    stop for Goldtooth himself."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim._wow.player.x, sim._wow.player.y = 0.20, 0.20
+    sim.lua('table.insert(TEST_log, { id = 87, title = "Goldtooth", objectives = { { text = "Bernice\'s Necklace: 0/1", finished = false } } })')
+    sim._wow.fire(b"QUEST_LOG_UPDATE")
+    sim.run(1)
+    first = [{"title": "1. Goldtooth", "x": 41.7, "y": 78.0, "mob": "Goldtooth", "tasks": [
+                 {"kind": "objective", "quest": "Goldtooth", "id": 87, "label": "Bernice's Necklace"}]},
+             {"title": "2. Ma Stonefield", "x": 34.7, "y": 84.5, "tasks": [
+                 {"kind": "pick_up", "quest": "Princess Must Die!", "id": 88}, {"kind": "turn_in", "quest": "Goldtooth", "id": 87}]}]
+    sim.lua("ForeverAI.UI.UpdateAnswer(...)", {"final": True, "msgId": 50, "text": "x", "routePlanned": True, "marks": first})
+    sim.run(2)
+    again = [{"title": "1. Ma Stonefield", "x": 34.7, "y": 84.5, "tasks": [{"kind": "pick_up", "quest": "Princess Must Die!", "id": 88}]},
+             {"title": "2. Goldtooth", "x": 41.7, "y": 78.0, "mob": "Goldtooth", "tasks": [
+                 {"kind": "objective", "quest": "Goldtooth", "id": 87, "label": "Bernice's Necklace"}]}]
+    sim.lua("ForeverAI.Map.Merge(...)", again, True)
+    sim.run(2)
+    what = "for _, s in ipairs(ForeverAI.Map.List()) do if s.title == 'Ma Stonefield' then return s.what end end"
+    assert text(sim.lua(what)) == "pick up Princess Must Die!", text(sim.lua(what))
+    # the turn-in stays on the map, after the stop for Goldtooth
+    order = "local o = {} for _, s in ipairs(ForeverAI.Map.List()) do if not s.done then o[#o + 1] = s.title .. ':' .. tostring(s.what) end end return table.concat(o, ' | ')"
+    stops = text(sim.lua(order)).split(" | ")
+    assert stops[-1] == "Ma Stonefield:turn in Goldtooth" and any(x.startswith("Goldtooth:") for x in stops[:-1]), stops
+    assert sim.errors == []
+
+
+
+def test_the_arrow_moved_on_into_another_zone_asks_the_update_at_once(sim):
+    """Found by a journey on the game's own Redridge: the player left the zone through a way of the route with a stop
+    left behind in it; when the stops beyond were done the arrow led back to it, with no way there, and the update
+    came only a quarter of a minute later."""
+    sim.lua("ForeverAI.db.autoRoute = true")
+    sim._wow.player.mapID, sim._wow.player.zone = 1439, b"Darkshore"
+    sim._wow.player.x, sim._wow.player.y = 0.30, 0.41
+    sim.run(2)
+    sim.lua("""ForeverAI.UI.UpdateAnswer({ final = true, msgId = 5, text = "The route.", routePlanned = true, marks = {
+      { title = "1. Jocaste", x = 40.4, y = 8.6, zone = "Darnassus" },
+      { title = "2. The shore", x = 31, y = 42, zone = "Darkshore" } } })""")
+    sim.run(2)
+    sim.sent_messages()
+    sim.lua("ForeverAI.Map.SetCurrent(2)")
+    sim._wow.player.x, sim._wow.player.y = 0.31, 0.42  # the shore is reached: the arrow leads to Jocaste, elsewhere
+    sim.run(6)
+    asked = [m.get("text", "") for m in sim.sent_messages() if m.get("type") == "question"]
+    assert any("away from the route" in t for t in asked), asked
     assert sim.errors == []

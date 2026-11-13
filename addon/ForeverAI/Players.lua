@@ -15,9 +15,10 @@ local function note(guid, source, unit)
   if guid == UnitGUID("player") then return end
   local e = seen[guid]
   if not e then
-    local _, class, _, race, sex, name, realm = safe(GetPlayerInfoByGUID, guid)
+    -- (the names as the game shows them, "Night Elf"; the second of each pair is the game's own token, "NightElf")
+    local className, class, raceName, race, sex, name, realm = safe(GetPlayerInfoByGUID, guid)
     if not name then return end
-    e = { name = name, realm = (realm and realm ~= "") and realm or nil, class = class, race = race }
+    e = { name = name, realm = (realm and realm ~= "") and realm or nil, class = className or class, race = raceName or race }
     seen[guid] = e
   end
   e.lastSeen = time()
@@ -114,22 +115,36 @@ function P.InspectCache(guid)
   return { at = date("%H:%M:%S", e.at), avgItemLevel = e.avgItemLevel, spec = e.spec, items = e.items }
 end
 
+-- The players around, the ones that matter first: who is in the group, targeted or under the mouse, who is hostile or
+-- has the player as their target, then the newest. In a city forty were sent with their guild, race and target (a tenth
+-- of the whole question) and the AI is shown fifteen names: the rest is a count.
+local KEEP = { group = 1, target = 2, mouseover = 3 }
 function P.Nearby()
-  local list = {}
-  for guid, e in pairs(seen) do list[#list + 1] = { guid = guid, e = e } end
-  table.sort(list, function(a, b) return (a.e.lastSeen or 0) > (b.e.lastSeen or 0) end)
+  local list, me = {}, UnitName("player")
+  for guid, e in pairs(seen) do
+    local first = KEEP[e.source] or (e.hostile and 4) or (e.targeting == me and 5) or 9
+    list[#list + 1] = { guid = guid, e = e, first = first }
+  end
+  table.sort(list, function(a, b)
+    if a.first ~= b.first then return a.first < b.first end
+    return (a.e.lastSeen or 0) > (b.e.lastSeen or 0)
+  end)
   local out = {}
   local now = time()
-  for i = 1, math.min(40, #list) do
-    local e, guid = list[i].e, list[i].guid
+  for i = 1, math.min(20, #list) do
+    local e, guid, close = list[i].e, list[i].guid, list[i].first < 9
     local r = {
-      name = e.name .. (e.realm and ("-" .. e.realm) or ""), class = e.className or e.class, race = e.raceName or e.race,
-      level = e.level, guild = e.guild, seen = (now - (e.lastSeen or now)) .. "s ago (" .. tostring(e.source) .. ")",
-      hostile = e.hostile, pvp = e.pvp, healthPct = e.healthPct, targeting = e.targeting, casting = e.casting,
+      name = e.name .. (e.realm and ("-" .. e.realm) or ""), class = e.className or e.class, level = e.level,
+      seen = (now - (e.lastSeen or now)) .. "s ago (" .. tostring(e.source) .. ")",
+      hostile = e.hostile, pvp = e.pvp, targeting = e.targeting,
     }
-    local ins = P.InspectCache(guid)
-    if ins then r.inspect = ins end
+    if close then -- the few the player deals with: everything known
+      r.race, r.guild, r.healthPct, r.casting = e.raceName or e.race, e.guild, e.healthPct, e.casting
+      local ins = P.InspectCache(guid)
+      if ins then r.inspect = ins end
+    end
     out[#out + 1] = r
   end
+  if #list > #out then out[#out + 1] = { more = #list - #out } end
   return out
 end

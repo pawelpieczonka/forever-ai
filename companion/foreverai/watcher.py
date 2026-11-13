@@ -13,7 +13,7 @@ from typing import Callable
 
 from PIL import Image, ImageDraw
 
-from .frames import Frame, decode_frame
+from .frames import HEADER_SIZE, Frame, decode_frame
 
 log = logging.getLogger("foreverai")
 
@@ -21,7 +21,8 @@ log = logging.getLogger("foreverai")
 class ScreenshotWatcher(threading.Thread):
     EXTENSIONS = (".png", ".tga")
 
-    def __init__(self, folder: Path, on_frame: Callable[[Frame], None], interval: float = 0.08):
+    # (how often the folder is listed: a message waits half of this on average before the app sees it)
+    def __init__(self, folder: Path, on_frame: Callable[[Frame], None], interval: float = 0.03):
         super().__init__(daemon=True, name="screenshot-watcher")
         self.folder = Path(folder)
         self.on_frame = on_frame
@@ -53,7 +54,8 @@ class ScreenshotWatcher(threading.Thread):
     def screen_jpeg(im: Image.Image, frame: Frame, max_side: int = 1280) -> bytes:
         """The screenshot that carried a question, downscaled for the AI, with the data block blacked out."""
         im = im.convert("RGB")
-        ImageDraw.Draw(im).rectangle((0, 0, (frame.grid_w + 6) * frame.cell, 72 * frame.cell), fill=(0, 0, 0))
+        rows = -(-((len(frame.payload) + HEADER_SIZE) * 2 // 3) // frame.grid_w)  # how tall this block is
+        ImageDraw.Draw(im).rectangle((0, 0, (frame.grid_w + 6) * frame.cell, (rows + 8) * frame.cell), fill=(0, 0, 0))
         im.thumbnail((max_side, max_side))
         buf = io.BytesIO()
         im.save(buf, "JPEG", quality=72)

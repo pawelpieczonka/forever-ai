@@ -112,7 +112,7 @@ def test_watcher_reads_two_frames_saved_under_the_same_name(tmp_path):
     first one, after the app decoded and deleted it. It must still be read (it was skipped, so the game got no
     answer)."""
     import time
-    data = os.urandom(15000)
+    data = os.urandom(30000)
     images = encode_frames(data, msg_id=9)
     assert len(images) == 2
     frames = []

@@ -80,10 +80,17 @@ def pool_size(addons_dir: Path) -> int:
     return n
 
 
-def write_inbox(addons_dir: Path, n: int, payload: dict) -> None:
-    """Atomically replace inbox ``n`` content with ``payload`` (JSON, base64 inside a Lua call)."""
+def encode_inbox(payload: dict) -> str:
+    """A payload as an inbox holds it (JSON, base64): the same text for every inbox it is written to."""
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    b64 = base64.b64encode(raw).decode("ascii")
+    return base64.b64encode(raw).decode("ascii")
+
+
+def write_inbox(addons_dir: Path, n: int, payload: dict, b64: str | None = None) -> None:
+    """Atomically replace inbox ``n`` content with ``payload`` (JSON, base64 inside a Lua call). ``b64``: the payload
+    already encoded (encode_inbox), when it goes to many inboxes."""
+    if b64 is None:
+        b64 = encode_inbox(payload)
     path = Path(addons_dir) / inbox_name(n) / "data.lua"
     tmp = path.with_suffix(".tmp")
     tmp.write_text(f'ForeverAI_Receive({n}, "{b64}")\n', encoding="ascii")

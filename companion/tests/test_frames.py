@@ -34,13 +34,13 @@ def test_frames_split_and_count():
     data = os.urandom(50000)
     images = encode_frames(data, msg_id=1, cell=1)
     frames = [decode_frame(i) for i in images]
-    assert len(frames) == 5  # 128*64*3/2 - 18 = 12270 bytes per frame (12 bits per cell)
-    assert [f.index for f in frames] == [0, 1, 2, 3, 4]
-    assert all(f.count == 5 for f in frames)
+    assert len(frames) == 3  # 128*128*3/2 - 18 = 24558 bytes per frame (12 bits per cell)
+    assert [f.index for f in frames] == [0, 1, 2]
+    assert all(f.count == 3 for f in frames)
 
 
 def test_out_of_order_frames():
-    data = os.urandom(30000)
+    data = os.urandom(60000)
     images = encode_frames(data, msg_id=9, cell=1)
     asm = FrameAssembler()
     frames = [decode_frame(i) for i in images]

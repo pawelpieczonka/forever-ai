@@ -12,7 +12,6 @@ import socket
 import sys
 import threading
 import time
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from . import __version__, config
@@ -27,12 +26,12 @@ SINGLE_INSTANCE_PORT = 47811
 
 
 def setup_logging() -> Path:
-    path = config.data_dir() / "foreverai.log"
+    """The log goes to the window's Activity list always, and to files only when the player switched that on."""
+    from . import logs
+    path = logs.path()
     log.setLevel(logging.INFO)
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    fh = RotatingFileHandler(path, maxBytes=2_000_000, backupCount=2, encoding="utf-8")
-    fh.setFormatter(fmt)
-    log.addHandler(fh)
+    logs.set_enabled(config.SettingsStore().settings.save_logs)
     if sys.stdout and sys.stdout.isatty():
         sh = logging.StreamHandler()
         sh.setFormatter(fmt)
@@ -74,7 +73,7 @@ class Companion:
         self.paths = config.game_paths(s.game_dir)
         self.paths["screenshots"].mkdir(parents=True, exist_ok=True)
         self.kb = KB(kb_path())
-        self.service = Service(self.store, self.kb, self.paths["addons"])
+        self.service = Service(self.store, self.kb, self.paths["addons"], keep_notes=True)
         self.watcher = ScreenshotWatcher(self.paths["screenshots"], self.service.on_frame)
         self.status_text = "Starting…"
         self.syncing = False

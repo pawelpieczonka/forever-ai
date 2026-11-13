@@ -151,6 +151,13 @@ local maps = {
   [1438] = { mapID = 1438, name = "Teldrassil", mapType = 3, parentMapID = 1414, size = { 5091.7, 3393.8 } },
   [1457] = { mapID = 1457, name = "Darnassus", mapType = 3, parentMapID = 1414, size = { 1058.3, 705.7 } },
   [1440] = { mapID = 1440, name = "Ashenvale", mapType = 3, parentMapID = 1414, size = { 5766.7, 3843.7 } },
+  -- (the other continent, for routes through several zones: tests/journey.py)
+  [1415] = { mapID = 1415, name = "Eastern Kingdoms", mapType = 2, parentMapID = 947, size = { 35199.9, 23466.6 } },
+  [1429] = { mapID = 1429, name = "Elwynn Forest", mapType = 3, parentMapID = 1415, size = { 3470.8, 2314.6 } },
+  [1436] = { mapID = 1436, name = "Westfall", mapType = 3, parentMapID = 1415, size = { 3500.0, 2333.3 } },
+  [1433] = { mapID = 1433, name = "Redridge Mountains", mapType = 3, parentMapID = 1415, size = { 2170.8, 1447.9 } },
+  [1431] = { mapID = 1431, name = "Duskwood", mapType = 3, parentMapID = 1415, size = { 2700.0, 1800.0 } },
+  [1453] = { mapID = 1453, name = "Stormwind City", mapType = 3, parentMapID = 1415, size = { 1737.5, 1158.3 } },
 }
 
 local function mapInfo(id)
@@ -235,6 +242,7 @@ C_SpellBook = namespace("C_SpellBook", {
   HasPetSpells = function() return nil end,
 })
 C_TooltipInfo = namespace("C_TooltipInfo", { GetHyperlink = function() return nil end })
+ITEM_MIN_LEVEL = "Requires Level %d" -- the text of a tooltip's level line, as the game words it
 C_UnitAuras = namespace("C_UnitAuras", { GetAuraDataByIndex = function() return nil end })
 C_Reputation = namespace("C_Reputation", { GetNumFactions = function() return 0 end })
 C_SkillInfo = namespace("C_SkillInfo")
@@ -255,6 +263,14 @@ C_CurrencyInfo = namespace("C_CurrencyInfo")
 C_TradeSkillUI = namespace("C_TradeSkillUI")
 C_PetJournal = namespace("C_PetJournal")
 C_MountJournal = namespace("C_MountJournal")
+C_PetInfo = namespace("C_PetInfo")
+C_DeathInfo = namespace("C_DeathInfo")
+C_AuctionHouse = namespace("C_AuctionHouse")
+ItemLocation = { CreateFromBagAndSlot = function(self, bag, slot) return { bag = bag, slot = slot } end }
+Enum.ItemCommodityStatus = { Unknown = 0, Item = 1, Commodity = 2 }
+Enum.AuctionStatus = { Active = 0, Sold = 1 }
+C_TaxiMap = namespace("C_TaxiMap", { GetAllTaxiNodes = function() return nil end })
+C_EquipmentSet = namespace("C_EquipmentSet")
 TooltipDataProcessor = { AddTooltipPostCall = function() end, AddLinePostCall = function() end }
 
 Enum.UIMapType = { Cosmic = 0, World = 1, Continent = 2, Zone = 3, Dungeon = 4, Micro = 5, Orphan = 6 }
@@ -265,6 +281,7 @@ Enum.TooltipDataType = { Item = 0, Spell = 1, Unit = 2, Corpse = 3, Object = 4, 
                          MinimapMouseover = 21, Flyout = 22, Quest = 23, QuestPartyProgress = 24, Macro = 25 }
 Enum.BagIndex = { Keyring = -2, Bank = -1, Backpack = 0, Bag_1 = 1, Bag_2 = 2, Bag_3 = 3, Bag_4 = 4 }
 Enum.SpellBookSpellBank = { Player = 0, Pet = 1 }
+Enum.FlightPathState = { Current = 0, Reachable = 1, Unreachable = 2 }
 Enum.ItemQuality = { Poor = 0, Common = 1, Uncommon = 2, Rare = 3, Epic = 4, Legendary = 5, Artifact = 6, Heirloom = 7 }
 Enum.PowerType = { Mana = 0, Rage = 1, Focus = 2, Energy = 3 }
 
@@ -278,7 +295,7 @@ HIGHLIGHT_FONT_COLOR = { r = 1, g = 1, b = 1 }
 
 -- the game's global functions the add-on can call; without data they return nothing
 for _, name in ipairs({
-  "AbandonQuest", "BuybackItem", "CanMerchantRepair", "GetActionCount", "GetActionInfo", "GetBuybackItemInfo",
+  "AbandonQuest", "BuybackItem", "NumTaxiNodes", "TaxiNodeGetType", "TaxiNodeName", "CanMerchantRepair", "GetActionCount", "GetActionInfo", "GetBuybackItemInfo",
   "GetInventoryItemDurability", "GetInventoryItemLink", "GetInventoryItemQuality", "GetItemStats", "GetLootSlotInfo",
   "GetMacroInfo", "GetMacroSpell", "GetMerchantItemLink", "GetMerchantNumItems", "GetNumBuybackItems",
   "GetNumLootItems", "GetNumQuestChoices", "GetNumQuestLogChoices", "GetNumQuestLogRewards", "GetNumQuestRewards",
@@ -290,8 +307,11 @@ for _, name in ipairs({
   "GetTrainerServiceLevelReq", "GetTrainerServiceSkillReq", "HasAction", "NotifyInspect", "RepairAllItems", "SetAbandonQuest", "GetNumFactions",
   "GetFactionInfo", "GetNumSpellTabs", "GetSpellTabInfo", "GetSpellBookItemName", "GetContainerNumSlots",
   "GetInventoryItemCount", "GetInventoryItemID", "GetInventorySlotInfo",
+  "GetActionText", "GetFlyoutInfo", "GetMacroItem", "UnitCreatureFamily", "GetTaxiMapID", "GetTrainerServiceDescription",
+  "UnitOnTaxi", "GetItemCooldown",
 }) do
   if _G[name] == nil then _G[name] = empty(name) end
 end
+StaticPopupDialogs = StaticPopupDialogs or {}
 function HandleModifiedItemClick(link) return false end
 function SetItemRef(link, text, button, chatFrame) end

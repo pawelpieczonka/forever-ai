@@ -227,9 +227,21 @@ local function bubble(kind, text)
   return e
 end
 
+-- An item on a card, as a link: hovering it shows the game's own tooltip of the item, as in the bags (with what the
+-- other add-ons add to it), and Shift+click puts it into the chat. The character's own link when it has the item (its
+-- random suffix, its durability), else the item's by its number; its name alone when the game knows neither.
+local function itemText(id, name)
+  local bare = tostring(name or "?"):gsub("^%[(.*)%]$", "%1")
+  local ok, link = pcall(ns.Links.Resolve, bare, tonumber(id) and "item" or nil, tonumber(id))
+  if ok and type(link) == "string" and link:find("|Hitem:", 1, true) then return link end
+  return esc(bare)
+end
+UI.ItemText = itemText
+
 local function card(text, edge, buttons)
   local f = CreateFrame("Frame", nil, chat.child, "BackdropTemplate")
   backdrop(f, P.card, edge or P.cardEdge)
+  ns.Links.Attach(f) -- (the items on a card are links)
   local fs = label(f, text)
   fs:SetPoint("TOPLEFT", 10, -8)
   local status = label(f, "", F.small)
@@ -355,16 +367,18 @@ function UI.RouteProgress(done, nextStop, meters)
   local line = text:gsub("^d", "D")
   bubble("meta", newsText("|cff9aa3ad" .. esc(line) .. "|r"))
   ns.RecordEntry({ k = "n", t = line })
+  if ns.Seen then ns.Seen("route alert shown to the player: " .. line) end
   chat:ToBottom()
   relayout()
 end
 
-function UI.BeginAnswer(msgId, news)
+function UI.BeginAnswer(msgId, news, check)
   if news then
-    -- an update asked again (a quest overtook it) goes on in the line of the one before
+    -- an update asked again (a quest overtook it) goes on in the line of the one before; so does the AI's check of
+    -- the route the planner made, which leaves that line as it is unless it changes the route
     local e = UI.heldNews or bubble("meta", newsText("|cff7f8a99" .. esc(news) .. "…|r"))
     UI.heldNews = nil
-    e.msgId, e.news, e.done = msgId, news, nil
+    e.msgId, e.news, e.done, e.check = msgId, news, nil, check
     currentAnswer = e
     chat:ToBottom()
     relayout()
@@ -400,9 +414,18 @@ function UI.UpdateAnswer(data)
     return
   end
   if data.final then
+    if ns.Log then
+      local ops = {}
+      for _, a in ipairs(type(data.actions) == "table" and data.actions or {}) do ops[#ops + 1] = tostring(a.op) end
+      ns.Log("answer", string.format("%s%s: %d marks%s%s%s", e.news and "update " or "answer ", tostring(data.msgId),
+        type(data.marks) == "table" and #data.marks or 0, data.marksReplace == false and " added" or "",
+        data.routeUnchanged and ", route unchanged" or "", #ops > 0 and (", proposed: " .. table.concat(ops, ", ")) or ""))
+    end
     e.done = true
     e.frame:SetScript("OnUpdate", nil)
-    if e.news and data.routeUnchanged then
+    if e.news and data.routeUnchanged and e.check then
+      -- the AI agrees with what the planner did: the line of the update stays as it is
+    elseif e.news and data.routeUnchanged then
       -- looked at, nothing to change: one dim line, which the next update writes into; nothing on the screen
       e.frame.fs:SetText(newsText("|cff7f8a99" .. esc(newsLine(data.text)) .. "|r"))
       UI.heldNews = e
@@ -411,6 +434,7 @@ function UI.UpdateAnswer(data)
       e.frame.fs:SetText(newsText(ns.Links.Linkify(line, data.links)))
       ns.RecordEntry({ k = "n", t = line, links = data.links })
       UI.RouteAlert("done")
+      UI.lastNews = e
     else
       local text = ns.Links.Linkify(data.text or "", data.links)
       e.frame.fs:SetText(text)
@@ -438,7 +462,7 @@ function UI.UpdateAnswer(data)
       local hadRoute, wasAuto = ns.char.routePlanned and ns.Map.Count() > 0, ns.char.routeAuto
       -- the add-on's own update marks the same route again: what the player took off it stays known to the AI
       local tookOff = e.news and ns.char.marksRemoved or nil
-      UI.MarksCard(data.marks, data.marksReplace, data.track, e.news)
+      UI.MarksCard(data.marks, data.marksReplace, data.track, e.news, data.marksMore == true)
       if tookOff then ns.char.marksRemoved = tookOff end
       -- the order the AI gave may name the stops this answer added: it is applied again now that they are there
       if type(data.route) == "table" and type(data.route.order) == "table" then ns.Map.Edit({ order = data.route.order }) end
@@ -454,6 +478,8 @@ function UI.UpdateAnswer(data)
       if isRoute then ns.Map.RouteKnown() end -- it was made for the quest log as it is now
       UI.UpdateStrip()
     end
+    -- the stop the AI sends the player to now (edit_route go_to): the arrow leads there
+    if type(data.goTo) == "table" and ns.Map then ns.Map.GoTo(data.goTo) end
     if marked or type(data.route) == "table" then ns.char.routeRejected = nil end -- the player asked for this one
     -- The route was just looked at again by the AI: the stops that are done leave the list now. Unless nothing is
     -- left to do: then the route the player finished stays in the window (all done), not an empty space where the
@@ -461,6 +487,7 @@ function UI.UpdateAnswer(data)
     if e.news and ns.Map then
       if ns.Map.Left() > 0 then ns.Map.DropDone() end
       ns.Map.UpdateAnswered()
+      if data.check and ns.Map.ScheduleCheck then ns.Map.ScheduleCheck() end -- the planner answered: the AI looks next
     end
     if type(data.auction) == "table" and #data.auction > 0 then UI.AuctionCard(data.auction, data.auctionList) end
     currentAnswer = nil
@@ -472,8 +499,10 @@ function UI.UpdateAnswer(data)
 end
 
 function UI.FailAnswer(text)
+  if ns.Log then ns.Log("answer", "failed: " .. tostring(text)) end
   if currentAnswer and currentAnswer.news then -- the news line says it, and so does the screen
     local line = "Route not updated: " .. tostring(text)
+    if ns.Seen then ns.Seen("shown to the player: " .. line) end
     currentAnswer.frame.fs:SetText(newsText("|cffff9a9a" .. esc(line) .. "|r"))
     ns.RecordEntry({ k = "n", t = line })
     currentAnswer = nil
@@ -589,13 +618,365 @@ function UI.RouteCard(action)
   relayout()
 end
 
+-- Copper from a price as the player types it: "18c", "1s 20c", "2g 5s". Anything else is nil; a bare number too (it
+-- could be copper, silver or gold, and a slip would give the goods away).
+local function parseCoins(text)
+  local rest = (tostring(text or ""):lower():gsub("%s+", ""))
+  local total, any = 0, false
+  for _, unit in ipairs({ { "g", 10000 }, { "s", 100 }, { "c", 1 } }) do
+    local n, tail = rest:match("^(%d+)" .. unit[1] .. "(.*)$")
+    if n then total, rest, any = total + tonumber(n) * unit[2], tail, true end
+  end
+  if not any or rest ~= "" or total < 1 then return nil end
+  return total
+end
+UI.ParseCoins = parseCoins
+
+-- Auctions to post or to cancel. The game takes each only from a click of the player, so the button does one lot
+-- per click ("Post 1/3", "Post 2/3"...) and waits for the game between them; the AI hears once, when all are through.
+-- What the AI proposes to post is filled in, not fixed: how many (of how many the bags hold, all of them at a click),
+-- the price of one and how long the auctions run are fields on the card; what a lot comes to stands beside them and
+-- follows every change. What is posted is what stands in the fields at the click.
+function UI.SellCard(action)
+  local posting = action.op == "auction_post"
+  local steps = posting and (action.lots or {}) or (action.auctions or {})
+  local many = #steps > 1
+  local lines = {}
+  -- an item a line: what, how many, the price of one (with several items, what each comes to); under it in grey, what
+  -- the price stands on
+  for i, s in ipairs(steps) do
+    local n = many and (i .. ". ") or ""
+    local count, unit = tonumber(s.count) or 1, tonumber(s.unit) or 0
+    if posting then
+      -- (the lots of a card that posts are rows of fields, below)
+    else
+      lines[#lines + 1] = string.format("%s%s |cffffffff×%d|r  |cff9aa3ad%s each%s|r", n, itemText(s.id, s.name), count,
+        esc(ns.Coins(unit)), s.left and (", " .. esc(s.left) .. " left") or "")
+    end
+  end
+  local head = posting and ("|cffffd27aPost on the auction house|r" .. (many and " |cff9aa3ad· one click per item|r" or ""))
+    or "|cffffd27aCancel auctions|r |cffff9966· the deposit is not returned|r"
+  local text = posting and head or (head .. "\n" .. table.concat(lines, "\n"))
+  local verb = posting and "Post" or "Cancel"
+  local at, busy, results, shown, any = 1, false, {}, {}, false
+  -- the fields of a card that posts: a row for each lot, the buttons of the length, the money under them
+  local rows, lengths, refresh = {}, {}, nil
+  local _, proposed = ns.Market.RunTime(action.hours)
+  local hours = proposed
+  local function caption() return many and string.format("%s %d/%d", verb, at, #steps) or verb end
+  local function report(self, how)
+    self:Done(how)
+    -- (a click that led to nothing is not the player saying no)
+    ns.ActionFeedback(string.format("%s: %s — %s%s.", (any or #results > 0) and "Accepted" or "Rejected",
+      posting and "post on the auction house" or "cancel auctions",
+      #results > 0 and table.concat(results, "; ") or "nothing was done",
+      posting and any and hours ~= proposed and string.format("; posted for %d h, the player's choice on the card", hours) or ""))
+  end
+  local function advance(self)
+    busy = false
+    at = at + 1
+    if at > #steps then
+      report(self, "|cff5dff9d" .. esc(table.concat(shown, "  ·  ")) .. "|r")
+    else
+      self.buttons[1]:SetText(caption())
+      self.buttons[1]:SetUsable(true)
+      self.status:SetText("|cff9aa3ad" .. esc(shown[#shown] or "") .. "|r")
+      if refresh then refresh() end -- the lot that is through is closed, the next one's fields decide about the button
+      relayout()
+    end
+  end
+  local e
+  e = card(text, nil, {
+    { caption(), 110, function(self)
+      local s = steps[at]
+      if busy or not s then return end
+      local row = rows[at]
+      if row and not (row.okCount and row.okPrice) then return end -- a field that cannot be read posts nothing
+      local what = posting and string.format("%s ×%d at %s each", tostring(s.name), tonumber(s.count) or 1, ns.Coins(s.unit))
+        or string.format("%s ×%d", tostring(s.name), tonumber(s.count) or 1)
+      if row and (tonumber(s.count) ~= s.count0 or tonumber(s.unit) ~= s.unit0) then
+        -- the AI hears what was posted, and that it is not what it proposed
+        what = what .. string.format(" (changed by the player on the card; proposed ×%d at %s each)", s.count0, ns.Coins(s.unit0))
+      end
+      local ok, err
+      if posting then
+        ok, err = ns.Market.Post(s, function(posted, wanted, paid, why)
+          if posted > 0 then any = true end
+          results[#results + 1] = what .. ": " .. (posted >= wanted and ("posted, deposit " .. ns.Coins(paid))
+            or string.format("%d of %d posted (%s)", posted, wanted, tostring(why or "the game did not take the rest")))
+          shown[#shown + 1] = posted >= wanted and string.format("Posted %s ×%d (deposit %s)", tostring(s.name), wanted, ns.Coins(paid))
+            or string.format("%s: %d of %d posted, %s", tostring(s.name), posted, wanted, tostring(why or "the game did not take the rest"))
+          advance(self)
+        end)
+      else
+        ok, err = ns.Market.Cancel(s, function(gone, cost, unsure)
+          if gone or unsure then any = true end
+          results[#results + 1] = what .. ": " .. (gone and ("cancelled" .. ((cost or 0) > 0 and (", it cost " .. ns.Coins(cost)) or ""))
+            or unsure and "asked to cancel, but the game did not say whether it did (the window was closed too soon): look at my_auctions"
+            or "still listed (the game did not cancel it)")
+          shown[#shown + 1] = gone and ("Cancelled " .. what) or unsure and (what .. ": asked, not confirmed") or (what .. ": still listed")
+          advance(self)
+        end)
+      end
+      if ok then
+        busy = true
+        self.buttons[1]:SetUsable(false)
+        self.status:SetText(posting and "|cff5dff9dPosting…|r" or "|cff5dff9dCancelling…|r")
+        relayout()
+      else
+        results[#results + 1] = what .. ": failed (" .. tostring(err) .. ")"
+        shown[#shown + 1] = tostring(s.name) .. ": " .. tostring(err)
+        advance(self)
+      end
+    end, "primary" },
+    { posting and "Reject" or "Keep", 76, function(self)
+      if busy then return end
+      report(self, any and ("|cffe0d060Stopped. " .. esc(table.concat(shown, "  ·  ")) .. "|r")
+        or (#shown > 0 and ("|cffff9a9a" .. esc(table.concat(shown, "  ·  ")) .. "|r") or "|cff8a93a0Rejected.|r"))
+    end },
+  })
+  if posting then
+    local f = e.frame
+    local hint -- what the status line says about a field that cannot be read
+    local function closed(i) return i < at or (busy and i == at) or not e.buttons[1]:IsShown() end
+    local foot = label(f, "")
+    local lengthLabel = label(f, "|cff9aa3adRuns for|r")
+    refresh = function()
+      local sum, edited = 0, hours ~= proposed
+      for i, s in ipairs(steps) do
+        local row, count, unit = rows[i], tonumber(s.count) or 0, tonumber(s.unit) or 0
+        sum = sum + count * unit
+        if count ~= s.count0 or unit ~= s.unit0 then edited = true end
+        row.total:SetText("|cffffffff" .. esc(ns.Coins(count * unit)) .. "|r") -- what this lot comes to
+        local have = ns.Market.BagUnits and ns.Market.BagUnits(tonumber(s.id) or 0) or 0
+        row.have:SetText(have > 0 and ("|cff9aa3adof " .. have .. "|r") or "")
+        local open = not closed(i)
+        for _, box in ipairs({ row.count, row.price }) do
+          box.edit:SetEnabled(open)
+          box:SetAlpha(open and 1 or 0.5)
+        end
+        row.all:SetEnabled(open and have > 0 and have ~= count)
+        row.all:SetAlpha(open and have > 0 and 1 or 0.5)
+      end
+      local cut = tonumber(action.cut) or 5
+      local parts = { string.format("|cffffd100Total %s|r  |cff9aa3ad· %s for you after the %d%% cut|r", esc(ns.Coins(sum)),
+        esc(ns.Coins(math.floor(sum * (100 - cut) / 100 + 0.5))), cut) }
+      -- the deposit the app read from the game holds for what it proposed; for anything else the game is asked again
+      local deposit, exact = tonumber(action.deposit), action.depositExact
+      if edited then
+        deposit, exact = 0, true
+        for _, s in ipairs(steps) do
+          local d = ns.Market.Deposit and ns.Market.Deposit(s)
+          if not d then deposit = nil break end
+          deposit = deposit + d
+        end
+      end
+      if deposit then
+        parts[#parts + 1] = string.format("|cff9aa3adDeposit %s%s, returned when it sells|r", exact and "" or "about ", esc(ns.Coins(deposit)))
+      elseif edited then
+        parts[#parts + 1] = "|cff9aa3adDeposit: the game says it with the auction house open|r"
+      end
+      if #(action.leftOut or {}) > 0 then
+        parts[#parts + 1] = "|cff9aa3adNot posted:|r"
+        for _, s in ipairs(action.leftOut) do
+          parts[#parts + 1] = string.format("|cff9aa3ad• %s: %s|r", esc(s.name or "?"), esc(s.why or ""))
+        end
+      end
+      foot:SetText(table.concat(parts, "\n"))
+      for _, b in ipairs(lengths) do
+        b:SetActive(b.hours == hours)
+        b:SetEnabled(e.buttons[1]:IsShown() and not busy)
+      end
+      local row = rows[at]
+      if e.buttons[1]:IsShown() and not busy then
+        e.buttons[1]:SetUsable(not row or (row.okCount and row.okPrice) and true or false)
+      end
+    end
+    local function say(text)
+      if text then
+        hint = "|cffff9a9a" .. esc(text) .. "|r"
+        e.status:SetText(hint)
+      elseif hint and e.status:GetText() == hint then
+        hint = nil
+        e.status:SetText("")
+      end
+    end
+    for _, h in ipairs(ns.Market.Durations()) do
+      local b
+      b = Btn(f, h .. " h", 44, 20, function()
+        if busy then return end
+        hours = h
+        for i, s in ipairs(steps) do
+          if i >= at then s.hours = h end
+        end
+        refresh()
+      end, nil, "How long the auctions run")
+      b.hours = h
+      lengths[#lengths + 1] = b
+    end
+    for i, s in ipairs(steps) do
+      s.count0, s.unit0 = math.floor(tonumber(s.count) or 1), math.floor((tonumber(s.unit) or 0) + 0.5)
+      s.count, s.unit, s.hours = s.count0, s.unit0, hours
+      local row = { okCount = true, okPrice = true }
+      row.name = label(f, (many and (i .. ". ") or "") .. itemText(s.id, s.name))
+      row.name:SetWordWrap(false)
+      row.count = Input(f, 44, "")
+      row.price = Input(f, 92, "")
+      row.total = label(f, "")
+      for _, box in ipairs({ row.count, row.price }) do
+        box:SetHeight(22)
+        box.edit:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+      end
+      row.count.edit:SetMaxLetters(5)
+      row.count.edit:SetText(tostring(s.count0))
+      row.price.edit:SetMaxLetters(18)
+      row.price.edit:SetText(ns.Coins(s.unit0))
+      row.have = label(f, "")
+      row.all = Btn(f, "All", 34, 22, function()
+        local have = ns.Market.BagUnits and ns.Market.BagUnits(tonumber(s.id) or 0) or 0
+        if have > 0 then row.count.edit:SetText(tostring(have)) end
+      end, nil, "Post all of them that are in the bags")
+      row.times = label(f, "|cff9aa3ad×|r")
+      row.each = label(f, "|cff9aa3adeach|r")
+      row.eq = label(f, "|cff9aa3ad=|r")
+      -- what the price stands on: the figures of the market when the app sent them (the lowest and the average of
+      -- what is offered now, the vendor's price, how many offers; under them what the scans saw and what else there
+      -- is to say), else its sentence
+      local m, basis = s.market, s.basis and ("|cff9aa3ad" .. esc(s.basis) .. "|r") or nil
+      if type(m) == "table" and tonumber(m.low) then
+        local function fig(name, copper) return string.format("|cff9aa3ad%s|r |cffffffff%s|r", name, esc(ns.Coins(copper))) end
+        local figs = { fig("Lowest", m.low) }
+        if tonumber(m.avg) then figs[#figs + 1] = fig("Average", m.avg) end
+        if tonumber(m.vendor) and m.vendor > 0 then figs[#figs + 1] = fig("Vendor", m.vendor) end
+        figs[#figs + 1] = string.format("|cff9aa3ad%d%s offer%s · %d seller%s|r", tonumber(m.offers) or 0, m.more and "+" or "",
+          m.offers == 1 and "" or "s", tonumber(m.sellers) or 0, m.sellers == 1 and "" or "s")
+        local more = {}
+        if tonumber(m.seenLow) and tonumber(m.seenDays) then
+          more[#more + 1] = string.format("your scans, last 2 weeks: %s on %d day%s",
+            m.seenLow == m.seenHigh and ns.Coins(m.seenLow) or (ns.Coins(m.seenLow) .. "–" .. ns.Coins(m.seenHigh)),
+            m.seenDays, m.seenDays == 1 and "" or "s")
+        end
+        for _, note in ipairs(type(m.notes) == "table" and m.notes or {}) do more[#more + 1] = tostring(note) end
+        basis = table.concat(figs, "    ") .. (#more > 0 and ("\n|cff9aa3ad" .. esc(table.concat(more, " · ")) .. "|r") or "")
+      end
+      row.basis = basis and label(f, basis, F.small) or nil
+      local function mark(edit, ok)
+        if ok then edit:SetTextColor(0.95, 0.95, 0.97) else edit:SetTextColor(1, 0.45, 0.45) end
+      end
+      row.count.edit:SetScript("OnTextChanged", function(self)
+        local n = tonumber(self:GetText())
+        local have = ns.Market.BagUnits and ns.Market.BagUnits(tonumber(s.id) or 0) or 0
+        local most = have > 0 and have or s.count0 -- (not in the bags: the game says so at the click)
+        row.okCount = n ~= nil and n == math.floor(n) and n >= 1 and n <= most
+        mark(self, row.okCount)
+        if row.okCount then s.count = n end
+        say(not row.okCount and (n and n > most and string.format("You have %d of %s.", most, tostring(s.name))
+          or "How many: a whole number, 1 or more.") or nil)
+        refresh()
+      end)
+      row.price.edit:SetScript("OnTextChanged", function(self)
+        local copper = parseCoins(self:GetText())
+        row.okPrice = copper ~= nil
+        mark(self, row.okPrice)
+        if copper then s.unit = copper end
+        say(not row.okPrice and "The price of one, like 1g 20s 5c." or nil)
+        refresh()
+      end)
+      -- leaving a field: it shows the value that counts, written the usual way (one that could not be read goes
+      -- back to the last that could)
+      row.count.edit:SetScript("OnEditFocusLost", function(self)
+        row.count:SetBackdropBorderColor(unpack(P.edge))
+        if self:GetText() ~= tostring(s.count) then self:SetText(tostring(s.count)) end
+      end)
+      row.price.edit:SetScript("OnEditFocusLost", function(self)
+        row.price:SetBackdropBorderColor(unpack(P.edge))
+        if self:GetText() ~= ns.Coins(s.unit) then self:SetText(ns.Coins(s.unit)) end
+      end)
+      rows[i] = row
+    end
+    local function put(w, x, y)
+      w:ClearAllPoints()
+      w:SetPoint("TOPLEFT", f, "TOPLEFT", x, -y)
+    end
+    e.layout = function(width)
+      e.fs:SetWidth(width - 22)
+      local y = 8 + e.fs:GetStringHeight() + 6
+      put(lengthLabel, 10, y + 3)
+      local x = 10 + math.ceil(lengthLabel:GetStringWidth()) + 8
+      for _, b in ipairs(lengths) do
+        put(b, x, y)
+        x = x + b:GetWidth() + 4
+      end
+      y = y + 27
+      -- a wide window has the total on the row; a narrow one under it, below the price of one
+      local inline = width - 22 >= 471
+      local nameW = math.max(90, math.min(230, width - 22 - (inline and 381 or 295)))
+      for _, row in ipairs(rows) do
+        put(row.name, 10, y + 4)
+        row.name:SetWidth(nameW)
+        local cx = 10 + nameW + 6
+        put(row.count, cx, y)
+        cx = cx + 44 + 5
+        put(row.have, cx, y + 4)
+        cx = cx + 40
+        put(row.all, cx, y)
+        cx = cx + 34 + 8
+        put(row.times, cx, y + 4)
+        cx = cx + 14
+        local priceX = cx
+        put(row.price, cx, y)
+        cx = cx + 92 + 6
+        put(row.each, cx, y + 4)
+        cx = cx + 36
+        if not inline then
+          y = y + 25
+          cx = priceX - 14
+        end
+        put(row.eq, cx, y + 4)
+        put(row.total, cx + 14, y + 4)
+        y = y + (inline and 25 or 20)
+        if row.basis then
+          put(row.basis, 24, y)
+          row.basis:SetWidth(width - 36)
+          y = y + math.ceil(row.basis:GetStringHeight()) + 5
+        end
+      end
+      put(foot, 10, y + 2)
+      foot:SetWidth(width - 22)
+      local h = y + 2 + foot:GetStringHeight() + 8
+      x = 10
+      for _, b in ipairs(e.buttons) do
+        put(b, x, h)
+        x = x + b:GetWidth() + 6
+      end
+      -- beside the buttons while they are there (what a field lacks, "Posting…"), in their place once they are gone
+      local beside = e.buttons[1]:IsShown()
+      put(e.status, beside and x + 4 or 10, h + 4)
+      e.status:SetWidth(width - 22 - (beside and x - 6 or 0))
+      return width - 2, h + 30
+    end
+    local done = e.Done
+    function e:Done(msg)
+      done(self, msg)
+      refresh() -- every field and the length are closed
+    end
+    e.rows, e.lengths = rows, lengths
+    UI.sellCard = e -- the newest card that posts (the tests reach its fields through it)
+    refresh()
+  end
+  relayout()
+  return e
+end
+
 function UI.ActionCard(action)
   if action.op == "route" or action.op == "route_edit" then return UI.RouteCard(action) end
+  if action.op == "auction_post" or action.op == "auction_cancel" then return UI.SellCard(action) end
   local what
   if action.op == "vendor_sell" then
     local lines = {}
     for _, it in ipairs(action.items or {}) do
-      lines[#lines + 1] = string.format("• %s ×%s  |cff9aa3ad%s|r", esc(it.name or "?"), tostring(it.count or "?"), esc(it.price or ""))
+      lines[#lines + 1] = string.format("• %s ×%s  |cff9aa3ad%s%s|r", itemText(it.id, it.name), tostring(it.count or "?"),
+        esc(it.price or ""), it.why and (" — " .. esc(it.why)) or "")
     end
     what = "Sell to vendor:\n" .. table.concat(lines, "\n") .. "\n|cffffd100Total: " .. esc(action.total or "?") .. "|r"
   elseif action.op == "vendor_repair" then
@@ -673,9 +1054,17 @@ end
 
 -- replace == false: the answer adds stops to the marks of earlier answers; otherwise its marks replace them
 -- quiet: only the map changes (the update of a route is a news line, not a card)
-function UI.MarksCard(marks, replace, track, quiet)
+function UI.MarksCard(marks, replace, track, quiet, more)
   local placed, how
-  if replace ~= false then placed, how = ns.Map.Replace(marks) else placed, how = ns.Map.Apply(marks) end
+  -- added to the route on the map: each stop goes where it costs the least way
+  -- the add-on's own update of the route (quiet) weaves into the route on the map instead of taking its place
+  if replace ~= false and quiet and ns.Map.Merge then
+    placed, how = ns.Map.Merge(marks, more)
+  elseif replace ~= false then
+    placed, how = ns.Map.Replace(marks)
+  else
+    placed, how = ns.Map.Apply(marks, true)
+  end
   if #placed == 0 or quiet then return end
   local lines = {}
   for _, p in ipairs(placed) do
@@ -705,7 +1094,7 @@ function UI.AuctionCard(items, listName)
   for i, it in ipairs(items) do
     local price = it.price and it.price ~= "" and ("|cffffd100" .. esc(it.price) .. "|r")
       or "|cff6a7380no price in the last scan|r"
-    lines[#lines + 1] = string.format("• %s  %s", esc(it.name or "?"), price)
+    lines[#lines + 1] = string.format("• %s  %s", itemText(it.id, it.name), price)
     names[i] = it.name
   end
   card("|cffffd27aAuction house|r |cff6a7380(prices from the last Auctionator scan)|r\n" .. table.concat(lines, "\n"),
@@ -713,6 +1102,10 @@ function UI.AuctionCard(items, listName)
     { "Search on the AH", 130, function(self)
       local ok, err = ns.Auction.ShowInAuctionator(names)
       if ok then self:Done("|cff5dff9dShown in Auctionator (Shopping tab).|r") else UI.Notice(err, "warn") end
+      if ns.Seen then
+        ns.Seen((ok and "the player opened the shopping list in the auction add-on: " or "the shopping list could not be shown in the auction add-on (" .. tostring(err) .. "): ")
+          .. table.concat(names, ", "))
+      end
     end, "primary" },
     { "Save as list", 100, function(self)
       local ok, saved = ns.Auction.SaveAsList(listName, names)
@@ -721,8 +1114,16 @@ function UI.AuctionCard(items, listName)
       else
         UI.Notice(saved, "warn")
       end
+      if ns.Seen then
+        ns.Seen((ok and ("the player saved the shopping list in the auction add-on as " .. tostring(saved) .. ": ")
+          or "the shopping list could not be saved in the auction add-on (" .. tostring(saved) .. "): ")
+          .. table.concat(names, ", "))
+      end
     end },
-    { "Dismiss", 80, function(self) self:Done("|cff8a93a0Dismissed.|r") end },
+    { "Dismiss", 80, function(self)
+      self:Done("|cff8a93a0Dismissed.|r")
+      if ns.Seen then ns.Seen("the player dismissed the shopping list card: " .. table.concat(names, ", ")) end
+    end },
   })
   relayout()
 end
@@ -900,12 +1301,32 @@ local function aiLine(s)
   return "|cffffc060not known yet (click Refresh)|r"
 end
 
+-- The add-ons ForeverAI reads when they are there: folder, name, what the player gets from it. (The README has the
+-- same list.)
+UI.WORKS_WITH = {
+  { "Questie", "Questie", "quests around you and in other zones, where their targets are, routes" },
+  { "TomTom", "TomTom", "the arrow that leads from stop to stop" },
+  { "Leatrix_Maps", "Leatrix Maps", "the ways between zones: crossings, boats, tram, dungeons" },
+  { "Auctionator", "Auctionator", "auction prices from your last scan" },
+  { "Pawn", "Pawn", "which items are upgrades for you" },
+  { "GearQuestForever", "GearQuest Forever", "the best gear for each slot at your level and where to get it" },
+  { "ForeverMapNotes", "ForeverMapNotes", "rares and their drops, ore, herbs, chests, pools, books, boats" },
+  { "Tamed", "Tamed", "hunters: pet abilities and the beasts that teach them" },
+}
+
 function UI.RefreshSettings()
   if not S.built then return end
   local s = ns.db.status or {}
   local search = ({ auto = "auto", always = "always", never = "off" })[s.searchMode or ""]
   S.aiInfo:SetText("In use: |cffe6e9ec" .. aiLine(s) .. "|r" .. (search and ("  ·  web search: " .. search) or ""))
   for _, b in ipairs(S.fonts) do b:SetActive(b.size == ns.db.fontSize) end
+  for _, a in ipairs(S.addons or {}) do
+    local loaded = C_AddOns.IsAddOnLoaded(a.folder)
+    -- a tick or a cross (the game's own ready-check marks: its fonts have neither sign), then what the add-on gives
+    a.line:SetText(string.format("|T%s:14:14:0:-1|t %s%s|r  |cff7f8a99%s%s|r",
+      loaded and "Interface\\RaidFrame\\ReadyCheck-Ready" or "Interface\\RaidFrame\\ReadyCheck-NotReady",
+      loaded and "|cffe6e9ec" or "|cffb0b6bd", a.name, a.what, loaded and "" or " (not loaded)"))
+  end
   S.Layout()
 end
 
@@ -1014,6 +1435,15 @@ local function buildSettings(p)
   rp:SetPoint("LEFT")
   row(tools, 30)
 
+  head("Other add-ons")
+  row(label(c, "ForeverAI works without them. Each one that is loaded adds what its line says.", F.small), 18)
+  S.addons = {}
+  for _, a in ipairs(UI.WORKS_WITH) do
+    local line = label(c, "", F.small)
+    S.addons[#S.addons + 1] = { line = line, folder = a[1], name = a[2], what = a[3] }
+    row(line, 18)
+  end
+
   function S.Layout()
     local width = c:GetWidth()
     layGrid(width)
@@ -1045,11 +1475,72 @@ function UI.ShowTab(name)
   if name == "settings" then UI.RefreshSettings() end
 end
 
+------------------------------------------------------------------------ what was sent before
+-- The arrow keys in the text field bring back what the player sent, like in a command line: up for the message
+-- before, up again for the one before that, down the other way and at the end back to what was being typed. Kept
+-- for the character (the last SENT_MAX messages), so it is there after a /reload and the next day too.
+local SENT_MAX = 50
+local recall = { at = nil, draft = "" }
+
+local function sentList()
+  if not ns.char then return {} end
+  if type(ns.char.sent) ~= "table" then
+    -- the first time: what the open conversation already holds of the player's own words
+    local list = {}
+    for _, en in ipairs((ns.CurrentConv and ns.CurrentConv() or {}).entries or {}) do
+      if en.k == "q" and type(en.t) == "string" and en.t:sub(1, 1) ~= "[" and list[#list] ~= en.t then
+        list[#list + 1] = en.t
+      end
+    end
+    while #list > SENT_MAX do table.remove(list, 1) end
+    ns.char.sent = list
+  end
+  return ns.char.sent
+end
+
+local function remember(text)
+  local list = sentList()
+  if list[#list] ~= text then list[#list + 1] = text end
+  while #list > SENT_MAX do table.remove(list, 1) end
+  recall.at = nil
+end
+
+local function recallStep(box, key)
+  if key ~= "UP" and key ~= "DOWN" then return end
+  -- (a game that reports an arrow key in two ways counts it once)
+  local now = GetTime()
+  if recall.key == key and recall.time == now then return end
+  recall.key, recall.time = key, now
+  local list = sentList()
+  if key == "UP" then
+    if #list == 0 then return end
+    if not recall.at then
+      recall.draft, recall.at = box:GetText() or "", #list
+    elseif recall.at > 1 then
+      recall.at = recall.at - 1
+    else
+      return -- the oldest one stays
+    end
+  else
+    if not recall.at then return end
+    recall.at = recall.at + 1
+    if recall.at > #list then -- past the newest: what was being typed is back
+      recall.at = nil
+      box:SetText(recall.draft or "")
+      box:SetCursorPosition(#(recall.draft or ""))
+      return
+    end
+  end
+  box:SetText(list[recall.at])
+  box:SetCursorPosition(#list[recall.at])
+end
+
 ------------------------------------------------------------------------ build
 local function sendCurrent()
   local text = input.edit:GetText()
   if text:gsub("%s", "") == "" then return end
   if ns.pending or ns.collecting then UI.Notice("Wait for the current answer to finish.", "warn") return end
+  remember(text)
   input.edit:SetText("")
   local withScreen = screenCheck and screenCheck:GetChecked() and true or false
   if screenCheck then screenCheck:SetChecked(false) end -- one question at a time
@@ -1281,7 +1772,7 @@ function UI.UpdateStrip()
       text = all > stops and string.format("|cff9aa3adRoute|r |cff7fd6ff(%d/%d)|r", all - stops, all)
         or string.format("|cff9aa3adRoute|r |cff7fd6ff(%d)|r", stops),
       tip = "Clear the marks on the map",
-      close = function() ns.Map.Clear() end,
+      close = function() ns.Map.Clear("the player (the x of the route strip)") end,
       action = {
         label = routeOpen and "hide" or "list",
         tip = routeOpen and "Hide the stops" or "Show the stops: click one to head to it, lock it or take it off",
@@ -1425,9 +1916,9 @@ local function build()
   input:SetPoint("TOPLEFT")
   input:SetPoint("BOTTOMRIGHT", -88, 0)
   input.edit:SetScript("OnEnterPressed", function() sendCurrent() end)
-  input.edit:SetScript("OnKeyDown", function(self, key)
-    if key == "UP" and self:GetText() == "" and lastQuestion then self:SetText(lastQuestion) end
-  end)
+  if input.edit.SetAltArrowKeyMode then input.edit:SetAltArrowKeyMode(false) end -- the arrows are the field's
+  input.edit:SetScript("OnKeyDown", recallStep)
+  input.edit:SetScript("OnArrowPressed", recallStep)
   sendBtn = Btn(inputBar, "Send", 82, 30, sendCurrent, "primary")
   sendBtn:SetPoint("RIGHT")
   -- under the text field: the player decides per question whether the AI sees the screen; off by default

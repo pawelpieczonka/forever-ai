@@ -2,22 +2,30 @@
 the way the game does it, a question goes through the real ForeverAI app and back, and the command line works."""
 
 import json
+
 import re
+
 import shutil
+
 import subprocess
+
 from datetime import datetime
+
 from pathlib import Path
 
 import pytest
+
 from PIL import Image
 
 from addonsim import App, Sim, install_game
+
 from addonsim.__main__ import main
+
 from addonsim.text import TextEngine, parse
 
 ADDON = Path(__file__).resolve().parents[2] / "addon" / "ForeverAI"
-CLOCK = datetime(2026, 11, 10, 12, 0)
 
+CLOCK = datetime(2026, 11, 10, 12, 0)
 
 @pytest.fixture
 def sim(tmp_path):
@@ -26,10 +34,8 @@ def sim(tmp_path):
     yield s
     s.close()
 
-
 def _near(color, want, tol=6):
     return all(abs(a - b) <= tol for a, b in zip(color, want, strict=False))
-
 
 def test_window_builds_and_is_drawn(sim, tmp_path):
     sim.slash("/fai")
@@ -50,7 +56,6 @@ def test_window_builds_and_is_drawn(sim, tmp_path):
     # the text field shows the text that was typed, and the placeholder goes away
     sim.type("hello")
     assert "hello" in sim.texts() and "Ask… (Alt+click an item, spell or quest to tag it)" not in sim.texts()
-
 
 def test_tooltip_hover_and_scroll_clipping(sim, tmp_path):
     sim.slash("/fai")
@@ -74,7 +79,6 @@ def test_tooltip_hover_and_scroll_clipping(sim, tmp_path):
     texts = sim.texts()
     assert any(t.startswith("note 0 ") for t in texts) and not any(t.startswith("note 19 ") for t in texts)
 
-
 def test_reload_keeps_saved_variables(sim):
     sim.slash("/fai")
     sim.click("Settings")
@@ -87,7 +91,6 @@ def test_reload_keeps_saved_variables(sim):
     assert "fontSize" in (wtf / "SavedVariables" / "ForeverAI.lua").read_text()
     assert (wtf / "Forever" / "Simtester" / "SavedVariables" / "ForeverAI.lua").exists()
     assert sim.errors == []
-
 
 def test_reload_keeps_the_character(sim):
     """A /reload loads the UI again but the character is the server's: its level, XP and money stay, so the add-on's
@@ -110,7 +113,6 @@ def test_reload_keeps_the_character(sim):
     assert len(sim.to_py(sim.lua("return ForeverAICharDB.progress.levels"))) == 1
     assert sim.errors == []
 
-
 def test_question_without_the_app(sim):
     """The add-on paints the question into its data block and takes a screenshot; nothing answers."""
     sim.ask("Is anyone there?")
@@ -124,7 +126,6 @@ def test_question_without_the_app(sim):
     sim.run(10)  # also long enough for the add-on's timers after login (spell index, block cells, tooltips)
     assert "No response. Is the ForeverAI app running?" in " ".join(sim.texts())
     assert sim.errors == [] and sim.warnings == []
-
 
 def test_question_through_the_app(tmp_path):
     """End to end: the add-on, the screenshot with the data block, the app's watcher and service, the inbox
@@ -155,7 +156,6 @@ def test_question_through_the_app(tmp_path):
         finally:
             sim.close()
 
-
 def test_text_layout():
     eng = TextEngine()
     paras = parse("|cffff0000red|r plain ||pipe |Hitem:1|h[Link]|h|nnext")
@@ -171,7 +171,6 @@ def test_text_layout():
     assert cut.truncated and cut.lines[0].pieces[-1].text == "..." and cut.lines[0].width <= 60.5
     assert eng.layout("", font, 18, 100, True).height == 0
 
-
 def test_command_line(tmp_path, capsys):
     out = tmp_path / "out"
     code = main(["--no-app", "-o", str(out), "--clock", "2026-11-10 12:00", "-s", "open", "-s", "tab Settings",
@@ -185,11 +184,11 @@ def test_command_line(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert code == 1 and "no visible button or field 'No such button'" in report["failed"]
 
-
 # globals the add-on reads that the game does not have unless another add-on (or a newer client) provides them
 ABSENT = {"Auctionator", "AUCTIONATOR_PRICE_DATABASE", "AUCTIONATOR_SAVEDVARS", "AuctionFrame", "AuctionHouseFrame",
           "InspectFrame", "LibStub", "PawnGetItemData", "PawnGetItemDataForInventorySlot", "PawnIsInitialized",
           "PawnIsItemAnUpgrade", "QuestieLoader", "TomTom", "issecretvalue"}
+
 # the Classic trade skill and craft API: WoW Forever has only C_TradeSkillUI (Professions.lua uses whichever exists)
 ABSENT |= {"CollapseCraftSkillLine", "CollapseTradeSkillSubClass", "ExpandCraftSkillLine", "ExpandTradeSkillSubClass",
            "GetCraftDisplaySkillLine", "GetCraftInfo", "GetCraftItemLink", "GetCraftNumReagents", "GetCraftReagentInfo",
@@ -198,7 +197,6 @@ ABSENT |= {"CollapseCraftSkillLine", "CollapseTradeSkillSubClass", "ExpandCraftS
            "GetTradeSkillNumMade", "GetTradeSkillNumReagents", "GetTradeSkillReagentInfo",
            "GetTradeSkillReagentItemLink", "GetTradeSkillSubClassFilter", "IsTradeSkillLinked",
            "TradeSkillFrameAvailableFilterCheckButton"}
-
 
 @pytest.mark.skipif(not shutil.which("luac5.1"), reason="needs luac5.1")
 def test_every_global_the_addon_reads_is_emulated(sim):
@@ -211,7 +209,6 @@ def test_every_global_the_addon_reads_is_emulated(sim):
     missing = sorted(n for n in read - written - ABSENT if sim.lua("return _G[...] == nil", n) is True)
     assert missing == [], "add these to addonsim/lua/world.lua or wow.lua: " + ", ".join(missing)
 
-
 TOMTOM = r"""
 TomTom = { points = {}, n = 0 }
 function TomTom:AddWaypoint(map, x, y, opts)
@@ -222,13 +219,13 @@ function TomTom:AddWaypoint(map, x, y, opts)
 end
 function TomTom:RemoveWaypoint(uid) self.points[uid] = nil end
 """
+
 ON_THE_MAP = r"""
 local out = {}
 for _, title in pairs(TomTom.points) do out[#out + 1] = title end
 table.sort(out)
 return table.concat(out, " | ")
 """
-
 
 def test_new_marks_replace_the_earlier_ones_unless_added(sim):
     sim.slash("/fai")
@@ -245,9 +242,7 @@ def test_new_marks_replace_the_earlier_ones_unless_added(sim):
     assert sim.lua(ON_THE_MAP) == b"ForeverAI: 1. Dazalar"
     assert sim.errors == []
 
-
 SECTION = "local s = ForeverAI.Collect.sections.marks() return s and table.concat(s, ' | ') or 'none'"
-
 
 def test_marks_stay_after_reload_and_are_done_when_reached(sim):
     sim.slash("/fai")
@@ -280,7 +275,6 @@ def test_marks_stay_after_reload_and_are_done_when_reached(sim):
     assert sim.lua(SECTION) == b"none" and sim.lua(ON_THE_MAP) == b""
     assert sim.errors == []
 
-
 def test_the_auction_card_saves_the_items_as_an_auctionator_list(tmp_path):
     """The real conversation: the player asked for a filter in Auctionator for the Darkmoon Faire's items, and the
     answer told them to type the list by hand. Now the model puts the items on the Auction house card, the app looks up
@@ -295,12 +289,66 @@ def test_the_auction_card_saves_the_items_as_an_auctionator_list(tmp_path):
             sim.ask("Make an Auctionator filter for these items")
             sim.wait_answer(60)
             card = next(t for t in sim.texts() if t.startswith("Auction house"))
-            assert card.splitlines()[1:] == ["• Small Furry Paw  no price in the last scan", "• Linen Cloth  11c"]
+            assert card.splitlines()[1:] == ["• Small Furry Paw  no price in the last scan", "• [Linen Cloth]  11c"]  # (a link)
             assert "[Linen Cloth] (item 2589) — 11c" in app.tool_results[0]["result"]
             sim.click("Save as list")
             assert "Saved as the Auctionator shopping list ForeverAI: Darkmoon Faire (Shopping tab)." in "\n".join(sim.texts())
             saved = sim.lua('return Auctionator.API.v1.GetShoppingListItems("test", "ForeverAI: Darkmoon Faire")')
             assert sim.to_py(saved) == ['"Small Furry Paw"', '"Linen Cloth"']
             assert "Save as list" not in sim.texts() and sim.errors == []
+        finally:
+            sim.close()
+
+# a quest add-on that knows one quest of Darkshore the character can take: its giver, its creature, its turn-in
+QUESTIE = """
+  local quests = { [501] = { name = "The Lost Net", questLevel = 24, requiredLevel = 20, zoneOrSort = 148, startedBy = { { 71 } },
+                             finishedBy = { { 71 } }, objectivesText = { "Kill 6 Net Thieves." } } }
+  local npcs = { [71] = { name = "Fisher Anna", spawns = { [148] = { { 37.6, 44.6 } } } },
+                 [72] = { name = "Net Thief", minLevel = 23, maxLevel = 24, spawns = { [148] = { { 38.0, 46.0 } } } } }
+  local db = {}
+  function db.GetQuest(id) return quests[id] end
+  function db.GetNPC(_, id) return npcs[id] end
+  function db.GetQuestTagInfo() end
+  function db.QueryNPCSingle(id, field) local n = npcs[id] return n and n[field] end
+  function db.QueryQuestSingle(id, field) if id == 501 and field == "objectives" then return { { { 72 } } } end end
+  local available = { __availableQuests = { [501] = true } }
+  QuestieLoader = { ImportModule = function(_, name)
+    if name == "QuestieDB" then return db elseif name == "AvailableQuests" then return available end
+    error("no module") end }
+  C_Map.GetAreaInfo = function(id) return id == 148 and "Darkshore" or nil end
+"""
+
+def test_a_route_is_made_with_the_zones_quests_read_from_the_game(tmp_path, monkeypatch):
+    """End to end, the way a route is planned in the game: the AI calls plan_route; the app asks the add-on for the
+    quests of the zone (through the reply inboxes), the add-on answers from the quest add-on's data (in a
+    screenshot), and the quest that can be done by the route is on it, whole."""
+    from foreverai.service import Service
+    monkeypatch.setattr(Service, "fetch_route_quests", True)
+    game, data = tmp_path / "game", tmp_path / "data"
+    reply = {"text": "The route is on the map.", "tools": [{"name": "plan_route", "args": {}}]}
+    with App(game, data, replies=[reply], pool=60) as app:
+        sim = Sim(game, realtime=True, clock=CLOCK).start()
+        try:
+            sim.lua(QUESTIE)
+            sim.ask("Plan a route and take what I can do on the way.")
+            sim.wait_answer(90)
+            shown = "\n".join(sim.texts())
+            assert "Tool: plan_route" in app.activity
+            assert "1. Fisher Anna (pick up The Lost Net)" in shown, shown
+            assert "2. Net Thief (for The Lost Net)" in shown and "3. Fisher Anna (turn in The Lost Net)" in shown
+            # the stops for a quest that is not taken yet wait for it
+            sim.run(6)
+            state = ("local out = {} for i, s in ipairs(ForeverAI.Map.List()) do out[#out + 1] = i .. (s.done and 'done' or s.current and 'now' or '') end "
+                     "return table.concat(out, ' ')")
+            assert sim.lua(state) in (b"1now 2 3", "1now 2 3")
+            # taken: the arrow leads on to its creature, and the stop it is turned in at waits behind it
+            sim.lua("""C_QuestLog.GetNumQuestLogEntries = function() return 1 end
+              C_QuestLog.GetInfo = function() return { title = "The Lost Net", questID = 501, isHeader = false } end
+              C_QuestLog.IsComplete = function() return false end
+              C_QuestLog.GetQuestObjectives = function() return { { text = "0/6 Net Thief slain", finished = false } } end""")
+            sim._wow.fire(b"QUEST_LOG_UPDATE")
+            sim.run(6)
+            assert sim.lua(state) in (b"1done 2now 3", "1done 2now 3")
+            assert sim.errors == []
         finally:
             sim.close()

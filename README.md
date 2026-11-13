@@ -1,64 +1,147 @@
 <div align="center">
 
-<img src="assets/foreverai.png" width="88" alt="ForeverAI logo">
+<img src="assets/foreverai.png" width="96" alt="ForeverAI logo">
 
 # ForeverAI
 
-**An AI assistant inside World of Warcraft: Forever that already knows your character.**
+**An AI companion inside World of Warcraft: Forever that already knows your character.**
 
 [![Latest release](https://img.shields.io/github/v/release/pawelpieczonka/forever-ai?label=download&color=3ddc97)](https://github.com/pawelpieczonka/forever-ai/releases/latest)
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4)
 ![Linux with Wine](https://img.shields.io/badge/Linux-with%20Wine-FCC624)
 
+[Get started](#get-started) · [What you can ask](#what-you-can-ask) · [More to ask](#more-to-ask) · [Choosing the AI](#choosing-the-ai) · [Other add-ons](#other-add-ons)
+
 </div>
 
-Ask in your own words, in any language. ForeverAI sees your quests, bags, gear and where you stand, so there is nothing to explain first. It answers from a knowledge base of what Forever changed and, with Auctionator, from auction house prices.
-
-## What it does
+Ask in your own words, in any language. ForeverAI reads your quests, bags, gear, talents, pet and position from the game, so there is nothing to explain first. It answers from a knowledge base of what Forever changed, from the add-ons you have installed and, when it needs to, from the web.
 
 <table>
 <tr>
-<td width="410"><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/ask.png?raw=true" alt="A question and its answer in the ForeverAI window" width="400"></td>
+<td width="33%" valign="top">
+
+**It knows your character**
+
+Level, class, quests with their progress, what is in your bags, what you wear, where you stand. "Is this ring better than mine?" needs no more words than that.
+
+</td>
+<td width="33%" valign="top">
+
+**It acts on the map**
+
+A route through your quests with the real crossing into each zone, the boat, the flight master. Stops tick off when what is to be done there is done.
+
+</td>
+<td width="33%" valign="top">
+
+**You stay in control**
+
+Selling, posting an auction, repairing, changing an add-on's option: each is a card in the chat, and nothing happens until you click it.
+
+</td>
+</tr>
+</table>
+
+## What you can ask
+
+<table>
+<tr>
+<td width="410"><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/ask.png?raw=true" alt="The question What should I do next? and its answer in the ForeverAI window" width="400"></td>
 <td>
 
-### Tells you what to do next
+### "What should I do next?"
 
-The answer is about your character as it is now.
+The answer is about your character as it is now: the quests you can finish here, what to leave for later, the upgrade on the way.
 
-- "What should I do next?"
-- "Is this ring better than mine?"
 - "Which talent do I take now?"
+- "Is this ring better than mine?" (Alt+click the ring)
 - "Why do I keep dying to this mob?"
+- "How long until level 30 at this pace?"
 
 </td>
 </tr>
 <tr>
-<td><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/route.png?raw=true" alt="A marked route with its list of stops and a tracked creature" width="400"></td>
+<td><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/route.png?raw=true" alt="A planned route: the stops with what to do at each, the list with distances, a tracked creature" width="400"></td>
 <td>
 
-### Plans a route and finds the creature
+### "Plan a route through my quests"
 
-"Plan a route through my quests" puts the stops on your map in the shortest walking order and leaves out what you should not do alone.
+The stops go on your map in walking order, each with what to do there. With TomTom, its arrow leads you from stop to stop.
 
-- With TomTom, its arrow leads you from stop to stop.
-- When quests lead into a city or another zone, the route goes on there, and the portal, boat or flight you take is a stop of its own.
-- A creature you need gets a marker over its nameplate, a sound and a chat line when it comes into sight.
-- The strip above the text field counts how many are in sight.
-- The marks are still there after a `/reload`.
+- "…and repair on the way." "Add the flight master." What you ask for stays on the route until you have been there.
+- "…and take what I can do on the way." Quests that cost no detour are taken along by themselves, in every zone of the route: the giver by the route, the whole quest no more than about 300 m of extra way, of your level (up to two levels above). Each is planned whole, from where you take it to where you turn it in.
+- "Add the Deadmines quests, I have none of them yet." Quests to pick up are part of the route.
+- "I already have the crawler legs, drop that stop."
+- "Then go on to Ashenvale." The way into the next zone is a stop of its own, at the pass you walk through.
+
+A stop is done when the quest is taken, the objective is finished or the quest is turned in, not when you walk past. The creature you need gets a marker over its nameplate and a sound when it comes into sight.
 
 </td>
 </tr>
 <tr>
-<td><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/edit.png?raw=true" alt="The route after a stop was dropped by asking" width="400"></td>
+<td><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/travel.png?raw=true" alt="The way to a trainer in another city: a boat, a portal, the trainer" width="400"></td>
 <td>
 
-### Changes the route when you change your mind
+### "Where is the hunter trainer? Take me there."
 
-Click **x** to drop a stop, click a stop to head there first, lock one with the padlock so that it stays, or just say it:
+Every step of the way is a stop: the boat and its dock, the portal, the tram, the flight master, the road across a border.
 
-> "I already have the crawler legs, drop that stop."
+- "How do I get to Darnassus?"
+- "Where do I buy Coarse Thread?"
+- "Which flight paths near my route have I not opened?"
+- "Mark the entrance of the Deadmines."
 
-The route on the map changes. Nothing is planned from scratch.
+Flights are offered only between flight masters you have discovered, and a flight is named by its point on the flight map ("fly to Sentinel Hill, Westfall"), which is what you click there. A boat that goes on to a second harbour is one ride, and no way leads through a capital of the other faction.
+
+</td>
+</tr>
+<tr>
+<td><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/shopping.png?raw=true" alt="Three upgrades from the auction house with their prices, an item left out because the character cannot use it, and the shopping list card with the button Search on the AH" width="400"></td>
+<td>
+
+### "Is there an upgrade for me on the AH for 2 gold?"
+
+ForeverAI searches the prices of your last Auctionator scan slot by slot, compares each item with what you wear (with Pawn, by your own scales) and puts its picks on one shopping list under the answer. **Search on the AH** opens all of them in Auctionator's Shopping tab, **Save as list** keeps them as an Auctionator shopping list.
+
+- The list is yours for the whole conversation: "and a helmet?" adds to it, and what you bought or what is no longer listed leaves it by itself.
+- An item you cannot use is not a pick: one that needs a profession, a class or a reputation you do not have is left out, and the answer says what it requires. Ask for such items by name and you get them.
+- "A one-handed sword up to 5 gold." "What is the cheapest 10-slot bag?" "What do the mats for Heavy Armor Kits cost?"
+- "Make me an Auctionator list of these." Any items go on the list, also ones no search has priced; the card says which have no price in the last scan.
+
+Buying always stays with you.
+
+</td>
+</tr>
+<tr>
+<td><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/auction.png?raw=true" alt="A card that posts two items on the auction house: for each the count out of how many you have, the price of one and what they come to, with the lowest and the average price on the market, the vendor price and the number of offers under it" width="400"></td>
+<td>
+
+### "Put the meat and the rest on the AH."
+
+With the auction house open, ForeverAI looks each item up there and then and shows one card: what to post, how many, for how much. Under each item stand the figures the price is based on: the lowest and the average price offered now, what a vendor pays, how many offers from how many sellers, and what your scans saw in the last two weeks.
+
+The numbers are filled in, not fixed: type another count (the card says how many you have, **All** takes them all) or another price of one, or pick another length (2, 8 or 24 hours). What the lot comes to, the total, your share after the cut and the deposit follow at once.
+
+- A price counts as sure when several sellers confirm it. With one offer on the market nothing is priced, unless you name the price.
+- An item worth about the same at a vendor is not posted.
+- "Post it for 24 hours." "50 silver each." Or change it on the card: a price is written like `1g 20s 5c`.
+- "What do I have up? Cancel the three bear meat."
+
+Each lot and each cancelled auction is one click of yours.
+
+</td>
+</tr>
+<tr>
+<td><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/vendor.png?raw=true" alt="A card that sells four items to a vendor, with the reason for each" width="400"></td>
+<td>
+
+### "My bags are full. What can I sell?"
+
+At a vendor you get a list with the reason for each item and one **Accept**. Hover an item on the card, here or on an auction card, and the game shows its tooltip, as in your bags.
+
+- Kept back: anything uncommon or better, gear with stats, profession tools, crafting materials without a known price, and what sells for clearly more on the auction house.
+- "Repair everything." is a card too.
+- "How much gold did I make today, and on what?"
 
 </td>
 </tr>
@@ -66,18 +149,24 @@ The route on the map changes. Nothing is planned from scratch.
 
 <sub>The add-on's window with example answers, taken in the add-on simulator.</sub>
 
-### More things to ask
+## More to ask
 
 | Topic | Ask | Good to know |
 |---|---|---|
-| Leveling | "How long until level 30 at this pace?" | |
-| Gold | "How much gold did I make today, and on what?" | |
+| Gear | "What gear should I get next, and where from?" | with GearQuest Forever: the best items for each slot at your class and level, with the quest, vendor, creature or dungeon they come from |
 | Professions | "What do I craft to get Leatherworking to 150 with what I have?" | |
-| Auction house | "Find a one-handed sword on the AH that is an upgrade for me, up to 5 gold." | needs an Auctionator scan; Pawn for upgrades |
 | Selling | "My bags are full. What can I sell?" or "What in my bags is not worth selling on the AH?" | with Auctionator, vendor and auction prices side by side; nothing is sold until you click **Accept** |
-| Places | "Where do I buy Coarse Thread?" or "Where is the hunter trainer? Mark it." | |
-| Memory | "Remember that I play Beast Mastery and level with a friend who plays a mage." | kept for later conversations |
+| Gathering | "Where do I mine copper around here?" "Where are the fishing pools?" | with ForeverMapNotes: how many nodes a zone has and where they are densest |
+| Rares and chests | "Which rares are in this zone, and what do they drop?" | with ForeverMapNotes |
+| Hunter pets | "Which abilities can my cat learn now, and which beast teaches Bite 4?" | with Tamed: the easiest beast to reach comes first |
+| Dungeons | "I want to do the Deadmines. Which quests do I need, and where do I get them?" | the quests of other zones are looked up, and their givers go on the route |
+| Zones | "Where do I level from 24 to 30?" | with ForeverMapNotes: the level range of each zone, and the way there |
+| What Forever changed | "What did the latest hotfixes change for hunters?" | from the knowledge base, with the sources under the answer |
+| Other add-ons | "Turn off the Questie arrows on the minimap." | a proposal you accept; ForeverAI never changes another add-on's files |
+| Memory | "Remember that I play Beast Mastery and level with a friend who plays a mage." | kept for later conversations; the **Memory** tab shows it |
+| A long conversation | just keep talking | the app keeps notes of each conversation (what was agreed, what you corrected, what is still open), also after a restart |
 | One thing | **Alt+click** an item, a spell or a quest | the question is about exactly that one |
+| What is on the screen | tick **Attach the current screen** | the AI sees the screenshot with your question |
 
 ## How it works
 
@@ -95,7 +184,7 @@ Add-ons cannot reach the internet or other programs. So the add-on puts its ques
 
 - Windows 10/11, or Linux with WoW Forever under Wine (Lutris, Steam/Proton, Bottles, Heroic or plain Wine)
 - One AI: Claude Code (Claude subscription), an [OpenRouter key](https://openrouter.ai/keys) or a [Google Gemini API key](https://aistudio.google.com/apikey). See [Choosing the AI](#choosing-the-ai).
-- No other add-on is required. [Four of them](#other-add-ons) add quest data, a map arrow, auction prices and upgrade checks.
+- **Questie**, for everything about quests: where their targets are, routes, quests to pick up, NPCs and flight masters. ForeverAI starts without it, but answers such questions from the quest text alone. [Seven more add-ons](#other-add-ons) are optional.
 
 ### 1. Download
 
@@ -153,23 +242,33 @@ The app finds Claude Code on `PATH`, in `~/.local/bin`, in npm/nvm installs and 
 
 ## Other add-ons
 
-| Add-on | What ForeverAI gets from it |
-|---|---|
-| Questie | quests available near you, and where quest creatures, objects and items are |
-| TomTom | its arrow and waypoints for marks and routes (otherwise the game's map pin) |
-| Auctionator | prices from your last scan (open the auction house and run a full scan first; what that scan did not see counts as sold); **Search on the AH** under an answer shows the picks in its Shopping tab |
-| Pawn | which items are upgrades for you, and which of a kind are the best for you |
+| Add-on | Needed? | What ForeverAI gets from it | Without it |
+|---|---|---|---|
+| Questie | **needed for quests and routes** | where quest creatures, objects and items are, with drop chances and where they stand together; quests to pick up near you and in any other zone; NPCs with a role, the services your class uses, flight masters | no routes, no "where do I get this", no quest suggestions |
+| TomTom | recommended | its arrow and waypoints for marks and routes | the game's own map pin, one at a time |
+| Leatrix Maps | recommended | where the zones are joined (border crossings, boats, zeppelins, the tram, portals) and where each dungeon is entered, with its levels | a route into another zone has only the few ways built in; the AI looks the others up |
+| Auctionator | optional | prices from your last scan (open the auction house and run a full scan first; what that scan did not see counts as sold); **Search on the AH** and **Save as list** on the shopping list | no auction prices, no shopping list |
+| Pawn | optional | which items are upgrades for you, and which of a kind are the best for you | upgrades are judged from the item stats alone |
+| GearQuest Forever | optional | the best items for each slot at your class, spec and level, and where each comes from (quest, vendor, creature, dungeon, profession), with the place | "what gear should I get" is answered from the items you have and the web |
+| ForeverMapNotes | optional | rare creatures with their spawn spots and drops, ore, herbs, chests and fishing pools (how many and where they are densest), town NPCs of any zone, library books, the level range of each zone | "where do I mine copper", "which rares are here" are looked up on the web |
+| Tamed | optional, for hunters | which abilities your pet's family can learn, the highest rank its level allows, and which beasts to tame for it, the easiest to reach first | pet abilities are answered from the web |
+
+**Settings** in the add-on's window lists these eight with a tick or a cross: whether each one is loaded right now.
 
 ForeverAI reads other add-ons and never changes their files. Their settings change only through a proposal you accept in the game.
 
 ## In the game
 
 > [!IMPORTANT]
-> Add-on options, selling, repairing and abandoning a quest happen only after you click **Accept**. Buying on the auction house always stays with you.
+> Add-on options, selling, posting or cancelling an auction, repairing and abandoning a quest happen only after you click on the card. Buying on the auction house always stays with you.
 
 | Do this | To |
 |---|---|
 | **Alt+click** an item, a spell or a quest | add it to your question |
+| **Up** and **Down** in the text field | bring back what you asked before, like in a command line |
+| the count, **All**, the price and **2 h / 8 h / 24 h** on an auction card | post something else than the AI proposed: what stands on the card at your click is what is posted |
+| **Search on the AH** / **Save as list** on the shopping list | open every item of the list in Auctionator's Shopping tab, or keep them as an Auctionator shopping list |
+| hover an item on a card (to post, to sell, the shopping list) | see the game's own tooltip of it, as in your bags; **Shift+click** puts it into the chat |
 | **list** on the route | see its stops in order, each with what to do there in brackets and its distance; the one you are heading to is lit up |
 | a click on a stop in the list | head there: the arrow leads to that stop |
 | the padlock on a stop | keep it on the route until you unlock it |
@@ -178,7 +277,15 @@ ForeverAI reads other add-ons and never changes their files. Their settings chan
 | **x** on the strip above the text field | stop tracking, or remove the route |
 | **Settings** tab | choose which game data is sent, the font size, the AI button, whether new routes are updated when your quests change, the route alerts on the screen; see which AI is in use |
 
-**Routes and tracking.** A stop comes off the route when what is to be done there is done (the quest objective, the turn-in, the quest taken), not when you walk past; a stop that is only a place comes off when you reach it, and the way into another zone when you are in that zone. The game has no data on portals, boats and gates, so the AI places them from what it knows and says when a spot is approximate. With the arrows green the route keeps up with your quest log. What the route was made for (an objective done, a quest turned in) ticks its stops off without asking the AI; the AI is asked when a quest was taken or the next step of a quest is not on the route, once for a run of changes, and its answer is one line in the chat. An answer written while you took another quest is not put on the map: the update is asked again, so the route is always the one for your quest log as it is. The quest that follows a turn-in in its chain is planned for: its stop says "turn in …; then pick up …" and stays until you took it. When the AI thinks by itself that the route no longer fits, it proposes the change and you accept or reject it. The add-on watches for every creature that counts for the same quest objective and stops by itself when the objective is done. While it tracks, the game shows the nameplates of all enemies; your own setting comes back afterwards.
+### How a route keeps up with you
+
+- **A stop is done by what you do.** It comes off the route when the objective is finished, the quest is turned in or the quest is taken. A stop at a vendor, a trainer or a flight master is done when you have dealt with them; a stop that is only a place when you reach it; the way into another zone when you are in that zone.
+- **The arrow says what the stop is for**, in brackets after its name: "turn in Buzzbox 827; then pick up Buzzbox 411". Of several things to do at a stop it says the ones that are left, and whose quest it is when two NPCs stand side by side. The way into the next zone says that the crossing is there.
+- **With the arrows green the route follows your quest log.** What it was made for (an objective done, a quest turned in) ticks its stops off without asking the AI. A quest taken or turned in updates the route, once the stop you are at is done: two quests from one NPC are one update. An update adds what your quest log now needs and no quests you did not ask for: the quests on the way were chosen when the route was made, and the others offered around you are yours to ask for.
+- **An update weaves into the route on the map.** The stops that stay keep their order, their lock and the arrow; a new stop goes where the plan puts it from where you stand; a stop leaves only when nothing is left to do there. The AI looks at the result a moment later and writes one line in the chat when it changes something.
+- **The next part of a chain is planned for.** Its stop says "turn in …; then pick up …" and stays until you took it.
+- **Where the game has no data** (portals, boats, gates), the AI places the stop from what it knows and says when a spot is approximate. With Leatrix Maps installed, the crossings come from its map data.
+- **Tracking** watches for every creature that counts for the same objective and stops by itself when the objective is done. While it tracks, the game shows the nameplates of all enemies; your own setting comes back afterwards.
 
 | Command | What it does |
 |---|---|
@@ -188,6 +295,8 @@ ForeverAI reads other add-ons and never changes their files. Their settings chan
 | `/fai stop` | ends tracking and clears the marks |
 | `/fai button` | shows or hides the AI button |
 | `/fai status`, `/fai track`, `/fai debug` | details for troubleshooting |
+
+**Troubleshooting.** The app keeps no log files unless you tick **Save logs to files** in its window; **Clear logs** next to it empties them.
 
 ## Uninstall
 

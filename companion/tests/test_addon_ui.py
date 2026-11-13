@@ -4,6 +4,7 @@ sends no AI settings (they are chosen in the app window) and shows the AI the ap
 from datetime import datetime
 
 from addonsim import Sim, install_game
+
 from addonsim.sim import _s
 
 # every Button and CheckButton on the Settings tab, in the order they were made, by their label
@@ -36,7 +37,6 @@ walk(info:GetParent())
 return table.concat(out, "\n")
 """
 
-
 # the grid of data check boxes: how many, its height, how low its lowest box reaches, and whether the next heading
 # ("Appearance") starts below it
 GRID = r"""
@@ -64,10 +64,8 @@ end
 return boxes, grid:GetHeight(), lowest, appearance:GetTop() <= grid:GetBottom()
 """
 
-
 def _ai_line(sim):
     return next(t for t in sim.texts() if t.startswith("In use:"))
-
 
 def test_settings_tab_sends_no_ai_settings_and_shows_the_ai_in_use(tmp_path):
     install_game(tmp_path / "game", pool=40)
@@ -159,7 +157,6 @@ def test_settings_tab_sends_no_ai_settings_and_shows_the_ai_in_use(tmp_path):
     assert sim.errors == []
     sim.close()
 
-
 # every data check box's label: how far its right end lies from the scrolled content's right edge (negative: cut off),
 # the number of columns, and whether two boxes overlap
 FIT = r"""
@@ -195,7 +192,6 @@ end
 return room, cols, overlap
 """
 
-
 def test_data_check_boxes_fit_the_window(tmp_path):
     """The longest labels (Nearby players, Professions, Open windows) are never cut off: three columns in the default
     window, fewer when it is narrow or the font is big."""
@@ -217,7 +213,6 @@ def test_data_check_boxes_fit_the_window(tmp_path):
     assert seen[(300, 15)] < 3  # how many fit at 380 depends on the font (the simulator uses an installed one)
     assert sim.errors == []
     sim.close()
-
 
 def test_the_header_shows_the_free_requests_of_a_free_model(tmp_path):
     """A free OpenRouter model costs nothing: the header shows the free requests left today, not the balance (and no
@@ -246,7 +241,6 @@ def test_the_header_shows_the_free_requests_of_a_free_model(tmp_path):
     assert header(paid) == ["|cffff5555$0.00|r   web search: auto"]
     assert header({**paid, "balance": 6.17}) == ["|cff5dff9d$6.17|r   web search: auto"]
 
-
 # the header: the version label, the pill's right edge and text, and the left edge of "+ New"
 HEADER = r"""
 local ver, pill, new
@@ -265,7 +259,6 @@ end
 return ver and ver:GetText(), pill:GetParent():GetRight(), new:GetLeft(), pill:IsTruncated(), ver and ver:GetRight(),
        pill:GetParent():GetLeft()
 """
-
 
 def test_the_header_shows_the_version_and_fits_a_long_model_name(tmp_path):
     """The window's title has the add-on's version next to it; the model's pill ends before "+ New", and in a narrow
@@ -292,3 +285,83 @@ def test_the_header_shows_the_version_and_fits_a_long_model_name(tmp_path):
     sim.lua("ForeverAIFrame:SetSize(700, 500)")  # wider again: the whole name is back
     sim.run(1)
     assert not sim.lua(HEADER)[3]
+
+def test_settings_list_the_add_ons_it_works_with_and_whether_each_is_loaded(tmp_path):
+    """"W UI addona info czy dany addon jest załadowany, ptaszek lub X"."""
+    install_game(tmp_path / "game", pool=40)
+    sim = Sim(tmp_path / "game", clock=datetime(2026, 11, 10, 12, 0)).start()
+    sim.lua("local loaded = C_AddOns.IsAddOnLoaded C_AddOns.IsAddOnLoaded = function(n) return n == 'Questie' or loaded(n) end")
+    sim.slash("/fai")
+    sim.click("Settings")
+    # (the lines as the add-on wrote them: the simulator's texts() shows what is in view, without the marks)
+    lines = sim.lua("""
+      local out, f = {}, EnumerateFrames()
+      while f do
+        for _, r in ipairs({ f:GetRegions() }) do
+          local t = r:GetObjectType() == "FontString" and r:GetText()
+          if t and t:find("ReadyCheck", 1, true) then out[#out + 1] = t end
+        end
+        f = EnumerateFrames(f)
+      end
+      return table.concat(out, "\\n")
+    """).decode().split("\n")
+    assert len(lines) == 8  # Questie, TomTom, Leatrix Maps, Auctionator, Pawn, GearQuest Forever, ForeverMapNotes, Tamed
+    questie = next(t for t in lines if "Questie" in t)
+    tomtom = next(t for t in lines if "TomTom" in t)
+    assert "ReadyCheck-Ready" in questie and "(not loaded)" not in questie  # a tick
+    assert "ReadyCheck-NotReady" in tomtom and tomtom.endswith("(not loaded)|r")  # a cross
+    assert "Questie  quests around you and in other zones, where their targets are, routes" in sim.texts()
+    sim.close()
+
+def test_the_arrow_keys_bring_back_what_was_sent_before(tmp_path):
+    """"Jak daję strzałkę w górę, to powinno dawać wiadomość wyżej i wyżej i wyżej, taka historia jak w cmd, żebym mógł
+    wysłać ponownie wiadomości, które wcześniej wysłałem"."""
+    install_game(tmp_path / "game", pool=40)
+    sim = Sim(tmp_path / "game", clock=datetime(2026, 11, 10, 12, 0)).start()
+    sim.slash("/fai")
+    quiet = 'ForeverAI.Ask = function(text) SENT = (SENT and SENT .. "|" or "") .. text return true end'
+    sim.lua(quiet)  # nothing is sent to the app, so no answer is waited for
+
+    def send(text):
+        sim.type(text)
+        sim.key("ENTER")
+
+    def shown():
+        return sim.lua("local b = ... return b:GetText()", sim._wow.focusedEditBox()).decode()
+
+    sim.click("Ask… (Alt+click an item, spell or quest to tag it)")
+    send("gdzie oddac questa")
+    send("wystaw bear meat na AH")
+    send("co mam wystawione?")
+    sim.type("pol zdania")
+    sim.key("UP")
+    assert shown() == "co mam wystawione?"
+    sim.key("UP")
+    assert shown() == "wystaw bear meat na AH"
+    sim.key("UP")
+    sim.key("UP")  # the oldest one stays
+    assert shown() == "gdzie oddac questa"
+    sim.key("DOWN")
+    assert shown() == "wystaw bear meat na AH"
+    sim.key("ENTER")  # sent again, and it is the newest now
+    assert sim.lua("return SENT").decode().endswith("|co mam wystawione?|wystaw bear meat na AH")
+    sim.key("UP")
+    assert shown() == "wystaw bear meat na AH"
+    sim.key("DOWN")
+    assert shown() == ""  # past the newest: back to what was being typed (nothing, after a send)
+    sim.type("nowe pytanie")
+    sim.key("UP")
+    sim.key("DOWN")
+    assert shown() == "nowe pytanie"  # the draft is not lost
+    # kept for the character: there after a /reload
+    sim.key("ENTER")
+    sim.reload()
+    sim.lua(quiet)
+    sim.slash("/fai")
+    sim.click("Ask… (Alt+click an item, spell or quest to tag it)")
+    sim.key("UP")
+    assert shown() == "nowe pytanie"
+    sim.key("UP")
+    assert shown() == "wystaw bear meat na AH"
+    assert sim.errors == []
+    sim.close()
