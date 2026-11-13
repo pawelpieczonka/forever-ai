@@ -518,3 +518,43 @@ def test_a_quest_wanted_first_is_done_on_the_first_visit_and_no_order_puts_a_tur
     text, err = j.svc.run_tool(ctx, "edit_route", {"order": ["Gryan Stoutmantle"], "go_to": "Gryan Stoutmantle"})
     assert err and "comes before Magistrate Solomon" in text and "[Messenger to Westfall] is turned in" in text
     assert [m["title"].split(". ", 1)[-1] for m in ctx.marks][-1] == "Gryan Stoutmantle"  # nothing changed
+
+
+
+def test_an_escort_is_done_right_after_its_quest_is_taken(start):
+    """From the game: [The Defias Brotherhood] from the Defias Traitor is an escort, which starts when the quest is
+    taken. The route had a stop to take it and the turn-in at Gryan Stoutmantle next; once the player took it, the
+    arrow sent them on to Gryan to turn it in and take the next part, and the escort was not on the route at all. The
+    quest database says where the escort ends (Moonbrook, by the mine) and that it starts when it is taken."""
+    world = real_world(18)
+    traitor = world.quests[155]
+    assert traitor["event"] and traitor["event"][3] and traitor["event"][1] == "Westfall"  # read from the database
+    world.done |= {65, 132, 135, 141, 142}  # (the chain up to the Traitor's part is turned in)
+    j = start(world, ("Westfall", 56.6, 52.6))
+    j.know("Thor")
+    j.pump(3)
+    j.plan({"new_quests": ["The Defias Brotherhood"]})
+    stops = [(s["title"], [f"{t['kind']}:{t['id']}" for t in s["tasks"]]) for s in j.stops()]
+    traitor_at = next(n for n, (_, tasks) in enumerate(stops) if "pick_up:155" in tasks)
+    escort_at = next(n for n, (_, tasks) in enumerate(stops) if "objective:155" in tasks)
+    turn_in_at = next(n for n, (_, tasks) in enumerate(stops) if "turn_in:155" in tasks)
+    assert escort_at == traitor_at + 1 and turn_in_at > escort_at, stops  # the escort right after it is taken
+    assert "it starts when the quest is taken, so it is done right after taking it" in j.plan_text  # (said to the AI)
+    j.follow()
+    assert j.problems == [] and 155 in j.done, j.story()
+    # found by a try on the real model: "then to the Deadmines entrance", which is where the escort ends: the stop
+    # wanted last was the escort's, and the route ended at the turn-in, back at Sentinel Hill
+    j3 = start(world, ("Westfall", 56.6, 52.6))
+    j3.pump(3)
+    j3.plan({"new_quests": ["The Defias Brotherhood"],
+             "extra": [{"title": "Deadmines entrance", "zone": "Westfall", "x": 42.5, "y": 71.5, "when": "last"}]})
+    late = j3.stops()
+    turn_in = next(n for n, s in enumerate(late) if any(t["kind"] == "turn_in" and t["id"] == 155 for t in s["tasks"]))
+    assert late[-1]["title"] == "Deadmines entrance" and turn_in < len(late) - 1, [s["title"] for s in late]
+    # a quest in the log whose escort has not been done: the escort is the first thing of the route
+    j2 = start(world, ("Westfall", 56.0, 47.5))
+    j2.take(155)
+    j2.pump(3)
+    j2.plan({})
+    first = next(s for s in j2.stops() if not s["done"])
+    assert any(t["kind"] == "objective" and t["id"] == 155 for t in first["tasks"]), j2.story()

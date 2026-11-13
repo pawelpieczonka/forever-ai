@@ -26,9 +26,10 @@ _SOURCE = re.compile(r"^(?P<desc>.*?) — (?P<zone>.+?) (?P<x>\d+(?:\.\d+)?), (?
                      r"(?: \((?:(?P<m>\d+) m)?.*)?$")
 _NPC_LINE = re.compile(r"— (?P<zone>.+?) (?P<x>\d+(?:\.\d+)?), (?P<y>\d+(?:\.\d+)?) \((?P<m>\d+) m\)")
 _WHERE = re.compile(r"^(.+?) (\d+(?:\.\d+)?), (\d+(?:\.\d+)?)$")
-_HOW = re.compile(r"^(kill|use|find|from object|dropped by|sold by)\s+", re.I)
+_HOW = re.compile(r"^(kill|use|find|from object|dropped by|sold by|reach)\s+", re.I)
 # an objective's line of whereToGet: what it wants, then its sources (the name of what it wants may hold ": " itself)
-_LINE = re.compile(r"^(?P<label>.*?): (?=(?:kill|use|find|from object|dropped by|sold by)\s)", re.I)
+_LINE = re.compile(r"^(?P<label>.*?): (?=(?:kill|use|find|from object|dropped by|sold by|reach)\s)", re.I)
+EVENT_TITLE = 50  # the title of an event's stop: the quest log's own words for it, cut to this
 
 
 def split_line(line) -> tuple[str, str]:
@@ -396,11 +397,39 @@ def _scale(snapshot: dict, start, zone: str) -> tuple[float, float] | None:
 def _order(start, nodes: list[dict], end, way=None) -> list[int]:
     """Indices of ``nodes`` in the order of the shortest path from ``start`` (ending as near to ``end`` as the way
     allows when it is given); node["after"] (indices) come before the node. Positions are node["at"]. ``way``: the
-    length of the way between two positions, when it is not the straight line (a way round)."""
+    length of the way between two positions, when it is not the straight line (a way round). node["glue"] (an index):
+    the node comes right after that one, nothing between them (an escort that starts when its quest is taken); the
+    two are ordered as one stretch, from where the first is to where the second is."""
+    succ: dict[int, int] = {}
+    for i, node in enumerate(nodes):
+        g = node.get("glue")
+        if isinstance(g, int) and 0 <= g < len(nodes) and g != i and g not in succ:
+            succ[g] = i
+    if succ:
+        glued = set(succ.values())
+        chains: list[list[int]] = []
+        for head in (i for i in range(len(nodes)) if i not in glued):
+            chain = [head]
+            while chain[-1] in succ and succ[chain[-1]] not in chain:
+                chain.append(succ[chain[-1]])
+            chains.append(chain)
+        covered = {i for c in chains for i in c}
+        chains += [[i] for i in range(len(nodes)) if i not in covered]
+        if any(len(c) > 1 for c in chains):
+            of = {i: k for k, c in enumerate(chains) for i in c}
+            pieces = [{"at": nodes[c[0]]["at"], "out": nodes[c[-1]].get("out") or nodes[c[-1]]["at"],
+                       "after": sorted({of[a] for i in c for a in nodes[i]["after"]} - {k})} for k, c in enumerate(chains)]
+            try:
+                return [i for k in _order(start, pieces, end, way) for i in chains[k]]
+            except ValueError:  # (gluing made two stops wait for each other: ordered as they are)
+                pass
     def dist(a, b) -> float:
         if a is None:
             return 0.0  # no start: the path begins where it likes
         return way(a, b) if way else math.hypot(a[0] - b[0], a[1] - b[1])
+
+    def out(node: dict):  # where the player is when a stop (a stretch) is done
+        return node.get("out") or node["at"]
     n = len(nodes)
     need = [sum(1 << j for j in node["after"]) for node in nodes]
     if n > EXACT_MAX:  # nearest first among the stops whose turn has come, then made shorter where it can be
@@ -410,7 +439,7 @@ def _order(start, nodes: list[dict], end, way=None) -> list[int]:
             i = min(ready, key=lambda k: (dist(pos, nodes[k]["at"]), k))
             order.append(i)
             done |= 1 << i
-            pos = nodes[i]["at"]
+            pos = out(nodes[i])
         # ... and from a few other beginnings (the same ones every time: a route must not change between two
         # plans of the same stops): the moves above stop at the first order none of them makes shorter, which is
         # not always a short one
@@ -418,7 +447,7 @@ def _order(start, nodes: list[dict], end, way=None) -> list[int]:
             total, pos = 0.0, start
             for k in seq:
                 total += dist(pos, nodes[k]["at"])
-                pos = nodes[k]["at"]
+                pos = out(nodes[k])
             return total + (dist(pos, end) if end else 0.0)
         best = _shorter(order, start, nodes, end, dist)
         rng = random.Random(n)
@@ -433,7 +462,7 @@ def _order(start, nodes: list[dict], end, way=None) -> list[int]:
             if length(other) < length(best) - 1e-6:
                 best = other
         return best
-    d = [[dist(a["at"], b["at"]) for b in nodes] for a in nodes]
+    d = [[dist(out(a), b["at"]) for b in nodes] for a in nodes]
     best: dict[tuple[int, int], tuple[float, int]] = {}
     for i in range(n):
         if need[i] == 0:
@@ -453,7 +482,7 @@ def _order(start, nodes: list[dict], end, way=None) -> list[int]:
     full = (1 << n) - 1
 
     def total(k: int) -> float:
-        return best[(full, k)][0] + (dist(nodes[k]["at"], end) if end else 0.0)
+        return best[(full, k)][0] + (dist(out(nodes[k]), end) if end else 0.0)
     last = min((k for k in range(n) if (full, k) in best), key=lambda k: (total(k), k))
     order, mask = [], full
     while last != -1:
@@ -471,9 +500,11 @@ def _shorter(order: list[int], start, nodes: list[dict], end, dist) -> list[int]
     comes within a few percent of the shortest (measured in tests against the exact search)."""
     n = len(order)
     at = [node["at"] for node in nodes]
-    between = [[dist(a, b) for b in at] for a in at]
+    ends = [node.get("out") or node["at"] for node in nodes]  # (a stretch ends elsewhere than it begins)
+    stretches = any(e != a for e, a in zip(ends, at))
+    between = [[dist(e, b) for b in at] for e in ends]
     first = [dist(start, a) for a in at]
-    last = [dist(a, end) if end else 0.0 for a in at]
+    last = [dist(e, end) if end else 0.0 for e in ends]
 
     def d(a: int, b: int) -> float:  # -1: where the path starts, -2: where it is to end
         if a == -1:
@@ -506,11 +537,11 @@ def _shorter(order: list[int], start, nodes: list[dict], end, dist) -> list[int]
                     cost = d(a, head) + d(tail, b) - d(a, b)
                     if cost < gain - 1e-6:
                         moves.append((cost - gain, size, i, j))
-                    if size > 1:
+                    if size > 1 and not stretches:
                         cost = d(a, tail) + d(head, b) - d(a, b)
                         if cost < gain - 1e-6:
                             moves.append((cost - gain, -size, i, j))
-        for i in range(n - 1):  # a stretch the other way round
+        for i in range(n - 1 if not stretches else 0):  # a stretch the other way round (ways are two-way)
             for j in range(i + 1, n):
                 a, b = (order[i - 1] if i else -1), (order[j + 1] if j + 1 < n else -2)
                 delta = d(a, order[j]) + d(order[i], b) - d(a, order[i]) - d(order[j], b)
@@ -561,6 +592,8 @@ def _merge(nodes: list[dict]) -> list[dict]:
         node["what"] = "; ".join(nodes[i]["what"] for i in g)
         node["note"] = "; ".join(dict.fromkeys(nodes[i]["note"] for i in g if nodes[i]["note"]))
         node["after"] = sorted({group_of[a] for i in g for a in nodes[i]["after"]} - {n})
+        glue = next((nodes[i]["glue"] for i in g if isinstance(nodes[i].get("glue"), int)), None)
+        node["glue"] = group_of[glue] if glue is not None and group_of[glue] != n else None
         node["mob"] = next((nodes[i].get("mob") for i in g if nodes[i].get("mob")), None)
         node["tasks"] = [t for i in g for t in nodes[i].get("tasks") or []]
         node["early"] = any(nodes[i]["early"] for i in g)
@@ -669,7 +702,8 @@ def _as_taken(q: dict) -> dict:
     return {"id": q.get("id"), "title": q.get("title"), "level": q.get("level"), "type": q.get("type"),
             "status": "in progress" if lines else "READY TO TURN IN",
             "objectives": "; ".join(f"{split_line(line)[0]} [TO DO]" for line in lines), "whereToGet": lines,
-            "turnIn": q.get("turnIn") or "", "next": q.get("next"), "nextId": q.get("nextId")}
+            "turnIn": q.get("turnIn") or "", "next": q.get("next"), "nextId": q.get("nextId"),
+            **({"startsWhenTaken": True} if q.get("startsWhenTaken") else {})}
 
 
 def _named(title: str, names) -> bool:
@@ -908,6 +942,13 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
                     how = _HOW.match(m.group("desc"))
                     creature = bool(how) and how.group(1).lower() in ("kill", "find", "dropped by")
                     name, what = _name(m.group("desc")), m.group("desc")
+                    event = bool(how) and how.group(1).lower() == "reach"
+                    if event:
+                        # (an event: an escort, a place to reach; the stop is called by what the quest log says of it)
+                        label = label.strip()
+                        name = label if len(label) <= EVENT_TITLE else label[:EVENT_TITLE - 1].rsplit(" ", 1)[0] + "…"
+                        what = label + (": it starts when the quest is taken, so it is done right after taking it, "
+                                        "staying with it to here" if q.get("startsWhenTaken") else ": here")
                     if _CREDIT.match(name) and len(lines) in (len(open_texts), len(every)):
                         # An invisible marker of the database (a spot to use an item at, a place to reach): the stop
                         # is what the quest log calls that objective, and there is no creature to watch for. The
@@ -928,6 +969,7 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
                     objectives.append({"title": name, "what": f"[{title}]: {what}{around[1]}",
                                        "xy": xy, "after": [], "leg": leg,
                                        "mob": name if creature else None, "quest": title,
+                                       **({"at_once": True} if event and q.get("startsWhenTaken") else {}),
                                        "tasks": [{"kind": "objective", "quest": title, **qid, "label": label, **around[0]}]})
             if not objectives and not blocked:  # still to do, and nothing says where: the turn-in is not a stop yet
                 left_out.append(f"[{title}]: no known place for what is left to do" + (f" ({todo})" if todo else ""))
@@ -995,6 +1037,14 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
         if pick is not None:
             for node in objectives + followers:
                 node["after"] = list(node["after"]) + [pick]
+        # An event that starts when the quest is taken (an escort): right after the stop where the quest is taken,
+        # nothing between; for a quest in the log, before anything else of its zone.
+        for node in objectives:
+            if node.pop("at_once", False):
+                if pick is not None and nodes[pick]["leg"] == node["leg"]:
+                    node["glue"] = pick
+                elif pick is None:
+                    node["early"] = True
         nodes.extend(objectives + followers)
 
     for q in snapshot.get("quests") or []:
@@ -1032,6 +1082,10 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
                      and ((abs(n["xy"][0] - xy[0]) <= 0.3 and abs(n["xy"][1] - xy[1]) <= 0.3)
                           or (n["title"].lower() == name and abs(n["xy"][0] - xy[0]) <= 1.0 and abs(n["xy"][1] - xy[1]) <= 1.0))]
             same = next((n for n in close if n["leg"] == leg), close[0] if close else None)
+            if same and e.get("when") == "last" and not same.get("late"):
+                # a stop wanted at the end is the end, also where an earlier stop is (an escort that ends at the
+                # dungeon the player then goes into, after turning the escort in): its own stop, last
+                same = None
             if same:  # the route stops there already (the NPC of a quest): one stop, with what the player asked for
                 # ... and with the note of the stop asked for, unless it only says again what the quests there say
                 # ("pick up Oh Brother and Collecting Memories" at the giver of both)
@@ -1182,6 +1236,7 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
         # what matters most first, the hard ones last; what a stop waits for in an earlier part is done by then
         for node in part:
             node["after"] = sorted(local[a] for a in node["after"] if a in local)
+            node["glue"] = local.get(node.get("glue")) if isinstance(node.get("glue"), int) else None
         for node in part:
             if node["late"]:
                 node["after"] = sorted(set(node["after"]) | {n for n, o in enumerate(part) if not o["late"]})

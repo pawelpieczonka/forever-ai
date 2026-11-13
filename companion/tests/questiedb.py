@@ -18,8 +18,8 @@ ADDONS = Path("E:/wow forever/World of Warcraft/_forever_/Interface/AddOns")
 TOC = ADDONS / "QuestieDB" / "QuestieDB_Forever.toc"
 
 QUEST = {"name": 1, "startedBy": 2, "finishedBy": 3, "requiredLevel": 4, "questLevel": 5, "requiredRaces": 6,
-         "requiredClasses": 7, "objectivesText": 8, "objectives": 10, "preQuestGroup": 12, "preQuestSingle": 13,
-         "zoneOrSort": 17, "nextQuestInChain": 22, "specialFlags": 24}
+         "requiredClasses": 7, "objectivesText": 8, "triggerEnd": 9, "objectives": 10, "preQuestGroup": 12,
+         "preQuestSingle": 13, "zoneOrSort": 17, "nextQuestInChain": 22, "questFlags": 23, "specialFlags": 24}
 NPC = {"name": 1, "minLevel": 4, "maxLevel": 5, "rank": 6, "spawns": 7, "zoneID": 9, "friendlyToFaction": 13,
        "subName": 14, "npcFlags": 15}
 OBJECT = {"name": 1, "spawns": 4, "zoneID": 5}

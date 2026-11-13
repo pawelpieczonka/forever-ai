@@ -758,10 +758,26 @@ local function objectSource(QDB, objId, how)
   return { how = how, name = name, pts = pts, inside = inside }
 end
 
+-- Does the quest's event (an escort) start when the quest is taken? The game asks the whole party to accept such a
+-- quest (its quest flag 2), as it does for escorts: the event is then done right after the quest is taken.
+local function startsWhenTaken(QDB, qid)
+  if not (QDB and QDB.QueryQuestSingle) then return nil end
+  local okF, flags = pcall(QDB.QueryQuestSingle, qid, "questFlags")
+  flags = okF and tonumber(flags)
+  return flags and math.floor(flags / 2) % 2 == 1 or nil
+end
+C.StartsWhenTaken = startsWhenTaken
+
 local function objectiveSources(QDB, qid)
   if not (QDB and QDB.QueryQuestSingle) then return nil end
   local okO, objs = pcall(QDB.QueryQuestSingle, qid, "objectives")
-  if not (okO and type(objs) == "table") then return nil end
+  -- an event of the quest (an escort, a place to reach): where it ends, from the database
+  local okT, trig = pcall(QDB.QueryQuestSingle, qid, "triggerEnd")
+  local event = okT and type(trig) == "table" and type(trig[1]) == "string" and type(trig[2]) == "table" and trig or nil
+  if not (okO and type(objs) == "table") then
+    if not event then return nil end
+    objs = {}
+  end
   local list = {}
   local function add(label, sources, credit)
     if #sources > 0 then list[#list + 1] = { label = label, sources = sources, credit = credit } end
@@ -804,6 +820,10 @@ local function objectiveSources(QDB, qid)
         add(type(entry[3]) == "string" and entry[3] or "kill credit", sources, true)
       end
     end
+  end
+  if event then
+    local pts = spawnPoints(event[2])
+    if #pts > 0 then add(event[1], { { how = "reach", name = "the place where it ends", pts = pts } }) end
   end
   return list
 end
@@ -1102,6 +1122,7 @@ local function questStatic(qid, questie)
     end
     local okS, sources = pcall(objectiveSources, questie, qid)
     s.sources = okS and sources or nil
+    s.startsWhenTaken = startsWhenTaken(questie, qid)
     if not dropsReady() then complete = false end -- read again once the drop chances are there
   end
   if complete then staticCache[qid] = s end -- reward items still loading: read again next time
@@ -1161,6 +1182,7 @@ function S.quests()
         e.next, e.nextId = st.next.text, st.next.id
       end
       if e.status == "in progress" then e.whereToGet = whereToGet(st.sources, mapID, px, py, area, texts) end
+      e.startsWhenTaken = st.startsWhenTaken
       out[#out + 1] = e
     end
   end
@@ -1776,6 +1798,7 @@ function C.ZoneQuests(zone)
           local _, tag = safe(QDB.GetQuestTagInfo, questId)
           if type(tag) == "string" and tag ~= "" then e.type = tag end
           local okS, sources = pcall(objectiveSources, QDB, questId)
+          e.startsWhenTaken = startsWhenTaken(QDB, questId)
           local lines = okS and whereToGet(sources, nil, nil, nil, nil, nil) or nil
           if lines then
             for i = #lines, 4, -1 do lines[i] = nil end

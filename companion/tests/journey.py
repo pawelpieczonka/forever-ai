@@ -91,12 +91,14 @@ class World:
         return iid
 
     def quest(self, qid: int, title: str, level: int, giver: int, end: int | None = None, kill=(), use=(), items=(),
-              min_level: int = 1, after: int | None = None, then: int | None = None, text: str | None = None) -> int:
+              min_level: int = 1, after: int | None = None, then: int | None = None, text: str | None = None,
+              event: tuple | None = None) -> int:
         """kill / use / items: [(creature, object or item number, how many)]; after: the quest that has to be turned in
-        first; then: the quest that follows this one."""
+        first; then: the quest that follows this one; event: (what the quest log calls it, zone, (x, y) where it ends,
+        whether it starts when the quest is taken), an escort or a place to reach."""
         self.quests[qid] = {"title": title, "level": level, "min": min_level, "giver": giver, "end": end or giver,
                             "kill": list(kill), "use": list(use), "items": list(items), "after": after, "then": then,
-                            "text": text}
+                            "text": text, "event": event}
         return qid
 
     def objectives(self, qid: int) -> list[tuple[str, int]]:
@@ -104,7 +106,8 @@ class World:
         q = self.quests[qid]
         return ([(self.npcs[n]["name"], count) for n, count in q["kill"]]
                 + [(self.objects[o]["name"], count) for o, count in q["use"]]
-                + [(self.items[i]["name"], count) for i, count in q["items"]])
+                + [(self.items[i]["name"], count) for i, count in q["items"]]
+                + ([(q["event"][0], 1)] if q.get("event") else []))
 
     def kills(self, qid: int) -> int:
         return len(self.quests[qid]["kill"])
@@ -217,9 +220,21 @@ class World:
                 items.append((iid, count(text(it["name"]), said, 1)))
             if not whole:
                 continue
+            # an event (an escort, a place to reach): where it ends, and whether it starts when the quest is taken
+            event, trig = None, q.get("triggerEnd")
+            if isinstance(trig, list) and len(trig) > 1 and isinstance(trig[1], dict):
+                for area, pts in trig[1].items():
+                    zone = areas.get(int(area))
+                    if zone and pts and pts[0] and pts[0][0] > 0:
+                        event = (text(trig[0]), zone, (float(pts[0][0]), float(pts[0][1])),
+                                 bool(int(q.get("questFlags") or 0) & 2))
+                        break
+                if event is None:
+                    continue  # (it ends in a zone this world does not have)
             before = (Q.ids(q.get("preQuestSingle")) or Q.ids(q.get("preQuestGroup")) or [None])[0]
             w.quest(qid, text(q["name"]), qlevel, givers[0], ends[0], kill, use, items, min_level=minimum, after=before,
-                    then=int(q["nextQuestInChain"]) if q.get("nextQuestInChain") else None, text=said or None)
+                    then=int(q["nextQuestInChain"]) if q.get("nextQuestInChain") else None, text=said or None,
+                    event=event)
         for qid, q in w.quests.items():  # an earlier part that is not here: the character has done it
             if q["after"] and q["after"] not in w.quests:
                 w.done.add(q["after"])
@@ -268,6 +283,10 @@ class World:
                            "finishedBy": [[q["end"]]], "objectivesText": texts or ["Speak with them."],
                            "objectives": [[[n] for n, _ in q["kill"]], [[o] for o, _ in q["use"]], [[i] for i, _ in q["items"]]],
                            "after": q["after"], "nextQuestInChain": q["then"]}
+            if q.get("event"):
+                label, zone, (ex, ey), at_once = q["event"]
+                quests[qid]["triggerEnd"] = [label, {ZONES[zone][1]: [[ex, ey]]}]
+                quests[qid]["questFlags"] = 2 if at_once else 0
         areas = {area: zone for zone, (_, area, _) in ZONES.items()}
         maps = {mid: area for _, (mid, area, _) in ZONES.items()}
         return f"""
@@ -782,9 +801,20 @@ class Journey:
                                  f"in it: {', '.join(behind)}")
             self.walk(cur["x"], cur["y"])
             self.note(f"at stop {cur['n']}. {cur['title']} {cur['for']}")
+            had = set(self.log)
             self.act(cur)
             self.pump()
             self.check(f"after {cur['title']}")
+            for qid in set(self.log) - had:  # an event that starts when its quest is taken: the next thing to do
+                ev = self.world.quests[qid].get("event")
+                if not (ev and ev[3]):
+                    continue
+                nxt = next((s for s in self.stops() if s["current"]), None) or \
+                    next((s for s in self.stops() if not s["done"]), None)
+                if not nxt or not any(t["kind"] == "objective" and t["id"] == qid and t["label"] == ev[0]
+                                      for t in nxt["tasks"]):
+                    self.problem(f"[{self.world.quests[qid]['title']}] starts when it is taken ({ev[0]}), and the "
+                                 f"arrow leads on to {nxt['title'] if nxt else 'nothing'}")
             again = next((s for s in self.stops() if s["n"] == cur["n"] and self._same(s, cur)), None)
             if again and not again["done"] and again["current"]:
                 self.problem(f"the arrow is stuck on {cur['title']} {cur['for']}: nothing the player can do there finishes it")
@@ -881,6 +911,11 @@ class Journey:
             elif t["kind"] == "objective":
                 if qid not in self.log:
                     self.problem(f"{stop['title']} is for [{q['title']}], which is not in the log")
+                    continue
+                ev = q.get("event")
+                if ev and t["label"] == ev[0] and (ev[1] != self.zone or self.meters(self.zone, self.at, ev[2]) > 60):
+                    self.problem(f"{stop['title']} is for [{q['title']}]: {ev[0]}, which ends at {ev[1]} "
+                                 f"{ev[2][0]:.1f}, {ev[2][1]:.1f}, not here")
                     continue
                 self.finish(qid, t["label"])
             elif t["kind"] == "turn_in" and qid in self.log and not all(self.log[qid]) and self._still_to_do(qid, stop):

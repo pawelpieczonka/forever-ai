@@ -144,7 +144,7 @@ class InboxWriter:
 # a line of the "marks" section: "2. Sentinel Arynia Cloudsbreak — Teldrassil 38.3, 34.4 (115 m)"
 # what the app keeps of a quest the game offers (zone_quests): enough to plan all of it
 _QUEST_KEYS = ("id", "title", "level", "minLevel", "type", "giver", "where", "objective", "whereToGet", "turnIn",
-               "next", "nextId")
+               "next", "nextId", "startsWhenTaken")
 ZONE_QUESTS_KEEP_S = 300.0  # the quests of a zone read for a route are good for this long
 ZONE_QUESTS_WAIT_S = 15.0  # how long a route waits for the game to list a zone's quests
 ZONE_QUESTS_RETRY_S = 60.0  # after the game did not answer, it is not asked again for this long
@@ -1656,7 +1656,7 @@ class Service:
         wanted_ids = {t for t in along or [] if isinstance(t, int)}
         # (what the game says around the player has the distance; where a quest's places are comes from its zone)
         nearby = [dict({k: v for k, v in ctx.offered.get(_quest_key(q), {}).items()
-                        if k in ("whereToGet", "turnIn", "type", "next", "nextId")}, **q)
+                        if k in ("whereToGet", "turnIn", "type", "next", "nextId", "startsWhenTaken")}, **q)
                   for q in ctx.snapshot.get("nearbyQuests") or [] if isinstance(q, dict)]
         seen = {_quest_key(q) for q in nearby}
         far = [q for key, q in ctx.offered.items()
