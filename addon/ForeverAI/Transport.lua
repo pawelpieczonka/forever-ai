@@ -7,7 +7,10 @@ local ADDON, ns = ...
 local T = {}
 ns.Transport = T
 
-local GRID_W, MAX_ROWS, CELL = 128, 64, 1
+-- A block holds up to 24 KB: a question with all the game data is 13-17 KB packed, so it goes out as one block. With
+-- half the rows it took two, and the second one waits for the next second (screenshots are named to the second):
+-- half a second on average, up to a whole one, on every question.
+local GRID_W, MAX_ROWS, CELL = 128, 128, 1
 local HEADER = 18
 local CAPACITY = GRID_W * MAX_ROWS * 3 / 2 - HEADER -- 12 bits per cell
 
@@ -62,7 +65,15 @@ end
 ------------------------------------------------------------------------ reading inboxes on a schedule
 -- The game indexes addon files only when the UI loads, so there is no "ready" signal; instead the companion keeps
 -- the newest reply state in all inboxes ahead of us and we read one inbox every few seconds.
-local FIRST_DELAY, STEP, SLOW_STEP, SLOW_AFTER, GIVE_UP = 2.0, 2.0, 4.0, 60, 300
+local FIRST_DELAY, STEP, SLOW_STEP, SLOW_AFTER, GIVE_UP = 1.5, 2.0, 4.0, 60, 300
+-- How soon the next look is, by how long the question has waited. Every look uses up one inbox of this UI session, so
+-- the looks are close together while most answers arrive and further apart for the long ones, where a second more is
+-- a small part of the wait. Measured on 696 answers (half of them there within 13 s): a look every 3 s showed an
+-- answer 1.4 s after it was ready, this pace 0.9 s after, for 10 looks an answer in place of 6.5.
+local function pace(waited)
+  if waited < 12 then return 1.5 elseif waited < 30 then return 2.0 end
+  return 3.0
+end
 local heard = false -- the app has replied to the request that is waited for
 local pollFrame = CreateFrame("Frame")
 local polling, nextReadAt, startedAt, staleReads = false, 0, 0, 0
@@ -104,7 +115,8 @@ pollFrame:SetScript("OnUpdate", function()
     ns.Step(data.final and "showFinalAnswer" or "showAnswer", debugprofilestop() - t0)
     ns.Stage("waiting for the answer")
     if not ok then ns.lastError = "OnMessage: " .. tostring(err) end
-    nextReadAt = now + math.max(1.0, tonumber(data.retryAfter) or STEP)
+    -- the app asks for a sooner look when the end is near (text is coming in) or it waits for the game
+    nextReadAt = now + math.max(1.0, math.min(tonumber(data.retryAfter) or STEP, pace(now - startedAt)))
   else
     staleReads = staleReads + 1
     local waited = now - startedAt
@@ -124,10 +136,10 @@ pollFrame:SetScript("OnUpdate", function()
   ns.UI.UpdateHeader()
 end)
 
-function T.StartPolling()
+function T.StartPolling(first) -- first: seconds to the first look, for an answer the app gives at once
   startedAt = GetTime()
   staleReads, heard = 0, false
-  nextReadAt = startedAt + FIRST_DELAY
+  nextReadAt = startedAt + (first or FIRST_DELAY)
   polling = true
 end
 
@@ -191,7 +203,7 @@ end
 
 -- Coloring thousands of cells takes ~90 ms, so it is done over several frames while the block is still hidden
 -- (PAINT_BUDGET_MS per frame); done() runs when the block is complete. Only then is it shown and captured.
-local PAINT_BUDGET_MS = 4
+local PAINT_BUDGET_MS = 8
 local painter = CreateFrame("Frame") -- OnUpdate runs every frame (a C_Timer ticker does not)
 painter:Hide()
 local function paintChunk(msgId, index, count, chunk, done)
@@ -203,6 +215,7 @@ local function paintChunk(msgId, index, count, chunk, done)
   local ncells = #stream * 2 / 3 -- three 4-bit values per cell
   local rows = math.ceil(ncells / GRID_W)
   local total, i = rows * GRID_W, 0
+  local shown = paint.shownCells or 0 -- the cells the block before left shown: they need no Show() again
   local function step()
     local t0 = debugprofilestop()
     while i < total do
@@ -222,7 +235,10 @@ local function paintChunk(msgId, index, count, chunk, done)
       else
         t:SetColorTexture(0, 0, 0, 1) -- the rest of the last row
       end
-      t:Show()
+      if i > shown then
+        t:Show()
+        paint.shownCells = i
+      end
       if debugprofilestop() - t0 > PAINT_BUDGET_MS then return false end
     end
     for k = total + 1, (paint.shownCells or 0) do paint.cells[k]:Hide() end -- only what the last block showed
@@ -259,6 +275,22 @@ end
 local SHOT_TIMEOUT = 10
 local queue, savedCVars, current = nil, nil, nil
 local captureFrame = CreateFrame("Frame")
+-- Messages that came while another was on its way: sent after it, in order. The add-on's own messages (a result for
+-- the app, its log) never hold a question of the player back: T.Busy() is true only for a message of the player's.
+local BACKGROUND = { game_result = true, game_results = true, debug = true }
+local waiting = {}
+local function pump()
+  if T.sending then return end
+  local nxt = table.remove(waiting, 1)
+  if nxt then T.Send(nxt.msg, nxt.done) end
+end
+function T.Busy()
+  if current and not current.background then return true end
+  for _, w in ipairs(waiting) do
+    if not BACKGROUND[w.msg.type] then return true end
+  end
+  return false
+end
 
 local function restoreCVars()
   if savedCVars then
@@ -279,7 +311,10 @@ local function finish(ok, err)
   T.sending = false
   local cb = current and current.done
   current, queue = nil, nil
-  if cb then cb(ok, err) end
+  local okCb, e = true, nil
+  if cb then okCb, e = pcall(cb, ok, err) end
+  pump()
+  if not okCb then error(e, 0) end
 end
 
 local function shootNext()
@@ -313,15 +348,18 @@ local function shootNext()
       end)
     end
     -- the game names screenshots to the second (WoWScrnShot_MMDDYY_HHMMSS): a frame taken in the same second as the
-    -- previous one would get its file name, so the block waits (hidden) for the next second
+    -- previous one would get its file name, so the block waits (hidden) for the next second. The previous one may be
+    -- of another message (a result for the app right before a question): the app may not have read it yet.
     local sending, waitFrom = current, debugprofilestop()
+    local waited = false
     local function show()
       if current ~= sending then return end
-      if sending.lastShot and time() <= sending.lastShot then
+      if T.lastShot and time() <= T.lastShot then
+        waited = true
         C_Timer.After(0.02, show)
         return
       end
-      if sending.lastShot then ns.Step("waitNextSecond", debugprofilestop() - waitFrom) end
+      if waited then ns.Step("waitNextSecond", debugprofilestop() - waitFrom) end
       ns.Stage("data block on screen")
       showBlock()
       C_Timer.After(0, capture)
@@ -341,7 +379,7 @@ captureFrame:SetScript("OnEvent", function(_, event)
   end
   if not current or not current.waiting then return end
   current.waiting = false
-  current.lastShot = time()  -- the file is written: its name holds this second or an earlier one
+  T.lastShot = time()  -- the file is written: its name holds this second or an earlier one
   hideBlock()
   T.timings.shotMs = math.floor(debugprofilestop() - (current.shotStart or debugprofilestop()))
   ns.Step("screenshot", T.timings.shotMs)
@@ -355,28 +393,23 @@ end)
 
 function T.Send(msg, done)
   if T.sending then
-    if done then done(false, "the previous question is still being sent") end
+    waiting[#waiting + 1] = { msg = msg, done = done }
     return
+  end
+  local function fail(why)
+    if done then pcall(done, false, why) end
+    pump()
   end
   local t0 = debugprofilestop()
   ns.Stage("packing the question")
   local okJ, json = pcall(C_EncodingUtil.SerializeJSON, msg)
-  if not okJ then
-    if done then done(false, "JSON: " .. tostring(json)) end
-    return
-  end
+  if not okJ then fail("JSON: " .. tostring(json)) return end
   local okC, data = pcall(C_EncodingUtil.CompressString, json, Enum.CompressionMethod.Zlib)
-  if not okC then
-    if done then done(false, "compression: " .. tostring(data)) end
-    return
-  end
+  if not okC then fail("compression: " .. tostring(data)) return end
   T.timings.encodeMs = math.floor(debugprofilestop() - t0)
   ns.Step("packQuestion", T.timings.encodeMs)
   local count = math.ceil(#data / CAPACITY)
-  if count > 8 then
-    if done then done(false, "the question with game data is too large; turn off some data in Settings") end
-    return
-  end
+  if count > 8 then fail("the question with game data is too large; turn off some data in Settings") return end
   queue = {}
   for i = 1, count do
     queue[i] = { msgId = msg.msgId, index = i - 1, count = count, chunk = data:sub((i - 1) * CAPACITY + 1, i * CAPACITY) }
@@ -386,7 +419,7 @@ function T.Send(msg, done)
   ns.Step("packetZipKB", #data / 1024)
   ns.Step("blocks", count)
   T.sending = true
-  current = { done = done }
+  current = { done = done, background = BACKGROUND[msg.type] }
   savedCVars = { fmt = GetCVar("screenshotFormat"), q = GetCVar("screenshotQuality") }
   -- TGA is written without compression (faster than PNG); both are lossless, the companion reads either
   pcall(SetCVar, "screenshotFormat", "tga")

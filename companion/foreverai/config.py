@@ -155,6 +155,7 @@ class Settings:
     route_model: dict = field(default_factory=dict)
     route_effort: str = ""  # Claude Code: the thinking level of route updates; "" = the one of questions
     shortcut_offered: bool = False
+    save_logs: bool = False  # the log files are written only when the player asks for them (the app window)
 
 
 class SettingsStore:

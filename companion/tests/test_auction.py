@@ -1,8 +1,13 @@
 import json
+
 import shutil
+
 import subprocess
+
 import threading
+
 import time
+
 from pathlib import Path
 
 import pytest
@@ -12,7 +17,6 @@ from foreverai.tools import auction_request, format_auction, format_sell_prices,
 from test_service import _read_inbox, _send, env  # noqa: F401  (fixture)
 
 ADDON = Path(__file__).resolve().parents[2] / "addon" / "ForeverAI"
-
 
 def test_auction_request_maps_filters():
     req, err = auction_request({"weapon_type": "1h_sword", "slot": "one-hand", "max_price_gold": 100,
@@ -29,7 +33,6 @@ def test_auction_request_maps_filters():
         req, err = auction_request(bad)
         assert req is None and err.startswith("Rejected")
 
-
 def test_auction_request_exact_items():
     req, err = auction_request({"items": ["Linen Cloth", "[Wool Cloth]", 2589, "2589", "Silk Cloth (item 4306)", "",
                                           True, {"id": 2592}, "linen cloth"], "query": "ignored", "slot": "head"})
@@ -43,7 +46,6 @@ def test_auction_request_exact_items():
                      ({"items": {"a": 1}}, "must be a list")):
         req, err = auction_request(bad)
         assert req is None and why in err
-
 
 def test_format_auction_exact_items():
     text = format_auction({"source": "Auctionator", "realm": "Forever", "lastScan": "1 h ago (full scan)", "exact": True,
@@ -64,7 +66,6 @@ def test_format_auction_exact_items():
     assert ("- [Old Sword] (item 105): not listed in the last full scan (last seen 20 days ago at 30g 0s 0c; that "
             "offer is gone)") in gone
 
-
 def test_format_auction():
     text = format_auction({"source": "Auctionator", "realm": "Forever-EU", "lastScan": "2 h ago (full scan)",
                            "dbItems": 1200, "matched": 3, "sort": "upgrade", "upgradeMethod": "Pawn (the player's scales)",
@@ -82,7 +83,6 @@ def test_format_auction():
     assert "Left out: 3 no longer listed (not in the last full scan)." in left
     assert "failed: Auctionator is not installed" in format_auction({"error": "Auctionator is not installed"})
     assert "did not respond" in format_auction(None)
-
 
 def test_search_tool_round_trip_and_card(env):  # noqa: F811
     from foreverai.service import InboxWriter, TurnContext
@@ -109,7 +109,6 @@ def test_search_tool_round_trip_and_card(env):  # noqa: F811
     assert ctx.auction_card(answer) == [{"id": 2042, "name": "Gleaming Sword", "price": "45g 0s 0c"}]
     assert ctx.auction_card("Nothing worth it.") is None
     assert {"name": "Gleaming Sword", "kind": "item", "id": 2042} in svc.links(answer, ctx)
-
 
 def test_exact_items_tool_round_trip_and_shopping_card(env):  # noqa: F811
     """A shopping list: one call with the exact items, and the "Search on the AH" card offers the ones the answer names."""
@@ -138,7 +137,6 @@ def test_exact_items_tool_round_trip_and_shopping_card(env):  # noqa: F811
     answer = "Buy 20 **[Linen Cloth]** and 5 [Wool Cloth]; get [Coarse Thread] from a trade goods vendor."
     assert ctx.auction_card(answer) == [{"id": 2589, "name": "Linen Cloth", "price": "12s 0c"},
                                         {"id": 2592, "name": "Wool Cloth", "price": "35s 0c"}]
-
 
 def test_auctionator_list_puts_any_items_on_the_card(env):  # noqa: F811
     """The real answer: the player asked for a filter in Auctionator for the Darkmoon Faire items, and the model said it
@@ -169,17 +167,19 @@ def test_auctionator_list_puts_any_items_on_the_card(env):  # noqa: F811
                     {"name": "Soft Bushy Tail", "why": "unknown item name (not in the game's item cache): give the item id"}]}})
     t.join(5)
     text, err = out["r"]
-    assert not err and "holds 4 items" in text and '"ForeverAI: Darkmoon Faire turn-ins"' in text
-    assert "do not tell them to make the list by hand" in text
-    assert "[Small Furry Paw] (item 5134) — 4s 10c" in text and "[Soft Bushy Tail]: unknown item name" in text
+    assert not err and "(4 items)" in text and '"ForeverAI: Darkmoon Faire turn-ins"' in text
+    assert "do not tell the player to make the list by hand" in text
+    assert "[Small Furry Paw] (item 5134) — 4s 10c" in text
+    assert "[Soft Bushy Tail] — no price in the last scan (unknown item name" in text
+    assert "the price data does not know this name" in text
     # the listed items in their order, priced where an auction search found them, whatever the answer names
     card = [{"id": 5134, "name": "Small Furry Paw", "price": "4s 10c"},
             {"id": 3835, "name": "Green Iron Bracers", "price": "22s 0c"},
-            {"name": "Torn Bear Pelt"}, {"name": "Soft Bushy Tail"}]
+            {"id": 11407, "name": "Torn Bear Pelt"}, {"name": "Soft Bushy Tail"}]
     assert ctx.auction_card("Here is the list.") == card
     assert ctx.auction_list() == {"auctionList": "ForeverAI: Darkmoon Faire turn-ins"}
     # without the tool: the old card, the auction items the answer names, saved under the add-on's own name
-    plain = TurnContext({"msgId": 5}, ctx.writer, snap, threading.Event(), [])
+    plain = TurnContext({"msgId": 5, "conv": "plain"}, ctx.writer, snap, threading.Event(), [])  # (a list of its own)
     plain.ah_items["Green Iron Bracers"] = card[1]
     assert plain.auction_card("Buy [Green Iron Bracers].") == [card[1]] and plain.auction_list() == {}
     assert plain.auction_card("Buy [Small Furry Paw].") is None
@@ -196,7 +196,6 @@ def test_auctionator_list_puts_any_items_on_the_card(env):  # noqa: F811
     text, err = svc.run_tool(plain, "auctionator_list", {"items": "Linen Cloth"})
     assert not err and "did not respond" in text and plain.auction_card("") == [{"name": "Linen Cloth"}]
     assert plain.auction_list() == {"auctionList": "ForeverAI: Shopping"}
-
 
 def test_the_answer_carries_the_auctionator_list(env):  # noqa: F811
     from foreverai.openrouter import ToolCall
@@ -233,7 +232,6 @@ def test_the_answer_carries_the_auctionator_list(env):  # noqa: F811
                 "snapshot": {}})
     assert "auctionList" not in _wait_final(addons, 7)  # each answer its own card
 
-
 BAGS = {"freeSlots": 5, "items": [
     {"item": "[Hearthstone]", "id": 6948, "count": 1, "bound": True, "tooltip": "Soulbound\nUnique", "quality": "common"},
     {"item": "[Linen Cloth]", "id": 2589, "count": 12, "sellCopper": 13, "tooltip": "Crafting Reagent",
@@ -248,6 +246,7 @@ BAGS = {"freeSlots": 5, "items": [
     {"item": "[Sealed Writ]", "id": 262888, "count": 1, "quality": "rare"},
     {"item": "[Glinting Steel Sword]", "id": 3101, "count": 1, "sellCopper": 1830, "quality": "uncommon",
      "facts": {"cannotUse": "missing skill: One-Handed Swords"}}]}
+
 GAME_PRICES = {"source": "Auctionator", "lastScan": "1 h ago (full scan)", "exact": True, "maxAgeDays": 30,
                "items": [{"id": 2589, "name": "Linen Cloth", "price": "11c", "copper": 11, "seen": "today", "available": 340},
                          {"id": 2592, "name": "Wool Cloth", "price": "74c", "copper": 74, "seen": "today", "available": 248},
@@ -258,7 +257,6 @@ GAME_PRICES = {"source": "Auctionator", "lastScan": "1 h ago (full scan)", "exac
                "missing": [{"id": 5784, "name": "Slimy Murloc Scale", "why": "not listed in the last full scan",
                             "lastPrice": "1s 0c", "lastSeen": "3 days ago"},
                            {"id": 3300, "name": "Rabbit's Foot", "why": "no auction price seen in the last 30 days"}]}
-
 
 def test_sell_price_request_prices_what_the_auction_house_can_take():
     entries, req, err = sell_price_request({"bags": BAGS}, {})
@@ -277,7 +275,6 @@ def test_sell_price_request_prices_what_the_auction_house_can_take():
     assert sell_price_request({}, {})[2].startswith("Rejected: the game data has no bags")
     big = {"items": [{"item": f"[Thing {i}]", "id": 1000 + i, "count": 1, "sellCopper": 5} for i in range(150)]}
     assert len(sell_price_request({"bags": big}, {})[1]["items"]) == 100  # what one game call prices
-
 
 def test_sell_prices_sort_the_bags_into_lists():
     entries, _, _ = sell_price_request({"bags": BAGS}, {})
@@ -308,7 +305,6 @@ def test_sell_prices_sort_the_bags_into_lists():
     assert text.endswith("check that this character has no use for it (Bags and selling); leave those out and say in "
                          "one line which ones you kept.")
 
-
 def test_sell_prices_without_auction_prices():
     """Without Auctionator (or an answer from the game) the vendor prices still come, but nothing is called better
     at a vendor; items an older add-on did not price are marked as not checked."""
@@ -323,7 +319,6 @@ def test_sell_prices_without_auction_prices():
     text = format_sell_prices(entries, some)
     assert "- [Rabbit's Foot] (junk) — vendor 1s 5c; auction price not checked" in text
     assert "Worth the auction house (1; together 7s 0c):" in text
-
 
 def test_compare_sell_prices_tool_round_trip(env):  # noqa: F811
     """The app prices the bags from the game data in one auction_search call and gives the model the lists."""
@@ -349,7 +344,6 @@ def test_compare_sell_prices_tool_round_trip(env):  # noqa: F811
     assert phases == ["Comparing vendor and auction prices…"] and ctx.ah_open is False
     text, err = svc.run_tool(TurnContext({"msgId": 6}, writer, {}, threading.Event(), []), "compare_sell_prices", {})
     assert err and "no bags section" in text
-
 
 LUA_HARNESS = r"""
 local addonDir = arg[1]
@@ -380,6 +374,8 @@ local items = {
   [106] = { "Slow Sword", 2, 7, "INVTYPE_WEAPON", 21, 18 },      -- not cached yet, arrives later
 }
 local cached = { [100] = true, [101] = true, [102] = true, [103] = true, [104] = true, [105] = true }
+items[109] = { "Tinker Sword", 2, 7, "INVTYPE_WEAPON", 26, 20 } -- needs a profession the character does not have
+cached[109] = true
 items[107] = { "Linen Cloth", 7, 5, "", 5, 0 }  -- not cached yet: its name comes from the server
 items[108] = { "Wool Cloth", 7, 5, "", 15, 0 }  -- no price in the data
 local instantNames = { ["Gleaming Sword"] = 100, ["Old Sword"] = 105, ["Wool Cloth"] = 108 } -- names the client resolves
@@ -403,9 +399,10 @@ ns.Collect = { knownLinks = { ["Cheap Sword"] = "|cffffffff|Hitem:102::::|h[Chea
   ItemFacts = function(link, compare)
   local id = tonumber(link:match("item:(%d+)"))
   local i = items[id]
-  return { quality = "uncommon", stats = "DPS +" .. i[5], tooLowLevel = i[6] > 30 or nil,
+  return { quality = "uncommon", stats = "DPS +" .. i[5], tooLowLevel = i[6] > 30 or nil, requiresLevel = i[6],
+           cannotUse = id == 109 and "not met: Requires Engineering (150)" or nil,
            vsEquipped = "instead of (empty slot): DPS +" .. i[5] }
-end }
+end, unmetFrom = "tooltip data" }
 Auctionator = { API = { v1 = { MultiSearchExact = function() end } }, State = { CurrentRealm = "Forever" } }
 local function day(d) return { [tostring(today - d)] = 1 } end
 AUCTIONATOR_PRICE_DATABASE = { __dbversion = 6, Forever = {
@@ -413,7 +410,7 @@ AUCTIONATOR_PRICE_DATABASE = { __dbversion = 6, Forever = {
   ["101"] = { m = 600000, h = day(1) }, ["102"] = { m = 10000, h = day(2) }, ["103"] = { m = 200000, h = day(0) },
   ["104"] = { m = 2000000, h = day(0) }, ["105"] = { m = 300000, h = day(20) }, ["106"] = { m = 350000, h = day(0) },
   ["g:100:30"] = { m = 900000, h = day(0) }, ["p:55"] = { m = 1, h = day(0) },
-  ["107"] = { m = 1200, h = day(1), a = { [tostring(today - 1)] = 40 } } } }
+  ["107"] = { m = 1200, h = day(1), a = { [tostring(today - 1)] = 40 } }, ["109"] = { m = 400000, h = day(0) } } }
 AUCTIONATOR_SAVEDVARS = { TimeOfLastReplicateScan = now - 3 * 86400 } -- a full scan 3 days ago saw all but Old Sword
 local chunk = assert(loadfile(addonDir .. "/Auction.lua"))
 chunk("ForeverAI", ns)
@@ -435,6 +432,9 @@ for _, it in ipairs(result.items) do names[#names + 1] = it.name .. "=" .. it.pr
 print("ITEMS " .. table.concat(names, ","))
 print("META " .. tostring(result.source) .. "|" .. tostring(result.dbItems) .. "|" .. tostring(result.matched) .. "|"
   .. tostring(result.lastScan) .. "|" .. tostring(result.skipped["too high level"]) .. "|" .. tostring(result.notLoaded))
+local left = {}
+for _, u in ipairs(result.unusable or {}) do left[#left + 1] = u.name .. "=" .. u.price .. ":" .. u.why end
+print("UNUSABLE " .. tostring(result.skipped["not usable"]) .. "|" .. tostring(result.usableCheck) .. "|" .. table.concat(left, ","))
 local ok, why = ns.Auction.ShowInAuctionator({ "Gleaming Sword" })
 print("SHOW " .. tostring(ok) .. "|" .. tostring(why))
 -- a shopping list: only through Auctionator's public API, each item an exact search, also with the AH closed
@@ -487,6 +487,14 @@ local exact = run({ items = { { id = 100 }, { name = "Old Sword" }, { name = "Ch
 print("EXACT " .. show(exact))
 print("EXACTMETA " .. tostring(exact.exact) .. "|" .. exact.matched .. "|" .. exact.maxAgeDays .. "|" .. tostring(exact.lastScan))
 print("EXACT7 " .. show(run({ items = { { name = "Old Sword" }, { id = 100 } }, maxAgeDays = 7 })))
+-- asked for by the player: the search returns it, and says why the character cannot use it
+local all, flagged = run({ classIDs = { 2 }, subclassIDs = { 7 }, maxCopper = 1000000, maxAgeDays = 7, usableOnly = false,
+  sort = "upgrade", limit = 15 }), {}
+for _, it in ipairs(all.items) do if it.cannotUse then flagged[#flagged + 1] = it.name .. ":" .. it.cannotUse end end
+print("ASKED " .. tostring(all.unusable) .. "|" .. table.concat(flagged, ","))
+local one = run({ items = { { id = 109 }, { id = 101 } }, maxAgeDays = 30 })
+print("EXACTUSE " .. one.items[1].name .. ":" .. tostring(one.items[1].cannotUse) .. "|" .. one.items[2].name .. ":"
+  .. tostring(one.items[2].tooLowLevel))
 local after = 0
 for _ in pairs(AUCTIONATOR_PRICE_DATABASE.Forever) do after = after + 1 end
 print("UNTOUCHED " .. tostring(before == after) .. "|" .. AUCTIONATOR_PRICE_DATABASE.Forever["100"].m)
@@ -532,21 +540,33 @@ local pawn = run(SWORDS)
 print("PAWN " .. list(pawn) .. "|" .. pawn.upgradeMethod)
 """
 
+def _harness(tmp_path) -> dict:
+    """The lines the harness prints, by their first word: run by lua5.1 where it is installed, else by the Lua 5.1 the
+    add-on simulator uses."""
+    if shutil.which("lua5.1"):
+        script = tmp_path / "harness.lua"
+        script.write_text(LUA_HARNESS)
+        run = subprocess.run(["lua5.1", str(script), str(ADDON)], capture_output=True, text=True, timeout=30)
+        assert run.returncode == 0, run.stderr
+        out = run.stdout
+    else:
+        from lupa import lua51
+        lua, printed = lua51.LuaRuntime(unpack_returned_tuples=True), []
+        lua.globals().print = lambda *a: printed.append("\t".join(str(x) for x in a))
+        lua.globals().arg = lua.table_from([str(ADDON)])
+        lua.execute(LUA_HARNESS)
+        out = "\n".join(printed)
+    return dict(line.split(" ", 1) for line in out.strip().splitlines())
 
-@pytest.mark.skipif(not shutil.which("lua5.1"), reason="needs lua5.1")
 def test_auction_lua_reads_auctionator_prices(tmp_path):
     """Auction.lua against a mocked game: filters, item data loading, sorting and the Auctionator search."""
-    script = tmp_path / "harness.lua"
-    script.write_text(LUA_HARNESS)
-    run = subprocess.run(["lua5.1", str(script), str(ADDON)], capture_output=True, text=True, timeout=30)
-    assert run.returncode == 0, run.stderr
-    lines = dict(line.split(" ", 1) for line in run.stdout.strip().splitlines())
+    lines = _harness(tmp_path)
     items = lines["ITEMS"].split(",")
     # in budget, right type, recent, usable; the late-loading item is included; the empty slot makes all upgrades
     assert sorted(i.split("=")[0] for i in items) == ["Cheap Sword", "Gleaming Sword", "Slow Sword"]
     assert "Gleaming Sword=45g 0s 0c@today" in items and "Cheap Sword=1g 0s 0c@2 days ago" in items
     source, db_items, matched, last_scan, too_high, not_loaded = lines["META"].split("|")
-    assert source == "Auctionator" and db_items == "10" and matched == "3" and last_scan == "3 days ago (full scan)"
+    assert source == "Auctionator" and db_items == "11" and matched == "3" and last_scan == "3 days ago (full scan)"
     assert too_high == "1" and not_loaded == "nil"
     assert lines["SHOW"] == "false|Open the auction house first."
     assert lines["SAVE0"] == "false|This Auctionator cannot save shopping lists."  # an Auctionator without the API
@@ -557,15 +577,19 @@ def test_auction_lua_reads_auctionator_prices(tmp_path):
     assert lines["SAVE4"] == "false|list broken"
     json.dumps(lines)
 
+def test_auction_lua_leaves_out_what_the_character_cannot_use(tmp_path):
+    """From the game: the answer recommended [Green Tinted Goggles], which requires Engineering (150), to a character
+    without Engineering. A search leaves such an item out and names it with what it requires; asked for, it comes back
+    with the requirement on it; and the prices of exact items (the shopping list) carry it too."""
+    lines = _harness(tmp_path)
+    assert "Tinker Sword" not in lines["ITEMS"]
+    assert lines["UNUSABLE"] == "1|tooltip data|Tinker Sword=40g 0s 0c:not met: Requires Engineering (150)"
+    assert lines["ASKED"] == "nil|Tinker Sword:not met: Requires Engineering (150)"
+    assert lines["EXACTUSE"] == "Tinker Sword:not met: Requires Engineering (150)|Huge Sword:requires level 45"
 
-@pytest.mark.skipif(not shutil.which("lua5.1"), reason="needs lua5.1")
 def test_auction_lua_exact_items(tmp_path):
     """Exact items (a shopping list): ids and names resolved without a search, prices in one pass, names loaded."""
-    script = tmp_path / "harness.lua"
-    script.write_text(LUA_HARNESS)
-    run = subprocess.run(["lua5.1", str(script), str(ADDON)], capture_output=True, text=True, timeout=30)
-    assert run.returncode == 0, run.stderr
-    lines = dict(line.split(" ", 1) for line in run.stdout.strip().splitlines())
+    lines = _harness(tmp_path)
     found, missing = lines["EXACT"].split(" || ")
     # in the requested order; the gear's cheapest variant; the late name arrives; the bags name the Cheap Sword;
     # the Battle Axe is found by the names of the priced items the client has cached; the Old Sword's offer was gone
@@ -580,15 +604,10 @@ def test_auction_lua_exact_items(tmp_path):
     assert lines["UNTOUCHED"] == "true|450000"  # ForeverAI only reads Auctionator's data
 
 
-@pytest.mark.skipif(not shutil.which("lua5.1"), reason="needs lua5.1")
 def test_auction_lua_leaves_out_what_the_last_full_scan_did_not_see(tmp_path):
     """Prices of items the last full scan did not see are offers that are gone (the prices the player called wrong):
     left out of a search, the last price seen for an exact item. A scan stopped early or no full scan cuts nothing."""
-    script = tmp_path / "harness.lua"
-    script.write_text(LUA_HARNESS)
-    run = subprocess.run(["lua5.1", str(script), str(ADDON)], capture_output=True, text=True, timeout=30)
-    assert run.returncode == 0, run.stderr
-    lines = dict(line.split(" ", 1) for line in run.stdout.strip().splitlines())
+    lines = _harness(tmp_path)
     # the scan an hour ago saw the Gleaming and the Slow Sword, not the Cheap Sword (2 days) or the Huge Sword
     # (yesterday); the modern AH's TimeOfLastBrowseScan is the scan's time
     assert lines["FRESH"] == "Slow Sword,Gleaming Sword|1 h ago (full scan)|2"
@@ -601,22 +620,16 @@ def test_auction_lua_leaves_out_what_the_last_full_scan_did_not_see(tmp_path):
     assert lines["NOSCAN"] == "Cheap Sword,Slow Sword,Gleaming Sword|nil"
 
 
-@pytest.mark.skipif(not shutil.which("lua5.1"), reason="needs lua5.1")
 def test_auction_lua_ranks_gear_by_pawn_value(tmp_path):
     """"The best swords": with Pawn the upgrades come first, then the other items by their value in the player's
     scale, not by price, so the best ones are there also when none of them beats the equipped weapon."""
-    script = tmp_path / "harness.lua"
-    script.write_text(LUA_HARNESS)
-    run = subprocess.run(["lua5.1", str(script), str(ADDON)], capture_output=True, text=True, timeout=30)
-    assert run.returncode == 0, run.stderr
-    lines = dict(line.split(" ", 1) for line in run.stdout.strip().splitlines())
+    lines = _harness(tmp_path)
     items, method = lines["PAWN"].split("|")
     assert items.split(",") == [
         "Cheap Sword [+5.0% upgrade (Hunter); value 10.0 vs 60.0 for [Fang of Magmatus]]",
         "Slow Sword [not an upgrade; value 50.0 vs 60.0 for [Fang of Magmatus]]",
         "Gleaming Sword [not an upgrade; value 30.0 vs 60.0 for [Fang of Magmatus]]"]
     assert method == "Pawn (the player's scales)"
-
 
 def test_swords_and_bag_prices_end_to_end_in_the_simulator(tmp_path):
     """The two questions through the add-on and the app: the add-on's real Auction.lua and Collect.lua on the
@@ -658,3 +671,19 @@ def test_swords_and_bag_prices_end_to_end_in_the_simulator(tmp_path):
            "scan (last seen 3 days ago at 1s 0c)" in sell
     assert "Soulbound (only a vendor buys these) (1; together 1s 36c):\n- [Fishliver Oil] x2" in sell
     assert "Not priced (quest items, conjured items, no sale value): [Hearthstone], [Crawler Leg]" in sell
+
+def test_the_search_names_what_it_left_out_and_why():
+    text = format_auction({"source": "Auctionator", "dbItems": 900, "matched": 1, "sort": "upgrade",
+                           "skipped": {"not usable": 14, "too high level": 2}, "usableCheck": "tooltip data",
+                           "unusable": [{"id": 4385, "name": "Green Tinted Goggles", "price": "16s 0c",
+                                         "why": "not met: Requires Engineering (150)"}],
+                           "items": [{"id": 1, "name": "Cured Leather Cap", "price": "20s 0c"}]})
+    assert ("Left out because this character cannot use them: [Green Tinted Goggles] 16s 0c (not met: Requires "
+            "Engineering (150)); and 13 more.") in text
+    assert "Only armor and weapon skills were checked" not in text
+    # a client that gives no requirements: the model is told the check was not whole
+    assert "Only armor and weapon skills were checked" in format_auction({"items": [], "usableCheck": "skills only"})
+    # exact items say it on their line
+    text = format_auction({"exact": True, "items": [{"id": 4385, "name": "Green Tinted Goggles", "price": "16s 0c",
+                                                     "cannotUse": "not met: Requires Engineering (150)"}]})
+    assert "- [Green Tinted Goggles] (item 4385) — 16s 0c | cannotUse: not met: Requires Engineering (150)" in text

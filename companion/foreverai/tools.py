@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from .kb.store import KB
+from .ways import places_on_this_map
 
 ALLOWED_OPS = ("set_option", "set_setting", "toggle_addon", "slash_command")
 
@@ -59,7 +60,7 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "addon": {"type": "string", "description": "Addon folder name, e.g. Questie"},
+                    "addon": {"type": "string", "description": "Addon folder name"},
                     "op": {"type": "string", "enum": list(ALLOWED_OPS)},
                     "path": {"type": "string", "description": "For set_option/set_setting: path exactly as returned "
                                                               "by addon_options"},
@@ -111,14 +112,15 @@ TOOLS.append({
         "name": "mark_on_map",
         "description": "Mark a point on the player's map (waypoint with arrow). Use when the question is about a place: "
                        "quest turn-in NPC, mobs, herbs, dungeon entrance, trainer. Coordinates 0-100 as in the game "
-                       "(from the quests/zoneNPCs/nearbyMobs data or the wiki). zone = English zone name (e.g. "
-                       "'Teldrassil'); omit for the player's current zone. Can be called several times (up to 12 points). "
+                       "(from the quests/zoneNPCs/nearbyMobs data or the wiki). zone = English zone name; "
+                       "omit for the player's current zone. Can be called several times (up to 12 points). "
                        "The marks of one answer replace the marks of your earlier answers; add=true keeps those and "
-                       "adds this point (an extra stop on a route that still holds).",
+                       "adds this point (an extra stop on a route that still holds); the add-on puts an added "
+                       "stop where it costs the least way on the route, and the arrow goes to it when it comes first.",
         "parameters": {
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "Short name of the point, e.g. 'Conservator Ilthalaine'"},
+                "title": {"type": "string", "description": "Short name of the point"},
                 "x": {"type": "number"}, "y": {"type": "number"},
                 "zone": {"type": "string"},
                 "add": {"type": "boolean", "description": "true: keep the marks of earlier answers and add this one"},
@@ -126,7 +128,7 @@ TOOLS.append({
                                                             "stop then stays on the route until that is done, "
                                                             "instead of leaving when the player reaches the place"},
                 "note": {"type": "string", "description": "What to do there in a few words, in English like the "
-                                                           "add-on's window (e.g. 'learn Beast Training'): shown in "
+                                                           "add-on's window: shown in "
                                                            "brackets after the stop in the player's route list. Leave "
                                                            "it out when quest and task say it: the list then says "
                                                            "'turn in …' or 'pick up …' by itself"},
@@ -164,7 +166,12 @@ TOOLS.append({
                 "propose": {"type": "boolean",
                             "description": "true when the player did not ask for this change and you think the route "
                                            "no longer fits: the player gets it as a card to accept, and the route "
-                                           "stays as it is until then"},
+                                           "stays as it is until then. Not in a message of the add-on (a route "
+                                           "update or check): there the change is made at once"},
+                "go_to": {"type": "string",
+                          "description": "The stop the player heads to now (its title or number; also a stop marked in "
+                                         "this answer): the arrow leads there. Otherwise it leads to the first stop "
+                                         "that is not done"},
                 "stop_tracking": {"type": "array", "items": {"type": "string"},
                                   "description": "Creatures to stop watching for, by the name that starts their line "
                                                  "in the tracked section; [\"all\"] for every one. A stop taken off "
@@ -189,10 +196,14 @@ TOOLS.append({
                        "the best way to do these\"; do not order the stops yourself, and do not set the stops of "
                        "another zone by hand. You decide what the route holds: read the quests first (text, level "
                        "against the player's, elite or group, escort, what you advised earlier) and say so with "
-                       "skip, first, last, new_quests, then and end.",
+                       "skip, first, last, use, extra, avoid, new_quests, then and end.",
         "parameters": {
             "type": "object",
             "properties": {
+                "use": {"type": "array", "items": {"type": "string"},
+                        "description": "Where an objective has more than one source in whereToGet: the one to get it "
+                                       "from (the creature, object or vendor, by name), when it is surer or quicker "
+                                       "for this character than the nearest, which is taken otherwise"},
                 "skip": {"type": "array", "items": {"type": "string"},
                          "description": "Quest titles to leave out: quests the player cannot or should not do now "
                                         "(an elite or group quest alone, far above their level, one you advised against)"},
@@ -205,9 +216,13 @@ TOOLS.append({
                          "description": "Quest titles to do after everything else (the hard ones: by then the player "
                                         "may have a level more or company)"},
                 "then": {"type": "array",
-                         "description": "The zones the route goes on into after the player's zone, in the order the "
-                                        "player travels, when quests lead there (turn-ins waiting in a city, the next "
-                                        "zone). The player's own zone may come again after another one, when the "
+                         "description": "The zones the route goes on into after the player's zone, when quests or "
+                                        "stops the player asked for lead there: only the zones with something to do, "
+                                        "in the order the player goes when they gave one (a zone can come again after "
+                                        "another, the player's own too). The app finds the way to each (the road across the border, "
+                                        "a boat, the tram, a portal, a flight the character has, through the zones "
+                                        "between) and puts them in the order that costs the least way, unless yours "
+                                        "is about as short. The player's own zone may come again after another one, when the "
                                         "rest of it cannot be reached on foot from where they stand (a village "
                                         "behind a portal, an island): then only what lies on the way out is done "
                                         "first, and the rest when the route is back",
@@ -220,24 +235,63 @@ TOOLS.append({
                                                                         "Leave via and arrive out when plan_route "
                                                                         "said that it knows the way"},
                              "via_y": {"type": "number"},
-                             "via_title": {"type": "string", "description": "What it is, e.g. 'Portal to Darnassus'"},
+                             "via_title": {"type": "string", "description": "What it is (the portal, boat, gate or road)"},
                              "arrive_x": {"type": "number", "description": "Where the player comes out in this zone, "
                                                                            "in this zone's coordinates"},
                              "arrive_y": {"type": "number"}}, "required": ["zone"]}},
+                "extra": {"type": "array",
+                          "description": "Stops that are not quests but belong on the route because the player asked "
+                                         "for them or needs them (an NPC to deal with, a place, a creature). The app "
+                                         "puts each where it costs the least way and keeps it on the route, through "
+                                         "every update and every new plan, until the player has been there; one the "
+                                         "player no longer wants is left out by its name in skip. Coordinates from the "
+                                         "game data or the knowledge base, never a guess",
+                          "items": {"type": "object", "properties": {
+                              "service": {"type": "string",
+                                          "description": "Instead of title, x and y: a kind of NPC the player wants "
+                                                         "on the route, as the game data names roles (repair, vendor, "
+                                                         "innkeeper, banker, auctioneer, stable master, flight "
+                                                         "master) or a trainer as the services section names it "
+                                                         "(leatherworking trainer, hunter trainer). The app puts on "
+                                                         "the route the NPC of that kind in that zone nearest to the "
+                                                         "route's other stops there, in the zone the player is in and "
+                                                         "in others alike. Use it whenever the player wants a kind of "
+                                                         "NPC rather than a particular one"},
+                              "title": {"type": "string", "description": "Who or what is there"},
+                              "zone": {"type": "string", "description": "English name of the zone it is in"},
+                              "x": {"type": "number"}, "y": {"type": "number"},
+                              "note": {"type": "string", "description": "What to do there, in a few words"},
+                              "mob": {"type": "string", "description": "The creature to watch for there, if it is one"},
+                              "when": {"type": "string", "enum": ["first", "last"],
+                                       "description": "Only when the player wants it so: first = before everything "
+                                                      "else in its zone; last = the last stop of the whole route "
+                                                      "(the route comes back to its zone for it). Once it is on the "
+                                                      "map it keeps its place there, and what an update adds goes "
+                                                      "where it costs the least way. A stop wanted right after "
+                                                      "certain others goes there with edit_route's order: updates "
+                                                      "keep the order the stops have on the map"}},
+                              "required": ["zone"]}},
+                "avoid": {"type": "array", "items": {"type": "string"},
+                          "description": "Ways the route must not take, when the player says one is not there or "
+                                         "does not want it: the name of a flight master whose flight path the "
+                                         "character does not have although the data says so, 'Tram', 'Boat', or a "
+                                         "zone not to pass through"},
                 "new_quests": {"type": "array", "items": {"type": "string"},
-                               "description": "Titles of nearbyQuests worth picking up that are not by the route "
-                                              "(the result names them); the ones whose giver stands next to the "
-                                              "player or to a stop are picked up without being named here"},
+                               "description": "Titles of quests to pick up that plan_route would not take by "
+                                              "itself: the ones the player asked for by name or kind, and a "
+                                              "dungeon's quests. The quests that cost no way are taken along without "
+                                              "being named here; 'take what you can on the way' is those, nothing more"},
                 "propose": {"type": "boolean",
                             "description": "true when the player did not ask for a route and you think the one on the "
                                            "map no longer fits: the new route goes to the player as a card to accept, "
-                                           "and the map stays as it is until then"},
+                                           "and the map stays as it is until then. Not in a message of the add-on (a "
+                                           "route update or check): there the route is set at once"},
                 "end_x": {"type": "number", "description": "Where the player goes after these quests, in the "
                                                              "coordinates of the route's last zone (the road to the "
                                                              "next zone, a flight master), when that zone itself is "
                                                              "not on the route with then: the route ends near it"},
                 "end_y": {"type": "number"},
-                "end_title": {"type": "string", "description": "What is at end_x, end_y, e.g. 'the road to Darnassus'"},
+                "end_title": {"type": "string", "description": "What is at end_x, end_y"},
                 "mark": {"type": "boolean", "description": "false: only compute, do not mark (default true)"},
             },
         },
@@ -254,17 +308,272 @@ TOOLS.append({
                        "add-ons without an options tree: saved variables. Also returns the add-on's slash commands. "
                        "ALWAYS use it when the player asks how to set/enable/disable something in an add-on or how a "
                        "feature works — then propose a concrete change (propose_addon_change, op=set_option) or explain "
-                       "from the options. query = a few ENGLISH keywords, e.g. 'tomtom arrow waypoint' or 'minimap icon'.",
+                       "from the options. query = a few ENGLISH keywords of what the setting is about.",
         "parameters": {
             "type": "object",
             "properties": {
-                "addon": {"type": "string", "description": "Add-on folder name from the addons list, e.g. Questie"},
+                "addon": {"type": "string", "description": "Add-on folder name from the addons list"},
                 "query": {"type": "string", "description": "English keywords; empty = overview of the options"},
             },
             "required": ["addon"],
         },
     },
 })
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "zone_quests",
+        "description": "The quests this character can pick up in a zone, or that belong to a dungeon, read from the game "
+                       "(its quest database knows what is done, what the class can take and where each chain stands): "
+                       "title, level, who gives it and where, what it asks for, where its objectives are and where it "
+                       "is turned in, plus the dungeon entrances of the zone. The nearbyQuests section only reaches "
+                       "around the player: call this when they ask what there is to do somewhere, or for the quests "
+                       "of a dungeon (they are given elsewhere), instead of searching the web for quest lists. Not "
+                       "before plan_route for the zones of a route: plan_route reads those itself, takes along the "
+                       "quests that cost no way and names the rest in its result.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "zone": {"type": "string", "description": "English name of the zone or dungeon"},
+            },
+            "required": ["zone"],
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "gear_upgrades",
+        "description": "The best items this character can go for now, slot by slot, from the player's GearQuest Forever "
+                       "add-on (it ranks gear for the class, spec, level and faction on this server): what is worn, the "
+                       "top picks, where each comes from (quest, vendor, creature, dungeon, profession) and where that "
+                       "is. Call it when the player asks what gear to get, whether something is an upgrade worth a trip, "
+                       "or what to do next for their equipment; then name the pick and its source, and offer the route. "
+                       "Works only when the addons section lists GearQuestForever as loaded.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "slot": {"type": "string", "description": "One slot (Head, Neck, Shoulder, Back, Chest, Wrist, Hands, "
+                                                          "Waist, Legs, Feet, Finger, Trinket, MainHand, SecondaryHand, "
+                                                          "Ranged); leave out for every slot"},
+            },
+        },
+    },
+})
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "map_notes",
+        "description": "What the player's ForeverMapNotes add-on knows about a zone of this server: rare creatures with "
+                       "their spawn spots and drops, ore veins, herbs and chests (how many spawn spots and where they "
+                       "are densest), fishing pools, town NPCs (class and profession trainers, inn, bank, auction "
+                       "house, mailbox, repair, stable), library books and where they are turned in, boats, zeppelins "
+                       "and flight masters. With no zone and a node name (copper, peacebloom, firefin...) it names the "
+                       "zones with the most of it. Call it for \"where do I farm, mine or pick X\", \"which rares are "
+                       "here and what do they drop\", \"where is a mailbox or bank in X\", library books; do not search "
+                       "the web for these. Works only when the addons section lists ForeverMapNotes.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "zone": {"type": "string", "description": "English name of the zone or city; leave out for the "
+                                                          "player's zone (or, with a node name in what, for the "
+                                                          "best zones)"},
+                "what": {"type": "string", "description": "rares, ore, herbs, chests, fishing, npcs, books, travel, or "
+                                                          "one node or pool (copper, tin, peacebloom, firefin...); "
+                                                          "leave out for everything in the zone"},
+                "near_x": {"type": "number", "description": "With near_y: a place in that zone (where the player "
+                                                            "will be); of each kind of town NPC the ones nearest to "
+                                                            "it come first. Without it, the nearest to the player "
+                                                            "when they are in the zone, else the database's order"},
+                "near_y": {"type": "number"},
+            },
+        },
+    },
+})
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "pet_abilities",
+        "description": "For a hunter: the abilities a pet learns from tamed beasts (Bite, Claw, Dash, Screech...), from "
+                       "the player's Tamed add-on: which the pet's family can learn, the highest rank open at the "
+                       "pet's level against the rank the pet has, and which beasts to tame to learn it, the easiest to "
+                       "reach first, with coordinates. With a family it also lists beasts of that family to tame at "
+                       "this level and what they eat. Call it for \"what can my pet learn\", \"where do I get Bite 3\", "
+                       "\"which pet should I tame\"; do not answer these from memory. Works only when the addons "
+                       "section lists Tamed.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Pet family in English (Cat, Boar, Owl...); leave out for "
+                                                            "the family of the pet the hunter has out"},
+                "ability": {"type": "string", "description": "One ability in English (Bite, Claw...); leave out for "
+                                                             "all the family can learn"},
+            },
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "way_to",
+        "description": "How to get from where the player stands to another zone, city or island: every step in order "
+                       "(the road across a border, a boat or zeppelin and its pier, the tram, a portal, a flight between "
+                       "flight masters the character knows), each with its coordinates and the walk to it. It comes "
+                       "from the app's data of this server, whose boats and portals differ from the original game: "
+                       "call it for \"how do I get to X\", \"which boat\", \"where is the portal\", and before you "
+                       "describe any way between zones in words. For a route with quest stops use plan_route, which "
+                       "puts the same steps between the stops.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "zone": {"type": "string", "description": "English name of the zone, city or island to get to"},
+                "x": {"type": "number", "description": "A place in that zone (map coordinates), when known"},
+                "y": {"type": "number"},
+                "avoid": {"type": "array", "items": {"type": "string"},
+                          "description": "Ways not to take, as in plan_route (a flight master, 'Tram', a zone)"},
+            },
+            "required": ["zone"],
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "propose_auctions",
+        "description": "While the auction house window is OPEN (windows.auctionHouse): propose posting items from the "
+                       "bags. You name the items; the app looks each one up on the auction house right now and sets "
+                       "the price by its own rules (the lowest price of the market less a copper when several "
+                       "sellers confirm it; no price when there is one offer or none; nothing that a vendor pays "
+                       "about as much for), then shows a card the player accepts item by item. This auction house "
+                       "sells by the piece, at a price for one: there are no stack sizes to choose. Call it when the "
+                       "player asks to put things on the auction house, in one call with all the items worth "
+                       "selling there (trade goods, materials, unbound gear), not quest items or things they use. "
+                       "Give price_copper only when the player named a price themselves.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "items": {"type": "array", "description": "Items from the bags section",
+                          "items": {"type": "object", "properties": {
+                              "item": {"type": "string", "description": "Item name or id from bags"},
+                              "price_copper": {"type": "number", "description": "Price of ONE piece in copper, only "
+                                                                                "when the player set it"},
+                              "count": {"type": "integer", "description": "How many pieces, only when the player said "
+                                                                        "a number; left out, all of them go (do not "
+                                                                        "keep some back on your own)"}},
+                              "required": ["item"]}},
+                "hours": {"type": "number", "description": "How long, when the player said (the game takes the "
+                                                           "nearest of its lengths); leave out otherwise"},
+                "reason": {"type": "string", "description": "In the player's language, briefly"},
+            },
+            "required": ["items"],
+        },
+    },
+})
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "my_auctions",
+        "description": "The character's own auctions, read from the open auction house: each with a number, the item, "
+                       "the buyout, a bid if there is one and the time left; sold ones are marked. Call it when the "
+                       "player asks what they have up or wants one taken down.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+})
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "propose_auction_cancel",
+        "description": "Propose taking down auctions of the character's own (auction house window open): by the numbers "
+                       "my_auctions gave, or by item name for every auction of that item. The player confirms each on "
+                       "a card; the deposit of a cancelled auction is lost. Use it when the player asks to cancel, or "
+                       "to repost at another price (cancel first, then propose_auctions once the items are back in "
+                       "the bags).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "auctions": {"type": "array", "items": {"type": ["integer", "string"]},
+                             "description": "Numbers from my_auctions, or item names"},
+                "reason": {"type": "string", "description": "In the player's language, briefly"},
+            },
+            "required": ["auctions"],
+        },
+    },
+})
+
+
+def format_gear_upgrades(res: dict | None) -> str:
+    """Game result of gear_upgrades -> text for the model."""
+    if not res:
+        return "The game did not respond in time; the gear list could not be read."
+    if res.get("error"):
+        return f"Reading the gear list failed: {res['error']}. Judge upgrades from the equipment and item stats in the game data."
+    who = " ".join(str(x) for x in (res.get("spec"), str(res.get("class") or "").title()) if x)
+    lines = [f"Gear to go for, from the player's GearQuest Forever add-on ({who or 'this character'}, level {res.get('level', '?')}); "
+             "rank 1 is the best in the slot at this level:"]
+    for slot in res.get("slots") or []:
+        if not isinstance(slot, dict):
+            continue
+        lines.append(f"{slot.get('slot')}: wearing {slot.get('worn') or 'nothing'}")
+        for p in slot.get("picks") or []:
+            if not isinstance(p, dict):
+                continue
+            state = " — WORN NOW" if p.get("worn") else " — already owned" if p.get("have") else ""
+            gain = f", gear score {p['gain']:+g} over what is worn" if isinstance(p.get("gain"), (int, float)) else ""
+            src = ", ".join(str(x) for x in (p.get("source"), f"quest [{p['quest']}]" if p.get("quest") else "",
+                                             p.get("profession"), p.get("zone")) if x)
+            # (its coordinates are on other clients' maps: Stormwind's are moved onto this server's)
+            where = places_on_this_map(str(p["where"])) if p.get("where") else ""
+            lines.append(f"  {p.get('rank')}. [{p.get('name')}]{state} ({src}{gain})"
+                         + (f": {p['how']}" if p.get("how") else "") + (f" Where: {where}." if where else ""))
+        if not slot.get("picks"):
+            lines.append("  nothing listed for this level")
+    if res.get("waiting"):
+        lines.append("Not ranked yet (GearQuest is still building them; ask again in a moment): "
+                     + ", ".join(str(s) for s in res["waiting"]) + ".")
+    if res.get("tracked"):
+        lines.append("The player tracks in GearQuest: " + ", ".join(f"[{t}]" for t in res["tracked"]) + ".")
+    return "\n".join(lines)
+
+
+def format_zone_quests(zone: str, res: dict | None, entrances: list[str]) -> str:
+    """Game result of zone_quests -> text for the model."""
+    if not res:
+        return "The game did not respond in time; the quests of the zone could not be read."
+    if res.get("error"):
+        return f"Reading the quests of {zone} failed: {res['error']}"
+    quests = [q for q in res.get("quests") or [] if isinstance(q, dict) and q.get("title")]
+    level = res.get("level")
+    lines = [f"Quests the character{f' (level {level})' if level else ''} can pick up for {zone}: {len(quests)}"
+             + (f" (and {res['more']} more, not listed)" if res.get("more") else "") + "."]
+    for q in quests:
+        kind = ", ".join(str(x) for x in (f"level {q['level']}" if q.get("level") else "", q.get("type") or "") if x)
+        about = f" [belongs to {q['about']}]" if q.get("about") and str(q["about"]).lower() != zone.lower() else ""
+        lines.append(f"- [{q['title']}]{f' ({kind})' if kind else ''}{about} from {q.get('giver') or '?'} ({q.get('where') or '?'})"
+                     + (f": {q['objective']}" if q.get("objective") else ""))
+        for where in q.get("whereToGet") or []:
+            lines.append(f"    {where}")
+        if q.get("turnIn"):
+            lines.append(f"    turn in: {q['turnIn']}")
+    if res.get("later"):
+        lines.append(f"{res['later']} more open at a higher level than the character has.")
+    if entrances:
+        lines.append("Entrances in this zone: " + "; ".join(entrances) + ".")
+    if quests:
+        lines.append("To put some on the route, name their titles in plan_route's new_quests (and the zone in then): "
+                     "the route then picks each up at its giver. Quests already in the log are not listed here.")
+    return "\n".join(lines)
 
 
 def format_addon_options(addon: str, res: dict | None) -> str:
@@ -343,13 +652,19 @@ TOOLS.append({
         "description": "While the vendor window is OPEN (windows.merchant): op=sell proposes selling items from the bags "
                        "(items = names or ids from the bags section; whole stacks are sold), op=repair proposes repairing "
                        "all equipment. The player confirms with a click; a sale can be undone (buyback). Do not propose "
-                       "selling quest items, materials useful for the player's professions or gear worth equipping.",
+                       "selling quest items, materials useful for the player's professions or gear worth equipping. "
+                       "The app checks each item against the auction prices the player's auction add-on last saw and "
+                       "keeps back what is not junk (uncommon or better, gear with stats, anything that sells for "
+                       "clearly more on the auction house): the result says what was kept and why, tell the player.",
         "parameters": {
             "type": "object",
             "properties": {
                 "op": {"type": "string", "enum": ["sell", "repair"]},
                 "items": {"type": "array", "items": {"type": "string"},
-                          "description": "For sell: item names (e.g. 'Ruined Pelt') or ids from bags"},
+                          "description": "For sell: item names or ids from bags"},
+                "player_named": {"type": "boolean", "description": "true ONLY when the player named these very items "
+                                                                   "to sell (\"sell the green belt\"): then nothing "
+                                                                   "is kept back. Never for \"sell the junk\"."},
                 "reason": {"type": "string", "description": "In the player's language, briefly: why"},
             },
             "required": ["op", "reason"],
@@ -368,17 +683,17 @@ TOOLS.append({
                        "many days ago it was seen, stats, required level, the comparison with the equipped item "
                        "(vsEquipped) and, with the Pawn add-on, the upgrade in percent and the item's value. Use it "
                        "for every question about buying on the AH (upgrades, best item for a budget, cheapest "
-                       "materials, prices). Give filters, not only a name: e.g. 'best one-handed swords I can wear up "
-                       "to 100 gold' = weapon_type 1h_sword, max_price_gold 100 (the best come first, each says "
-                       "whether it beats the equipped item); upgrades_only true only when the player asks for "
-                       "upgrades. For the prices of KNOWN items (a profession's reagents and crafted items, a "
-                       "shopping list) give items instead: exact names or item ids, up to 40 in one call; each comes "
-                       "back with its price or why it has none. What to sell from the bags: compare_sell_prices.",
+                       "materials, prices). Give filters, not only a name: what the player said of the kind of item, "
+                       "the slot and the budget each has its filter (the best come first, each says whether it beats "
+                       "the equipped item); upgrades_only true only when the player asks for upgrades. For the prices "
+                       "of KNOWN items (a profession's reagents and crafted items, a shopping list) give items "
+                       "instead: exact names or item ids, up to 40 in one call; each comes back with its price or why "
+                       "it has none. What to sell from the bags: compare_sell_prices.",
         "parameters": {
             "type": "object",
             "properties": {
                 "items": {"type": "array", "items": {"type": "string"},  # one plain type: every provider takes it
-                          "description": "Exact item names (e.g. 'Linen Cloth') or item ids (e.g. '2589'; ids from the "
+                          "description": "Exact item names or item ids (ids from the "
                                          "professions or bags data are the surest), up to 40. Other filters are "
                                          "ignored with items."},
                 "query": {"type": "string", "description": "English words that must be in the item name (optional)"},
@@ -400,8 +715,53 @@ TOOLS.append({
     },
 })
 
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "auctionator_list",
+        "description": "The player's shopping list for the auction house: one list, kept by the app through the "
+                       "conversation and shown as the Auction house card under the answer, where one click searches "
+                       "all of it in Auctionator's Shopping tab or saves it as an Auctionator shopping list. items "
+                       "adds what this answer recommends buying (not what you only mention or advise against), and "
+                       "any items the player wants a list, a filter or a search in Auctionator for; what earlier "
+                       "answers put on the list stays on it. Give each item's own name as the game shows it (the "
+                       "item, not the quest or the task that wants it). An item leaves the list when the player has "
+                       "it or when you name it in remove (the player does not want it, or you now advise against "
+                       "it); one the last scan has no price for stays on it, marked so. The app prices the whole list "
+                       "from the newest scan; the result gives every item on it with its price now, the names the "
+                       "price data does not know (check those) and what left the list and why. An item the character "
+                       "cannot use (a requirement the game marks as not met) stays off the list, and the result says "
+                       "what it requires. Write the answer from this result. Call it in every answer that recommends "
+                       "buying something on the auction house or changes what the player should buy.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "items": {"type": "array", "items": {"type": "string"},
+                          "description": "Exact item names or item ids to put on the list, the best pick first"},
+                "remove": {"type": "array", "items": {"type": "string"},
+                           "description": "Items to take off the list (names or ids)"},
+                "name": {"type": "string",
+                         "description": "A few words in English naming the list (what it is for); it is saved in "
+                                        "Auctionator under this name. Leave it out to keep the list's name."},
+                "include_unusable": {"type": "boolean",
+                                     "description": "Also put on the list the items of this call the character "
+                                                    "cannot use (the result names them and what they require). Only "
+                                                    "when the player asked for such an item knowing that. Default "
+                                                    "false: they stay off the list."},
+            },
+        },
+    },
+})
+
 
 AH_EXACT_MAX = 40
+
+# Tools that only look something up (in the knowledge base, on the web, in the game) and change nothing: a client that
+# runs such calls at once may do so. The ones that ask the game then go to it together, and it answers them together,
+# instead of a round trip through the screenshot channel for each.
+READ_ONLY_TOOLS = frozenset({"search_knowledge_base", "fetch_url", "addon_options", "zone_quests", "gear_upgrades",
+                             "map_notes", "pet_abilities", "way_to", "my_auctions", "search_auction_house",
+                             "compare_sell_prices"})
 
 
 def _exact_item(x: Any) -> dict | None:
@@ -531,7 +891,8 @@ def format_auction(res: dict | None) -> str:
             seen = it.get("seen")
             lines.append(f"- [{it.get('name')}] (item {it.get('id')}) — {it.get('price', '?')}"
                          + (f" | seen {seen}" if seen else "")
-                         + (f", {it['available']} available" if it.get("available") else ""))
+                         + (f", {it['available']} available" if it.get("available") else "")
+                         + "".join(f" | {flag}: {it[flag]}" for flag in ("cannotUse", "tooLowLevel") if it.get(flag)))
         for m in res.get("missing") or []:
             ident = f"[{m.get('name')}]" if m.get("name") else "?"
             if m.get("id"):
@@ -542,8 +903,8 @@ def format_auction(res: dict | None) -> str:
         if not lines:
             lines.append("No prices found.")
         if res.get("ahOpen"):
-            lines.append("The auction house window is open: the game offers to search the items you recommend in "
-                         "Auctionator.")
+            lines.append("The auction house window is open: the card of auctionator_list searches its items in "
+                         "Auctionator at a click.")
         return "\n".join(head + lines)
     head.append(f"{res.get('dbItems', '?')} items in the price data, {res.get('matched', len(items))} match the filters, "
                 f"showing {len(items)} (sorted by {res.get('sort', 'upgrade')}). A price is the lowest buyout when the "
@@ -556,6 +917,18 @@ def format_auction(res: dict | None) -> str:
                         "the player's scale (higher is better; compare with the equipped item's value).")
     if res.get("skipped"):
         head.append("Left out: " + ", ".join(f"{n} {why}" for why, n in sorted(res["skipped"].items()) if n) + ".")
+    unusable = [u for u in res.get("unusable") or [] if isinstance(u, dict) and u.get("name")]
+    if unusable:
+        more = int((res.get("skipped") or {}).get("not usable") or 0) - len(unusable)
+        head.append("Left out because this character cannot use them: "
+                    + "; ".join(f"[{u['name']}] {u.get('price') or '?'} ({u.get('why') or 'cannot use'})" for u in unusable)
+                    + (f"; and {more} more" if more > 0 else "") + ". They are not picks for this character. When one "
+                    "of them is what the player asked about, or would have been the pick without its requirement, say "
+                    "that it was left out and what it requires. usable_only=false returns them in full, for when the "
+                    "player asks for such items.")
+    if res.get("usableCheck") == "skills only":
+        head.append("Only armor and weapon skills were checked: the game gave no item requirements (a profession, a "
+                    "class, a reputation) for these items, so say that a pick may have one.")
     if res.get("notLoaded"):
         head.append(f"{res['notLoaded']} matching items are not in the game's item cache yet; searching again in a "
                     "moment finds more.")
@@ -584,7 +957,7 @@ def format_auction(res: dict | None) -> str:
                 bits.append(f"{flag}: {it[flag]}")
         lines.append(" | ".join(bits))
     if res.get("ahOpen"):
-        lines.append("The auction house window is open: the game offers to search the items you recommend in Auctionator.")
+        lines.append("The auction house window is open: the card of auctionator_list searches its items in Auctionator at a click.")
     return "\n".join(head + lines)
 
 
@@ -606,55 +979,6 @@ TOOLS.append({
         },
     },
 })
-
-TOOLS.append({
-    "type": "function",
-    "function": {
-        "name": "auctionator_list",
-        "description": "Put items on the Auction house card under your answer: with one click the player searches "
-                       "them all on the auction house (Auctionator's Shopping tab) or saves them as an Auctionator "
-                       "shopping list. Use it when the player asks for a list, a filter or a search in Auctionator, "
-                       "or when you recommend buying items that search_auction_house did not price. Exact item "
-                       "names as the game shows them: the item, not the quest that wants it ([Small Furry Paw], not "
-                       "Small Furry Paws). It returns their prices from the last scan and the names the price data "
-                       "does not know (check those). Items search_auction_house returned in this answer go on the "
-                       "card by themselves when the answer names them in [brackets].",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "items": {"type": "array", "items": {"type": "string"}, "description": "Exact item names"},
-                "name": {"type": "string", "description": "A few words naming the list in English, e.g. "
-                                                          "'Darkmoon Faire turn-ins'"},
-            },
-            "required": ["items"],
-        },
-    },
-})
-AUCTIONATOR_LIST_MAX = 20  # items on one card
-
-
-def auctionator_list(args: dict, snapshot: dict) -> tuple[dict | None, str]:
-    """(the list for the Auction house card, text for the model)."""
-    installed = {str(a.get("name")) for a in (snapshot.get("addons") or []) if isinstance(a, dict)}
-    if installed and "Auctionator" not in installed:
-        return None, "Not shown: Auctionator is not installed, so there is nothing to search or save the items in."
-    raw = args.get("items")
-    names: list[str] = []
-    for n in raw if isinstance(raw, list) else [raw] if isinstance(raw, str) else []:
-        # Auctionator's search strings use " ; ^ for exact, terms and categories
-        n = re.sub(r'["^;]', "", str(n or "")).strip().strip("[]").strip()[:80]
-        if n and n.lower() not in {x.lower() for x in names}:
-            names.append(n)
-    if not names:
-        return None, "Not shown: give the exact item names."
-    if len(names) > AUCTIONATOR_LIST_MAX:
-        return None, f"Not shown: a card holds at most {AUCTIONATOR_LIST_MAX} items; give the ones worth buying."
-    title = re.sub(r"\s+", " ", re.sub(r'["^;|]', "", str(args.get("name") or ""))).strip()[:40] or "Shopping"
-    lst = {"name": f"ForeverAI: {title}", "items": names}
-    return lst, (f"The Auction house card under your answer holds {len(names)} items: the player searches them on "
-                 f"the auction house with one click or saves them as the Auctionator shopping list "
-                 f"\"{lst['name']}\". Say so in a few words; do not tell them to make the list by hand.")
-
 
 AH_CUT = 0.05  # the auction house keeps 5% of a sale
 # the auction house is worth a listing (the trip, the wait and a deposit lost when nothing sells) only when the whole
@@ -783,7 +1107,8 @@ def format_sell_prices(entries: list[dict], res: dict | None) -> str:
     return "\n".join(out)
 
 
-def validate_vendor(args: dict, snapshot: dict) -> tuple[dict | None, str]:
+def validate_vendor(args: dict, snapshot: dict, guard=None) -> tuple[dict | None, str]:
+    """``guard(bag item)`` -> (why it is kept back or None, why it may go): the check against auction prices."""
     merchant = ((snapshot.get("windows") or {}).get("merchant")) if isinstance(snapshot.get("windows"), dict) else None
     if not merchant:
         return None, "Rejected: the vendor window is not open (no windows.merchant). Tell the player to talk to a vendor."
@@ -813,15 +1138,22 @@ def validate_vendor(args: dict, snapshot: dict) -> tuple[dict | None, str]:
             continue
         if any(p["id"] == b.get("id") for p in picked):
             continue
+        kept, why = guard(b) if guard and args.get("player_named") is not True else (None, None)
+        if kept:
+            problems.append(f"{b.get('item')}: KEPT, {kept}")
+            continue
         value = int(b["sellCopper"]) * int(b.get("count") or 1)
         total += value
-        picked.append({"id": b.get("id"), "name": b.get("item"), "count": b.get("count"), "price": money(value)})
+        picked.append({"id": b.get("id"), "name": b.get("item"), "count": b.get("count"), "price": money(value),
+                       "why": why})
     if not picked:
         return None, "Rejected: nothing to sell. " + "; ".join(problems)
     action = {"id": next(_ids), "op": "vendor_sell", "addon": "Vendor", "items": picked, "total": money(total),
               "description": reason}
-    note = (" Skipped: " + "; ".join(problems)) if problems else ""
-    return action, f"Sale of {len(picked)} item types for {money(total)} proposed; waiting for the player to accept.{note}"
+    note = (" Not sold: " + "; ".join(problems) + ".") if problems else ""
+    sold = "; ".join(f"{p['name']} ×{p['count']} for {p['price']}" + (f" ({p['why']})" if p.get("why") else "") for p in picked)
+    return action, (f"Sale of {len(picked)} item types for {money(total)} proposed; waiting for the player to accept: "
+                    f"{sold}.{note}")
 
 
 def validate_abandon(args: dict, snapshot: dict) -> tuple[dict | None, str]:

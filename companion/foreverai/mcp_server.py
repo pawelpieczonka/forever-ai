@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import __version__
-from .tools import TOOLS
+from .tools import READ_ONLY_TOOLS, TOOLS
 
 PROTOCOL_VERSION = "2025-06-18"
 BRIDGE_TIMEOUT_S = 90  # requests to the game wait for it
@@ -25,7 +25,10 @@ BRIDGE_TIMEOUT_S = 90  # requests to the game wait for it
 
 def _tool_list() -> list[dict]:
     return [{"name": t["function"]["name"], "description": t["function"]["description"],
-             "inputSchema": t["function"]["parameters"]} for t in TOOLS]
+             "inputSchema": t["function"]["parameters"],
+             # (Claude Code runs the read-only calls of one turn at the same time, the others one after another)
+             **({"annotations": {"readOnlyHint": True}} if t["function"]["name"] in READ_ONLY_TOOLS else {})}
+            for t in TOOLS]
 
 
 def http_bridge(url: str, token: str) -> Callable[[str, dict], tuple[str, bool]]:

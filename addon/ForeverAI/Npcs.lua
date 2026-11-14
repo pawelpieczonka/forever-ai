@@ -12,6 +12,7 @@ local function budget() ns.Collect.Budget() end
 
 ------------------------------------------------------------------------ zone index (built once in the background)
 local byZone = {}       -- areaId -> { npcId, ... } for NPCs with a role or a title
+local flightIds = {}    -- npcId, ... of every flight master
 local mobsByZone = {}   -- areaId -> { npcId, ... } for every other creature (mobs, critters, plain NPCs)
 local zoneSpawns = {}   -- areaId -> decoded spawn points of those creatures (built on first use per zone)
 N.ready, N.count = false, 0
@@ -64,6 +65,9 @@ function N.BuildIndex()
       local okS, sub = pcall(QDB.QueryNPCSingle, id, "subName")
       flags = okF and tonumber(flags) or 0
       local titled = okS and type(sub) == "string" and sub ~= ""
+      if QDB.npcFlags and QDB.npcFlags.FLIGHT_MASTER and hasBit(flags, QDB.npcFlags.FLIGHT_MASTER) then
+        flightIds[#flightIds + 1] = id
+      end
       if titled or hasRole(flags, bits) then
         local okZ, zone = pcall(QDB.QueryNPCSingle, id, "zoneID")
         local okP, spawns = pcall(QDB.QueryNPCSingle, id, "spawns")
@@ -145,6 +149,158 @@ local function zoneRowsFor(QDB, area)
   return rows
 end
 
+------------------------------------------------------------------------ flight paths the character knows
+-- The game says which flight paths the character knows only while a flight master is open: they are remembered then,
+-- with the flight master who stood at the current one (ns.char.taxi = { known = { [path] = true },
+-- masters = { [flight master] = path }, at }). Paths are named "Town, Zone".
+-- This client's old functions (NumTaxiNodes, TaxiNodeGetType) list every node of the continent, the ones the
+-- character has never seen too, and none as "NONE": all eighteen looked known, with three on the flight map. So a path
+-- is known only when the game says the character can fly there (or stands there), and what an older version of the
+-- add-on remembered (no v) counts for nothing but the flight masters the character has stood at.
+local TAXI_V = 2
+local function taxiKnown()
+  local taxi = ns.char and ns.char.taxi
+  if type(taxi) ~= "table" then return nil end
+  if taxi.v ~= TAXI_V then
+    local known = {}
+    for _, path in pairs(type(taxi.masters) == "table" and taxi.masters or {}) do known[path] = true end
+    taxi = { known = known, masters = taxi.masters or {}, at = taxi.at, v = TAXI_V }
+    ns.char.taxi = taxi
+  end
+  return taxi
+end
+
+local function readTaxi()
+  if not ns.char then return end
+  local old = taxiKnown()
+  local known, masters, seen, current = {}, (old and old.masters) or {}, {}, nil
+  local mapID = GetTaxiMapID and safe(GetTaxiMapID)
+  local nodes = mapID and C_TaxiMap and C_TaxiMap.GetAllTaxiNodes and safe(C_TaxiMap.GetAllTaxiNodes, mapID)
+  local state = Enum and Enum.FlightPathState
+  if type(nodes) == "table" and #nodes > 0 and type(state) == "table" then
+    for _, node in ipairs(nodes) do
+      local name = type(node) == "table" and clean(node.name)
+      if name then
+        seen[#seen + 1] = name .. "=" .. tostring(node.state)
+        if node.state == state.Current or node.state == state.Reachable then known[name] = true end
+        if node.state == state.Current then current = name end
+      end
+    end
+  elseif NumTaxiNodes and TaxiNodeName and TaxiNodeGetType then
+    for i = 1, (tonumber((safe(NumTaxiNodes))) or 0) do
+      local name, kind = clean((safe(TaxiNodeName, i))), (safe(TaxiNodeGetType, i))
+      if name then
+        seen[#seen + 1] = name .. "=" .. tostring(kind)
+        if kind == "CURRENT" or kind == "REACHABLE" then known[name] = true end
+        if kind == "CURRENT" then current = name end
+      end
+    end
+  end
+  local npc = current and clean((safe(UnitName, "npc")))
+  if npc then masters[npc] = current end
+  if ns.Log then ns.Log("taxi", string.format("flight map %s: %s", tostring(mapID), table.concat(seen, ", "))) end
+  if next(known) then
+    -- a flight map shows one continent: what is known elsewhere stays known
+    for path in pairs((old and old.known) or {}) do
+      local shown = false
+      for _, line in ipairs(seen) do
+        if line:sub(1, #path + 1) == path .. "=" then shown = true break end
+      end
+      if not shown then known[path] = true end
+    end
+    ns.char.taxi = { known = known, masters = masters, at = time(), v = TAXI_V }
+  end
+end
+ns.On("TAXIMAP_OPENED", function() pcall(readTaxi) end)
+
+-- Has the character discovered this flight master's path? "known", "not discovered", or nil when the add-on cannot
+-- tell: no flight master opened yet, or a zone with more than one flight master and a known path in it.
+-- the character's flight paths that lie in a zone, named as the flight map shows them
+local function pathsIn(taxi, zoneName)
+  -- a path is named "Town, Zone", the zone often in short ("Refuge Pointe, Arathi", "Stormwind, Elwynn",
+  -- "Ironforge, Dun Morogh"): it lies in the flight master's zone when either name begins the zone's
+  local zone, found = tostring(zoneName or ""):lower(), {}
+  for path in pairs(taxi.known or {}) do
+    local town, where = path:lower():match("^(.-),%s*(.+)$")
+    town, where = town or path:lower(), where or ""
+    if zone ~= "" and (zone:sub(1, #where) == where and where ~= "" or zone:sub(1, #town) == town
+        or where:sub(1, #zone) == zone) then
+      found[#found + 1] = path
+    end
+  end
+  return found
+end
+
+function N.FlightState(name, zoneName, mastersInZone)
+  local taxi = taxiKnown()
+  if not taxi then return nil end
+  if taxi.masters and taxi.masters[name] then return "known" end
+  if #pathsIn(taxi, zoneName) == 0 then return "not discovered" end
+  if mastersInZone == 1 then return "known" end
+end
+
+-- The name of a flight master's path on the flight map ("Sentinel Hill, Westfall"): what the player picks there, where
+-- the flight master's own name is nowhere to be seen. Known for the ones the character has stood at, and for the only
+-- flight master of a zone with one known path; nil otherwise.
+function N.FlightPath(name, zoneName, mastersInZone)
+  local taxi = taxiKnown()
+  if not taxi then return nil end
+  if taxi.masters and taxi.masters[name] then return taxi.masters[name] end
+  local found = pathsIn(taxi, zoneName)
+  if #found == 1 and mastersInZone == 1 then return found[1] end
+end
+
+-- The flight masters of the player's faction in every zone of the player's continent, with whether the character
+-- knows their flight path: a route that goes on into another zone passes them too. Of the other continents only the
+-- ones the character knows, marked "(on Kalimdor)": a route that crosses the sea flies on from where the boat lands.
+function N.FlightMasters()
+  local QDB, ZDB = questie()
+  if not (QDB and N.ready) then return nil end
+  local function continent(mapID)
+    for _ = 1, 10 do
+      local info = mapID and C_Map.GetMapInfo(mapID)
+      if not info then return nil end
+      if Enum and Enum.UIMapType and info.mapType == Enum.UIMapType.Continent then return mapID end
+      mapID = info.parentMapID ~= 0 and info.parentMapID or nil
+    end
+  end
+  local here = continent(C_Map.GetBestMapForUnit("player"))
+  local faction = UnitFactionGroup("player") == "Horde" and "H" or "A"
+  local rows, perZone = {}, {}
+  for _, id in ipairs(flightIds) do
+    local okN, name = pcall(QDB.QueryNPCSingle, id, "name")
+    local okF, friendly = pcall(QDB.QueryNPCSingle, id, "friendlyToFaction")
+    if okN and name and not (okF and type(friendly) == "string" and friendly ~= "" and not friendly:find(faction, 1, true)) then
+      local _, sub = pcall(QDB.QueryNPCSingle, id, "subName")
+      local _, spawns = pcall(QDB.QueryNPCSingle, id, "spawns")
+      for area, pts in pairs(type(spawns) == "table" and spawns or {}) do
+        local p = type(pts) == "table" and pts[1]
+        local mapID = ZDB and ZDB.GetUiMapIdByAreaId and safe(ZDB.GetUiMapIdByAreaId, ZDB, area)
+        local zone = C_Map.GetAreaInfo and C_Map.GetAreaInfo(area)
+        if p and p[1] and p[1] > 0 and zone then
+          local land = here and mapID and continent(mapID) or here
+          local info = land and land ~= here and C_Map.GetMapInfo(land)
+          rows[#rows + 1] = { name = name, sub = type(sub) == "string" and sub ~= "" and sub or nil, zone = zone, x = p[1], y = p[2],
+                              far = land ~= here, land = info and info.name or nil }
+          perZone[zone] = (perZone[zone] or 0) + 1
+        end
+      end
+    end
+  end
+  table.sort(rows, function(a, b) return a.zone < b.zone or (a.zone == b.zone and a.name < b.name) end)
+  local out = {}
+  for _, r in ipairs(rows) do
+    local state = N.FlightState(r.name, r.zone, perZone[r.zone]) or "not known yet"
+    local path = state == "known" and N.FlightPath(r.name, r.zone, perZone[r.zone])
+    if path then state = state .. ": " .. path end -- "flight path known: Sentinel Hill, Westfall"
+    if not r.far or path or state == "known" then
+      out[#out + 1] = string.format("%s%s [flight path %s] — %s %.1f, %.1f%s", r.name, r.sub and (" <" .. r.sub .. ">") or "",
+        state, r.zone, r.x, r.y, r.far and (" (on " .. (r.land or "another continent") .. ")") or "")
+    end
+  end
+  return #out > 0 and out or nil
+end
+
 -- NPCs with a role in the player's zone, nearest first
 function N.ZoneNPCs(limit)
   local QDB, ZDB = questie()
@@ -165,16 +321,104 @@ function N.ZoneNPCs(limit)
     end
     rows[#rows + 1] = { d = best.d, m = best.m, name = z.name, sub = z.sub, roles = z.roles, x = best.x, y = best.y }
   end
+  -- in a town the nearest few dozen were guards, recruiters and emissaries with a title and no role: there the
+  -- list is for what an NPC does (the quest givers come with the quests)
+  if IsResting and IsResting() then
+    local useful = {}
+    for _, r in ipairs(rows) do
+      if #r.roles > 0 then useful[#useful + 1] = r end
+    end
+    rows = useful
+  end
   table.sort(rows, function(a, b) return a.d < b.d end)
   local zoneName = C_Map.GetAreaInfo and C_Map.GetAreaInfo(area) or ""
+  local masters = 0
+  for _, r in ipairs(rows) do
+    if tContains(r.roles, "flight master") then masters = masters + 1 end
+  end
   local out = {}
   for k = 1, math.min(limit or 45, #rows) do
     local r = rows[k]
+    local roles = r.roles
+    local state = tContains(roles, "flight master") and N.FlightState(r.name, zoneName, masters)
+    local path = state == "known" and N.FlightPath(r.name, zoneName, masters)
+    if path then state = state .. ": " .. path end
+    if state then -- whether the character has this flight path, and its name on the flight map
+      roles = { unpack(r.roles) }
+      for i, role in ipairs(roles) do
+        if role == "flight master" then roles[i] = "flight master, flight path " .. state end
+      end
+    end
     out[k] = string.format("%s%s%s — %s %.1f, %.1f (%s)", r.name, r.sub and (" <" .. r.sub .. ">") or "",
-      #r.roles > 0 and (" [" .. table.concat(r.roles, ", ") .. "]") or "", zoneName, r.x, r.y, fmtDist(r.d, r.m))
+      #roles > 0 and (" [" .. table.concat(roles, ", ") .. "]") or "", zoneName, r.x, r.y, fmtDist(r.d, r.m))
     if ns.Collect and ns.Collect.npcCoords then ns.Collect.npcCoords[r.name] = { zone = zoneName, x = r.x, y = r.y } end
   end
   return out
+end
+
+------------------------------------------------------------------------ the services this character uses
+-- The nearest of each in the player's zone: the trainer of their class, of their professions and (a hunter) of their
+-- pet, the stable master, repair, ammunition, general goods, innkeeper, bank, auctioneer, flight master. The list of
+-- every NPC with a role is cut to the nearest few dozen: in a city the hunter trainer is rarely among them.
+local CRAFT = { leatherworking = "leatherwork", skinning = "skinn", cooking = "cook", ["first aid"] = "physician",
+  fishing = "fish", tailoring = "tailor", blacksmithing = "smith", engineering = "engineer", alchemy = "alchem",
+  herbalism = "herbalis", mining = "min", enchanting = "enchant" }
+
+function N.Services()
+  local QDB, ZDB = questie()
+  if not (QDB and N.ready) then return nil end
+  local area, px, py, mapID = playerPos(ZDB)
+  if not (area and byZone[area]) then return nil end
+  local class, classFile = UnitClass("player")
+  class = type(class) == "string" and class:lower() or ""
+  local kinds = { { class .. " trainer", function(sub) return sub == class .. " trainer" end } }
+  if classFile == "HUNTER" then
+    kinds[#kinds + 1] = { "pet trainer", function(sub) return sub == "pet trainer" end }
+    kinds[#kinds + 1] = { "stable master", function(sub, has) return has.stablemaster or sub == "stable master" end }
+    kinds[#kinds + 1] = { "ammunition", function(sub, has)
+      return has.vendor and (sub:find("bow", 1, true) or sub:find("gun", 1, true) or sub:find("fletcher", 1, true)
+        or sub:find("ammunition", 1, true)) ~= nil end }
+  end
+  for _, line in ipairs(ns.Collect and ns.Collect.sections.skills and ns.Collect.sections.skills() or {}) do
+    local craft = tostring(line):match("^(.-) %d+/%d+$")
+    local stem = craft and CRAFT[craft:lower()]
+    if stem then
+      kinds[#kinds + 1] = { craft:lower() .. " trainer", function(sub, has)
+        if not has.trainer then return false end
+        return sub:find(stem, 1, true) ~= nil or (stem == "physician" and sub:find("first aid", 1, true) ~= nil)
+      end }
+    end
+  end
+  for _, role in ipairs({ "repair", "innkeeper", "banker", "auctioneer", "flight master" }) do
+    kinds[#kinds + 1] = { role, function(_, has) return has[role] end }
+  end
+  kinds[#kinds + 1] = { "general goods", function(sub, has) return has.vendor and sub:find("general goods", 1, true) ~= nil end }
+  local zoneName = C_Map.GetAreaInfo and C_Map.GetAreaInfo(area) or ""
+  local out = {}
+  for _, kind in ipairs(kinds) do
+    local best
+    for _, z in ipairs(zoneRowsFor(QDB, area)) do
+      local has = {}
+      for _, role in ipairs(z.roles) do has[role] = true end
+      if kind[2]((z.sub or ""):lower(), has) then
+        for _, s in ipairs(z.pts) do
+          local d, isM = 999999, false
+          if px then d, isM = meters(mapID, px, py, s[1], s[2]) end
+          if not best or d < best.d then best = { z = z, x = s[1], y = s[2], d = d, m = isM } end
+        end
+      end
+    end
+    if best then
+      local state = kind[1] == "flight master" and N.FlightState(best.z.name, zoneName, 1)
+      out[#out + 1] = string.format("%s: %s%s%s — %s %.1f, %.1f%s", kind[1], best.z.name,
+        best.z.sub and (" <" .. best.z.sub .. ">") or "", state and (" [flight path " .. state .. "]") or "", zoneName,
+        best.x, best.y, px and (" (" .. fmtDist(best.d, best.m) .. ")") or "")
+      if ns.Collect and ns.Collect.npcCoords then
+        ns.Collect.npcCoords[best.z.name] = { zone = zoneName, x = best.x, y = best.y }
+      end
+    end
+  end
+  return #out > 0 and out or nil
 end
 
 ------------------------------------------------------------------------ creatures around the player (game database)
@@ -256,12 +500,55 @@ local function questTargets(QDB)
   return byNpc, text
 end
 
+-- (a capital has no creatures to fight: the database lists its children, guards and festival visitors there)
+local CAPITALS = { [1453] = true, [1454] = true, [1455] = true, [1456] = true, [1457] = true, [1458] = true }
+-- Is there an NPC at this place of a map, somebody to deal with (a vendor, a trainer, a flight master, a banker, a
+-- quest giver)? Its name; false when nobody stands there (a cave mouth, a crossing, a creature to kill); nil while
+-- the NPC data is still being read (ask again). ``title``: what the stop is called: an NPC named in it counts from a
+-- little further off, and a creature without a role or a title counts only when it is named and not hostile.
+local AT_UNITS, NAMED_UNITS = 0.4, 1.5
+function N.NpcAt(mapID, x, y, title)
+  local QDB, ZDB = questie()
+  if not QDB then return false end
+  if not N.ready then
+    N.BuildIndex()
+    return nil
+  end
+  local area = ZDB and mapID and safe(ZDB.GetAreaIdByUiMapId, ZDB, mapID)
+  if not (area and x and y) then return false end
+  local low = tostring(title or ""):lower()
+  local best, bestD
+  local function try(name, pts, mustBeNamed)
+    local named = low ~= "" and low:find(tostring(name):lower(), 1, true) ~= nil
+    if mustBeNamed and not named then return end
+    for _, s in ipairs(pts) do
+      if s[1] and s[2] then
+        local dx, dy = math.abs(s[1] - x), math.abs(s[2] - y)
+        local reach = named and NAMED_UNITS or AT_UNITS
+        if dx <= reach and dy <= reach then
+          local d = dx + dy - (named and 10 or 0)
+          if not bestD or d < bestD then best, bestD = name, d end
+        end
+      end
+    end
+  end
+  for _, z in ipairs(zoneRowsFor(QDB, area)) do try(z.name, z.pts, false) end
+  if not best then
+    local playerBit = UnitFactionGroup("player") == "Horde" and 4 or 2
+    for _, m in ipairs(spawnsOf(QDB, area)) do
+      local hostile = m.enemy and (hasBit(m.enemy, 1) or hasBit(m.enemy, playerBit))
+      if not hostile then try(m.name, m.pts, true) end
+    end
+  end
+  return best or false
+end
+
 function N.NearbyMobs(radius, limit)
   local QDB, ZDB = questie()
   if not QDB then return nil end
   if not N.ready then N.BuildIndex() return nil end
   local area, px, py, mapID = playerPos(ZDB)
-  if not (area and px) then return nil end
+  if not (area and px) or CAPITALS[mapID] then return nil end
   radius = radius or 400 -- meters
   local playerBit = UnitFactionGroup("player") == "Horde" and 4 or 2
   local targets, objectives = questTargets(QDB)
@@ -355,10 +642,26 @@ end
 
 if ns.Collect and ns.Collect.sections then
   ns.Collect.sections.zoneNPCs = function() return N.ZoneNPCs(45) end
+  ns.Collect.sections.flightMasters = function() return N.FlightMasters() end
+  ns.Collect.sections.services = function() return N.Services() end
   ns.Collect.sections.around = function() return N.Around(25) end
   ns.Collect.sections.nearbyMobs = function() return N.NearbyMobs(400, 20) end
 end
 
+-- Is the NPC data on its way: being read now, or the quest database is there and may still be loading its own data
+-- (the first while after a loading screen)? A question asked then waits for it. With no quest database, or one that
+-- never comes up, nothing waits.
+local LOADING_S = 40
+local loadedAt
+function N.Loading()
+  if N.ready then return false end
+  if N.building then return true end
+  return QuestieLoader ~= nil and GetTime() - (loadedAt or GetTime()) < LOADING_S
+end
+
 local f = CreateFrame("Frame")
 f:RegisterEvent("PLAYER_LOGIN")
-f:SetScript("OnEvent", function() C_Timer.After(12, N.BuildIndex) end)
+f:SetScript("OnEvent", function()
+  loadedAt = GetTime()
+  C_Timer.After(2, N.BuildIndex) -- (soon: the first question after login needs it)
+end)

@@ -26,3 +26,18 @@ def memory_keyring(monkeypatch):
     keystore.reset()
     yield kr
     keystore.reset()
+
+
+@pytest.fixture(autouse=True)
+def no_zone_quests_for_routes(monkeypatch):
+    """A route is planned with the quests of its zones read from the game; in tests no game answers, and each route
+    would wait for it. The tests of that reading turn it on themselves."""
+    from foreverai.service import Service
+    monkeypatch.setattr(Service, "fetch_route_quests", False)
+
+
+@pytest.fixture(autouse=True)
+def no_language_naming(monkeypatch):
+    """The language of a conversation is named by a model call of its own: off in the tests, which count the calls."""
+    from foreverai.service import Service
+    monkeypatch.setattr(Service, "name_language", False)

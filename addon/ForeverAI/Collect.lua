@@ -117,11 +117,69 @@ local function itemStats(link)
 end
 
 -- item facts depend on the item, on what is equipped (comparison), on the level and on skills
-local factsCache = {}
+local factsCache, unmetCache = {}, {}
 do
   local f = CreateFrame("Frame")
   for _, e in ipairs({ "PLAYER_EQUIPMENT_CHANGED", "PLAYER_LEVEL_UP", "SKILL_LINES_CHANGED" }) do pcall(f.RegisterEvent, f, e) end
-  f:SetScript("OnEvent", function() wipe(factsCache) end)
+  f:SetScript("OnEvent", function() wipe(factsCache) wipe(unmetCache) end)
+end
+
+-- What the game itself marks as not met by this character: the lines of an item's tooltip it colours red (a
+-- profession and the skill in it, a class, a reputation, a recipe already known). Read from the game's own tooltip,
+-- so nothing here has to know what a requirement looks like. C.unmetFrom tells where the colours came from; it stays
+-- nil while neither the tooltip data nor a tooltip of the add-on's own gave any.
+local scanTip, scanTipTried
+local function isRed(r, g, b) return type(r) == "number" and r > 0.9 and (g or 1) < 0.3 and (b or 1) < 0.3 end
+local function unmet(link)
+  local hit = unmetCache[link]
+  if hit then return hit end
+  local out, lines, colours = {}, 0, false
+  local data = C_TooltipInfo and C_TooltipInfo.GetHyperlink and safe(C_TooltipInfo.GetHyperlink, link)
+  for _, line in ipairs(type(data) == "table" and type(data.lines) == "table" and data.lines or {}) do
+    lines = lines + 1
+    for _, side in ipairs({ "left", "right" }) do
+      local c = line[side .. "Color"]
+      if type(c) == "table" then
+        colours = true
+        local text = clean(line[side .. "Text"])
+        if text and text ~= "" and isRed(c.r, c.g, c.b) then out[#out + 1] = strip(text) end
+      end
+    end
+  end
+  if colours then
+    C.unmetFrom = "tooltip data"
+  else
+    -- the tooltip data of this client carries no colours: a tooltip of the add-on's own, never shown, has them
+    if not scanTipTried then
+      scanTipTried = true
+      local ok, tip = pcall(CreateFrame, "GameTooltip", "ForeverAIScanTooltip", nil, "GameTooltipTemplate")
+      scanTip = ok and type(tip) == "table" and tip.SetHyperlink and tip.NumLines and tip or nil
+    end
+    if scanTip and pcall(function()
+      scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
+      scanTip:ClearLines()
+      scanTip:SetHyperlink(link)
+    end) then
+      lines = 0
+      for i = 1, safe(scanTip.NumLines, scanTip) or 0 do
+        lines = lines + 1
+        for _, side in ipairs({ "Left", "Right" }) do
+          local fs = _G["ForeverAIScanTooltipText" .. side .. i]
+          local text = fs and fs.GetText and fs.GetTextColor and (side == "Left" or (fs.IsShown and fs:IsShown()))
+            and clean(fs:GetText())
+          if text and text ~= "" then
+            colours = true
+            if isRed(fs:GetTextColor()) then out[#out + 1] = strip(text) end
+          end
+        end
+      end
+      pcall(scanTip.Hide, scanTip)
+      if colours then C.unmetFrom = "hidden tooltip" end
+    end
+  end
+  if lines == 0 or not colours then return nil end -- nothing read (the item's text is not there yet): asked again
+  unmetCache[link] = out
+  return out
 end
 
 local skillSetCache, skillSetAt = nil, 0
@@ -161,6 +219,7 @@ function C.ItemFacts(link, compare)
   local list = {}
   for k, v in pairs(stats) do if k ~= "Armor" then list[#list + 1] = string.format("%s %s%s", k, v > 0 and "+" or "", v) end end
   table.sort(list)
+  local why, noSkill = {}, nil -- why this character cannot use it
   if equipLoc and equipLoc ~= "" and equipLoc ~= "INVTYPE_NON_EQUIP_IGNORE" then
     f.stats = #list > 0 and table.concat(list, ", ") or "NONE — this item has no stats (read from the game)"
     if stats.Armor then f.armor = stats.Armor end
@@ -169,7 +228,10 @@ function C.ItemFacts(link, compare)
       local need = subType:lower()
       local have = skillSet()
       local ok = have[need] or have[SKILL_OF_TYPE[need] or need] or NO_SKILL_TYPE[need]
-      if next(have) and not ok then f.cannotUse = "missing skill: " .. subType end
+      if next(have) and not ok then
+        noSkill = subType
+        why[#why + 1] = "missing skill: " .. subType
+      end
     end
     if compare then
       local diffs = {}
@@ -191,7 +253,15 @@ function C.ItemFacts(link, compare)
       if #diffs > 0 then f.vsEquipped = table.concat(diffs, " | ") end
     end
   end
-  factsCache[cacheKey] = f
+  -- ... and every requirement the game marks as not met (the level has its own fact, the skill its own line above)
+  local levelLine = f.tooLowLevel and type(ITEM_MIN_LEVEL) == "string" and safe(string.format, ITEM_MIN_LEVEL, reqLevel)
+  local marked = unmet(link)
+  for _, text in ipairs(marked or {}) do
+    if text ~= levelLine and text ~= noSkill then why[#why + 1] = "not met: " .. text end
+  end
+  if #why > 0 then f.cannotUse = table.concat(why, "; ") end
+  -- (a tooltip that could not be read this once, in a client whose tooltips are read: the facts are made again)
+  if marked or not C.unmetFrom then factsCache[cacheKey] = f end
   return f
 end
 
@@ -221,9 +291,21 @@ local function gameTooltipLines()
   return #out > 0 and table.concat(out, "\n") or nil
 end
 
+-- a tooltip of the add-on's own window (the hint of one of its buttons) is not what the player looked at in the game
+local function ownFrame(frame)
+  for _ = 1, 12 do
+    if type(frame) ~= "table" or not frame.GetParent then return false end
+    local name = frame.GetName and frame:GetName()
+    if type(name) == "string" and name:find("^ForeverAI") then return true end
+    frame = frame:GetParent()
+  end
+  return false
+end
+
 C.lastTooltip = nil
 function C.CaptureTooltip(force)
   local text = gameTooltipLines()
+  if text and ownFrame(GameTooltip:GetOwner()) then return C.lastTooltip end
   if text then
     local owner = GameTooltip:GetOwner()
     local _, link = safe(GameTooltip.GetItem, GameTooltip)
@@ -277,6 +359,15 @@ function S.player()
     hearthstone = safe(GetBindLocation),
   }
   if p.xp and p.xpMax and p.xpMax > 0 then p.xpPct = math.floor(p.xp / p.xpMax * 100) end
+  -- the way back to the inn: whether the hearthstone can be used now (a route may end with it)
+  if p.hearthstone then
+    local cooldown = (C_Container and C_Container.GetItemCooldown) or GetItemCooldown
+    local start, duration = safe(cooldown, 6948)
+    local left = (tonumber(start) or 0) > 0 and (start + (tonumber(duration) or 0) - GetTime()) or 0
+    p.hearthstone = p.hearthstone .. (left > 1 and string.format(" (hearthstone ready in %d min)", math.ceil(left / 60))
+      or " (hearthstone ready)")
+  end
+  if UnitOnTaxi and safe(UnitOnTaxi, "player") then p.onFlight = true end
   local inInstance, instanceType = safe(IsInInstance)
   if inInstance then
     local iname, _, _, difficultyName = safe(GetInstanceInfo)
@@ -289,12 +380,19 @@ function S.player()
     p.mapID = mapID
     local pos = C_Map.GetPlayerMapPosition(mapID, "player")
     if pos then p.coords = string.format("%.1f, %.1f", pos.x * 100, pos.y * 100) end
+    -- a ghost asks where the body is: the game knows it on the map the player is on
+    if p.dead and C_DeathInfo and C_DeathInfo.GetCorpseMapPosition then
+      local corpse = safe(C_DeathInfo.GetCorpseMapPosition, mapID)
+      if type(corpse) == "table" and corpse.x and corpse.y and (corpse.x > 0 or corpse.y > 0) then
+        p.corpse = string.format("%s %.1f, %.1f", tostring(p.map), corpse.x * 100, corpse.y * 100)
+      end
+    end
   end
   if C_SpecializationInfo and C_SpecializationInfo.GetSpecialization then
     local spec = safe(C_SpecializationInfo.GetSpecialization)
     if spec and spec > 0 then
       local _, specName = safe(C_SpecializationInfo.GetSpecializationInfo, spec)
-      p.spec = specName
+      if specName ~= p.class then p.spec = specName end -- this client names the class when there are no specs
     end
   end
   return p
@@ -532,6 +630,9 @@ function S.talents()
 end
 
 -- NPC names with their first known spawn (zone x, y) from Questie's database
+-- the NPCs (by[1]) and objects (by[2]) that start or end a quest, with where they are: "Name (Zone x, y); ..."
+local questieGivers
+
 local function questieNPCs(questie, list)
   local names = {}
   for _, id in ipairs(list or {}) do
@@ -556,6 +657,33 @@ local function questieNPCs(questie, list)
   return #names > 0 and table.concat(names, "; ") or nil
 end
 
+-- the objects (a box, a monument, a board) that start or end a quest, as questieNPCs does for NPCs
+local function questieObjects(questie, list)
+  local names = {}
+  for _, id in ipairs(list or {}) do
+    local okO, obj = pcall(questie.GetObject, questie, id)
+    if not (okO and type(obj) == "table") then okO, obj = pcall(questie.GetObject, id) end
+    if okO and type(obj) == "table" and obj.name then
+      local where = ""
+      for zoneID, spawns in pairs(type(obj.spawns) == "table" and obj.spawns or {}) do
+        local s1 = spawns and spawns[1]
+        local area = C_Map.GetAreaInfo and C_Map.GetAreaInfo(zoneID)
+        if s1 then where = string.format(" (%s %.1f, %.1f)", area or ("zone " .. zoneID), s1[1], s1[2]) end
+        break
+      end
+      names[#names + 1] = obj.name .. where
+    end
+  end
+  return #names > 0 and table.concat(names, "; ") or nil
+end
+
+questieGivers = function(questie, by)
+  if type(by) ~= "table" then return nil end
+  local npcs, objects = questieNPCs(questie, by[1]), questie.GetObject and questieObjects(questie, by[2]) or nil
+  if npcs and objects then return npcs .. "; " .. objects end
+  return npcs or objects
+end
+
 local function questieDB()
   if QuestieLoader and QuestieLoader.ImportModule then
     local ok, db = pcall(QuestieLoader.ImportModule, QuestieLoader, "QuestieDB")
@@ -566,24 +694,59 @@ end
 ------------------------------------------------------------------------ where to get quest objectives (Questie database)
 -- For every objective: the creatures to kill, the objects to use, and for items which objects contain them, which
 -- creatures drop them and which vendors sell them, with every known spawn point.
+-- Second result: where the thing is when it has no place on a zone map (the database lists it under a dungeon, with
+-- -1, -1 for coordinates): the name of that dungeon.
 local function spawnPoints(spawns)
-  local out = {}
+  local out, inside = {}, nil
   for area, pts in pairs(type(spawns) == "table" and spawns or {}) do
     for _, p in ipairs(type(pts) == "table" and pts or {}) do
-      if type(p) == "table" and tonumber(p[1]) and p[1] > 0 then out[#out + 1] = { area = area, x = p[1], y = p[2] } end
+      if type(p) == "table" and tonumber(p[1]) and p[1] > 0 then
+        out[#out + 1] = { area = area, x = p[1], y = p[2] }
+      elseif type(p) == "table" and not inside then
+        inside = C_Map.GetAreaInfo and safe(C_Map.GetAreaInfo, area) or nil
+      end
     end
   end
-  return out
+  return out, #out == 0 and inside or nil
 end
 
-local function npcSource(QDB, npcId, how)
+local RANK = { [1] = "elite", [2] = "rare elite", [3] = "boss", [4] = "rare" }
+
+local function span(a, b)
+  a, b = tonumber(a), tonumber(b)
+  if not a then return nil end
+  return (b and b ~= a) and (a .. "-" .. b) or tostring(a)
+end
+
+-- a creature that gives an objective, with what tells how hard and how sure it is: its level, rank and health, and for
+-- an item it drops, the chance of the drop (Questie's drop data: the private server's for quest items, else Wowhead's)
+local function npcSource(QDB, npcId, how, itemId)
   local okN, name = pcall(QDB.QueryNPCSingle, npcId, "name")
   if not (okN and type(name) == "string") then return nil end
   local _, spawns = pcall(QDB.QueryNPCSingle, npcId, "spawns")
   local _, minL = pcall(QDB.QueryNPCSingle, npcId, "minLevel")
   local _, maxL = pcall(QDB.QueryNPCSingle, npcId, "maxLevel")
-  local lvl = tonumber(minL) and ((tonumber(maxL) and maxL ~= minL) and (minL .. "-" .. maxL) or tostring(minL)) or nil
-  return { how = how, name = name, level = lvl, pts = spawnPoints(spawns) }
+  local _, rank = pcall(QDB.QueryNPCSingle, npcId, "rank")
+  local _, minH = pcall(QDB.QueryNPCSingle, npcId, "minLevelHealth")
+  local _, maxH = pcall(QDB.QueryNPCSingle, npcId, "maxLevelHealth")
+  local chance
+  if itemId and type(QDB.GetItemDroprate) == "function" then
+    local okD, rate = pcall(QDB.GetItemDroprate, itemId, npcId)
+    chance = okD and type(rate) == "table" and tonumber(rate[1]) or nil
+  end
+  local facts = {}
+  local lvl = span(minL, maxL)
+  if lvl then facts[#facts + 1] = "level " .. lvl end
+  if RANK[tonumber(rank) or 0] then facts[#facts + 1] = RANK[tonumber(rank)] end
+  local hp = span(minH, maxH)
+  if hp and tonumber(minH) > 0 then facts[#facts + 1] = hp .. " health" end
+  if chance and chance > 0 then
+    facts[#facts + 1] = (chance >= 10 and string.format("%d%%", math.floor(chance + 0.5)) or string.format("%.1f%%", chance))
+      .. " drop chance"
+  end
+  local pts, inside = spawnPoints(spawns)
+  return { how = how, name = name, level = lvl, facts = #facts > 0 and table.concat(facts, ", ") or nil,
+           chance = chance, pts = pts, inside = inside }
 end
 
 local function objectSource(QDB, objId, how)
@@ -591,13 +754,30 @@ local function objectSource(QDB, objId, how)
   local okN, name = pcall(QDB.QueryObjectSingle, objId, "name")
   if not (okN and type(name) == "string") then return nil end
   local _, spawns = pcall(QDB.QueryObjectSingle, objId, "spawns")
-  return { how = how, name = name, pts = spawnPoints(spawns) }
+  local pts, inside = spawnPoints(spawns)
+  return { how = how, name = name, pts = pts, inside = inside }
 end
+
+-- Does the quest's event (an escort) start when the quest is taken? The game asks the whole party to accept such a
+-- quest (its quest flag 2), as it does for escorts: the event is then done right after the quest is taken.
+local function startsWhenTaken(QDB, qid)
+  if not (QDB and QDB.QueryQuestSingle) then return nil end
+  local okF, flags = pcall(QDB.QueryQuestSingle, qid, "questFlags")
+  flags = okF and tonumber(flags)
+  return flags and math.floor(flags / 2) % 2 == 1 or nil
+end
+C.StartsWhenTaken = startsWhenTaken
 
 local function objectiveSources(QDB, qid)
   if not (QDB and QDB.QueryQuestSingle) then return nil end
   local okO, objs = pcall(QDB.QueryQuestSingle, qid, "objectives")
-  if not (okO and type(objs) == "table") then return nil end
+  -- an event of the quest (an escort, a place to reach): where it ends, from the database
+  local okT, trig = pcall(QDB.QueryQuestSingle, qid, "triggerEnd")
+  local event = okT and type(trig) == "table" and type(trig[1]) == "string" and type(trig[2]) == "table" and trig or nil
+  if not (okO and type(objs) == "table") then
+    if not event then return nil end
+    objs = {}
+  end
   local list = {}
   local function add(label, sources, credit)
     if #sources > 0 then list[#list + 1] = { label = label, sources = sources, credit = credit } end
@@ -621,7 +801,7 @@ local function objectiveSources(QDB, qid)
     end
     local _, droppers = pcall(QDB.QueryItemSingle, itemId, "npcDrops")
     for _, nid in ipairs(type(droppers) == "table" and droppers or {}) do
-      local s = npcSource(QDB, nid, "dropped by") if s then sources[#sources + 1] = s end
+      local s = npcSource(QDB, nid, "dropped by", itemId) if s then sources[#sources + 1] = s end
     end
     local _, vendors = pcall(QDB.QueryItemSingle, itemId, "vendors")
     for _, nid in ipairs(type(vendors) == "table" and vendors or {}) do
@@ -640,6 +820,10 @@ local function objectiveSources(QDB, qid)
         add(type(entry[3]) == "string" and entry[3] or "kill credit", sources, true)
       end
     end
+  end
+  if event then
+    local pts = spawnPoints(event[2])
+    if #pts > 0 then add(event[1], { { how = "reach", name = "the place where it ends", pts = pts } }) end
   end
   return list
 end
@@ -678,6 +862,83 @@ local function playerSpot()
   return mapID, pos and pos.x * 100, pos and pos.y * 100, area
 end
 
+-- Where to go for a creature or an object that has many spawn points: not to the nearest single one when the rest
+-- stand together elsewhere ("find another spot where there are more of them": two spawn points by the player, fifteen
+-- half a kilometre south). Each point counts the points within GROUP_M of it; the place to go is the nearest point of
+-- a good group (at least GROUP_MIN points, or most of the largest group), and up to two other groups are named.
+-- ``kills``: how many are still to be killed there, when the quest log says (for a drop: what is still to be looted
+-- over its chance). A kill or two is done at the nearest spawn point and up to five where two stand; only more than
+-- that needs a place where they are dense.
+local GROUP_M, GROUP_MIN, MANY_KILLS = 150, 4, 5
+local function spawnGroups(pts, mapID, px, py, kills)
+  local n = #pts
+  if n == 0 or n > 400 then return nil end
+  local size = {}
+  for i = 1, n do
+    budget()
+    local c = 0
+    for j = 1, n do
+      local d = ns.MapMeters(mapID, pts[i].x, pts[i].y, pts[j].x, pts[j].y)
+      if d and d <= GROUP_M then c = c + 1 end
+    end
+    size[i] = c
+  end
+  local most = 0
+  for i = 1, n do most = math.max(most, size[i]) end
+  local need = math.min(most, math.max(GROUP_MIN, math.ceil(most * 0.6)))
+  if kills and kills <= 2 then
+    need = 1
+  elseif kills and kills <= MANY_KILLS then
+    need = math.min(most, 2)
+  end
+  local best
+  for i = 1, n do
+    if size[i] >= need then
+      local d = px and ns.MapMeters(mapID, px, py, pts[i].x, pts[i].y)
+      if not best or (d and best.d and d < best.d) then best = { p = pts[i], d = d, size = size[i] } end
+    end
+  end
+  if not best then return nil end
+  -- the other groups: the fullest points away from the place chosen and from each other
+  local others, taken = {}, { best.p }
+  for _ = 1, 2 do
+    local pick
+    for i = 1, n do
+      local far = size[i] >= 3
+      for _, t in ipairs(taken) do
+        local d = ns.MapMeters(mapID, pts[i].x, pts[i].y, t.x, t.y)
+        if not d or d <= 2 * GROUP_M then far = false break end
+      end
+      if far and (not pick or size[i] > pick.size) then pick = { p = pts[i], size = size[i] } end
+    end
+    if not pick then break end
+    others[#others + 1] = pick
+    taken[#taken + 1] = pick.p
+  end
+  return best, others
+end
+
+-- How many of a source are still to be killed for an objective, from the quest log's own line ("3/15 Defias
+-- Highwayman slain", "0/5 Fine Moonstalker Pelt"); for an item that drops, what is left over the drop chance (five
+-- pelts at 40% are a dozen kills). nil when the quest log does not say.
+local function killsLeft(obj, source, objectives)
+  local label, name = tostring(obj.label or ""):lower(), tostring(source.name or ""):lower()
+  for _, line in ipairs(objectives or {}) do
+    local low = tostring(line):lower()
+    if (label ~= "" and low:find(label, 1, true)) or (name ~= "" and low:find(name, 1, true)) then
+      local have, all = low:match("(%d+)%s*/%s*(%d+)")
+      local left = have and (tonumber(all) - tonumber(have)) or nil
+      if left and left > 0 then
+        if source.how == "dropped by" and source.chance and source.chance > 0 then
+          left = math.ceil(left / (source.chance / 100))
+        end
+        return left
+      end
+    end
+  end
+  return nil
+end
+
 -- objective sources -> lines for the AI, nearest first, with distance in meters in the player's zone.
 -- The database calls every creature of a quest a kill; ``objectives`` (the quest log's own objective texts) tell which
 -- ones really are ("0/8 Befouled Webwood slain"): the others (talk to, tame, escort) only say where the creature is.
@@ -695,34 +956,55 @@ local function whereToGet(list, mapID, px, py, area, objectives)
   for _, obj in ipairs(list) do
     local ranked = {}
     for _, s in ipairs(obj.sources) do
-      local best, here = nil, 0
+      local best, here, mine = nil, 0, {}
       for _, p in ipairs(s.pts) do
         if area and p.area == area then
           here = here + 1
+          mine[#mine + 1] = p
           local d = px and ns.MapMeters(mapID, px, py, p.x, p.y)
           if d and (not best or d < best.d) then best = { d = d, p = p } end
         end
       end
-      ranked[#ranked + 1] = { s = s, best = best or (s.pts[1] and { p = s.pts[1] }), here = here }
+      -- many spawn points: go where they stand together, not to the nearest lone one
+      local group, others
+      if best and here > 1 then
+        group, others = spawnGroups(mine, mapID, px, py, killsLeft(obj, s, objectives))
+        if group and group.d then best = group end
+      end
+      ranked[#ranked + 1] = { s = s, best = best or (s.pts[1] and { p = s.pts[1] }), here = here, others = others }
     end
     table.sort(ranked, function(a, b) return (a.best and a.best.d or 1e9) < (b.best and b.best.d or 1e9) end)
     local parts = {}
     for i = 1, math.min(5, #ranked) do
       local r = ranked[i]
-      local where = "no known spawn point"
+      local where = r.s.inside and ("inside " .. r.s.inside .. " (no place on a zone map)") or "no known spawn point"
       if r.best then
         local zone = C_Map.GetAreaInfo and C_Map.GetAreaInfo(r.best.p.area) or ("zone " .. tostring(r.best.p.area))
         where = string.format("%s %.1f, %.1f", tostring(zone), r.best.p.x, r.best.p.y)
         if r.best.d then
-          where = where .. string.format(" (%d m, %d spawn point%s in your zone)", r.best.d, r.here, r.here == 1 and "" or "s")
+          local more = ""
+          if r.best.size and r.here > 1 then more = string.format(", %d of them around here", r.best.size) end
+          for n, o in ipairs(r.others or {}) do
+            more = more .. string.format("%s %d around %.1f, %.1f", n == 1 and ", others:" or " and", o.size, o.p.x, o.p.y)
+          end
+          where = where .. string.format(" (%d m, %d spawn point%s in your zone%s)", r.best.d, r.here,
+            r.here == 1 and "" or "s", more)
+        else
+          -- asked for another zone (no distance to give): still, how many places it can be at there. One point of
+          -- several is somewhere to search around, not the spot.
+          local there = 0
+          for _, p in ipairs(r.s.pts) do
+            if p.area == r.best.p.area then there = there + 1 end
+          end
+          if there > 1 then where = where .. string.format(" (%d spawn points in that zone)", there) end
         end
       end
       local how = r.s.how
       if how == "kill" and slain and not obj.credit and not (slain[obj.label:lower()] or slain[r.s.name:lower()]) then
         how = "find"
       end
-      parts[#parts + 1] = string.format("%s %s%s — %s", how, r.s.name, r.s.level and (" (level " .. r.s.level .. ")") or "",
-        where)
+      local facts = r.s.facts or (r.s.level and ("level " .. r.s.level))
+      parts[#parts + 1] = string.format("%s %s%s — %s", how, r.s.name, facts and (" (" .. facts .. ")") or "", where)
     end
     if #ranked > 5 then parts[#parts + 1] = string.format("and %d more", #ranked - 5) end
     out[#out + 1] = obj.label .. ": " .. table.concat(parts, "; ")
@@ -759,8 +1041,8 @@ function C.QuestInfo(id)
       out.title = out.title or qd.name
       out.level, out.minLevel = qd.questLevel or qd.level, qd.requiredLevel
       if type(qd.objectivesText) == "table" then out.objectiveText = table.concat(qd.objectivesText, " ") end
-      out.questGiver = qd.startedBy and questieNPCs(questie, qd.startedBy[1])
-      out.turnIn = qd.finishedBy and questieNPCs(questie, qd.finishedBy[1])
+      out.questGiver = questieGivers(questie, qd.startedBy)
+      out.turnIn = questieGivers(questie, qd.finishedBy)
     end
     if not out.alreadyDone and not out.complete then
       local okS, sources = pcall(objectiveSources, questie, id)
@@ -779,6 +1061,17 @@ function C.QuestInfo(id)
   return out
 end
 
+-- Questie loads its drop tables a while after login, and the add-on reads the quest log three seconds after it:
+-- sources read before that have no drop chances, and must not be kept for the session. (No drop tables in this
+-- Questie, or none after two minutes: nothing to wait for.)
+local loadedAt = GetTime()
+local function dropsReady()
+  if not (QuestieLoader and QuestieLoader.ImportModule) then return true end
+  local ok, drops = pcall(QuestieLoader.ImportModule, QuestieLoader, "DropDB")
+  if not ok or type(drops) ~= "table" or type(drops.GetItemDroprate) ~= "function" then return true end
+  return drops.tableWowhead ~= nil or drops.tablePserver ~= nil or GetTime() - loadedAt > 120
+end
+
 -- what does not change for a quest (texts, rewards, quest giver and turn-in), read once per quest
 local staticCache = {}
 local function questStatic(qid, questie)
@@ -790,6 +1083,7 @@ local function questStatic(qid, questie)
     C_QuestLog.SetSelectedQuest(qid)
     local desc, objText = GetQuestLogQuestText()
     s.objectiveText = objText
+    desc = type(desc) == "string" and desc:gsub("\r", "") or desc
     s.description = ns.Cut(desc, 6000) -- the whole quest text (the cap only guards against broken data)
     local xp = GetQuestLogRewardXP and safe(GetQuestLogRewardXP)
     local gold = GetQuestLogRewardMoney and safe(GetQuestLogRewardMoney)
@@ -812,14 +1106,14 @@ local function questStatic(qid, questie)
     local okQ, qd = pcall(questie.GetQuest, qid)
     if not (okQ and type(qd) == "table") then okQ, qd = pcall(questie.GetQuest, questie, qid) end
     if okQ and type(qd) == "table" then
-      s.questGiver = qd.startedBy and questieNPCs(questie, qd.startedBy[1])
-      s.turnIn = qd.finishedBy and questieNPCs(questie, qd.finishedBy[1])
+      s.questGiver = questieGivers(questie, qd.startedBy)
+      s.turnIn = questieGivers(questie, qd.finishedBy)
       -- the quest that follows this one in its chain: taking it at the turn-in is what a route plans for
       local nextId = tonumber(qd.nextQuestInChain)
       if nextId and nextId > 0 then
         local okN, nq = pcall(questie.GetQuest, nextId)
         if not (okN and type(nq) == "table") then okN, nq = pcall(questie.GetQuest, questie, nextId) end
-        local giver = okN and type(nq) == "table" and nq.name and nq.startedBy and questieNPCs(questie, nq.startedBy[1])
+        local giver = okN and type(nq) == "table" and nq.name and questieGivers(questie, nq.startedBy)
         if giver then
           s.next = { id = nextId, minLevel = tonumber(nq.requiredLevel) or 0,
             text = string.format("[%s]%s from %s", nq.name, nq.questLevel and (" (level " .. nq.questLevel .. ")") or "", giver) }
@@ -828,6 +1122,8 @@ local function questStatic(qid, questie)
     end
     local okS, sources = pcall(objectiveSources, questie, qid)
     s.sources = okS and sources or nil
+    s.startsWhenTaken = startsWhenTaken(questie, qid)
+    if not dropsReady() then complete = false end -- read again once the drop chances are there
   end
   if complete then staticCache[qid] = s end -- reward items still loading: read again next time
   return s
@@ -886,6 +1182,7 @@ function S.quests()
         e.next, e.nextId = st.next.text, st.next.id
       end
       if e.status == "in progress" then e.whereToGet = whereToGet(st.sources, mapID, px, py, area, texts) end
+      e.startsWhenTaken = st.startsWhenTaken
       out[#out + 1] = e
     end
   end
@@ -978,6 +1275,28 @@ function S.nearbyQuests()
   return #out > 0 and out or nil
 end
 
+-- a spell as the game names it, with its rank: "Serpent Sting (Rank 2)" (a bar can hold a lower rank than the
+-- spellbook has; this client does not swap it when a new rank is learned)
+local function spellLabel(id)
+  local name = id and C_Spell.GetSpellName and safe(C_Spell.GetSpellName, id)
+  if not name then return nil end
+  local sub = C_Spell.GetSpellSubtext and safe(C_Spell.GetSpellSubtext, id)
+  return name .. ((sub and sub ~= "") and (" (" .. sub .. ")") or "")
+end
+
+-- the pet's spellbook: its abilities (and, in some clients, its commands), each { name, subName, spellID, actionID }
+local function petBook()
+  local out = {}
+  if not (C_SpellBook and C_SpellBook.HasPetSpells and C_SpellBook.GetSpellBookItemInfo and Enum.SpellBookSpellBank) then
+    return out
+  end
+  for i = 1, math.min(40, tonumber((safe(C_SpellBook.HasPetSpells))) or 0) do
+    local ii = safe(C_SpellBook.GetSpellBookItemInfo, i, Enum.SpellBookSpellBank.Pet)
+    if type(ii) == "table" and ii.name then out[#out + 1] = ii end
+  end
+  return out
+end
+
 -- the game's own tooltip of a spell, without its name: cost, range, cast time, cooldown, what it does
 -- Spell descriptions: in this client the data API leaves the effect text out ("Instant | 3 min cooldown"); the game
 -- fills it in only when a tooltip is actually shown. So descriptions are remembered from every spell tooltip the game
@@ -985,7 +1304,10 @@ end
 C.spellDesc = {}
 do -- newly learned spells: read their descriptions too (event names differ between clients, so register safely)
   local f = CreateFrame("Frame")
-  for _, e in ipairs({ "LEARNED_SPELL_IN_TAB", "LEARNED_SPELL_IN_SKILL_LINE", "SPELLS_CHANGED" }) do pcall(f.RegisterEvent, f, e) end
+  -- (UNIT_PET: a pet called brings its own spellbook)
+  for _, e in ipairs({ "LEARNED_SPELL_IN_TAB", "LEARNED_SPELL_IN_SKILL_LINE", "SPELLS_CHANGED", "UNIT_PET" }) do
+    pcall(f.RegisterEvent, f, e)
+  end
   local pending
   f:SetScript("OnEvent", function()
     if pending then return end
@@ -1057,6 +1379,9 @@ function C.WarmSpellDescriptions()
       end
     end
   end
+  for _, ii in ipairs(petBook()) do -- the pet's abilities too
+    if ii.spellID and not C.spellDesc[ii.spellID] then ids[#ids + 1] = ii.spellID end
+  end
   if #ids == 0 then return end
   C.warming = true
   local i, phase = 1, 0
@@ -1111,6 +1436,8 @@ end
 C.spellTip = spellTip
 
 -- spellbook with each spell's description from the game (so the AI knows what every ability does)
+-- A spell known in several ranks is described once, at its highest rank; the lower ones are named on that line. (The
+-- client keeps every rank in the book: a level 18 hunter's three Raptor Strikes, each with its full text.)
 function S.spells()
   local out = {}
   if not (C_SpellBook and C_SpellBook.GetNumSpellBookSkillLines) then return out end
@@ -1118,17 +1445,39 @@ function S.spells()
   for t = 1, C_SpellBook.GetNumSpellBookSkillLines() do
     local li = C_SpellBook.GetSpellBookSkillLineInfo(t)
     if li and not li.shouldHide then
+      local rows, top = {}, {}
       for k = li.itemIndexOffset + 1, li.itemIndexOffset + li.numSpellBookItems do
         budget()
         local ii = C_SpellBook.GetSpellBookItemInfo(k, Enum.SpellBookSpellBank.Player)
         if ii and ii.name and count < 200 then
           count = count + 1
           local sub = ii.spellID and C_Spell.GetSpellSubtext and safe(C_Spell.GetSpellSubtext, ii.spellID)
-          local label = ii.name .. ((sub and sub ~= "") and (" (" .. sub .. ")") or "")
-          local tip = chars > 0 and spellTip(ii.spellID, 1500) or nil
+          local rank = type(sub) == "string" and tonumber(sub:match("^Rank (%d+)$")) or nil
+          local row = { name = ii.name, sub = sub, rank = rank, id = ii.spellID, passive = ii.isPassive }
+          rows[#rows + 1] = row
+          if rank and (not top[ii.name] or rank > top[ii.name].rank) then top[ii.name] = row end
+        end
+      end
+      for _, row in ipairs(rows) do
+        local best = row.rank and top[row.name]
+        if best and best ~= row then
+          best.lower = best.lower or {}
+          best.lower[#best.lower + 1] = row.rank
+        else
+          local label = row.name .. ((row.sub and row.sub ~= "") and (" (" .. row.sub .. ")") or "")
+          local tip = chars > 0 and spellTip(row.id, 1500) or nil
           chars = chars - (tip and #tip or 0)
-          out[#out + 1] = string.format("[%s] %s%s%s", li.name or "?", label, ii.isPassive and " [passive]" or "",
-            tip and (": " .. tip) or "")
+          row.line = { li.name or "?", label, row.passive and " [passive]" or "", tip and (": " .. tip) or "" }
+        end
+      end
+      for _, row in ipairs(rows) do
+        if row.line then
+          local also = ""
+          if row.lower then
+            table.sort(row.lower)
+            also = " [also known at rank " .. table.concat(row.lower, ", ") .. ", for less mana]"
+          end
+          out[#out + 1] = string.format("[%s] %s%s%s%s", row.line[1], row.line[2], row.line[3], also, row.line[4])
         end
       end
     end
@@ -1171,23 +1520,73 @@ local function findActionButtons()
   return list
 end
 
+-- a pet's ability put on the player's bar: the action may carry the pet action's id (flags in its top byte) rather
+-- than the spell's
+local function petSpellLabel(id)
+  local low = type(id) == "number" and id % 0x1000000 or nil
+  local label = low and low ~= id and spellLabel(low)
+  if label then return label end
+  for _, ii in ipairs(petBook()) do
+    if id ~= nil and (ii.actionID == id or ii.spellID == id or (low and ii.spellID == low)) then
+      return spellLabel(ii.spellID) or (ii.name .. ((ii.subName and ii.subName ~= "") and (" (" .. ii.subName .. ")") or ""))
+    end
+  end
+  return nil
+end
+
+-- the first line of the button's own tooltip: the game names every kind of action there
+local function actionTip(slot)
+  local data = C_TooltipInfo and C_TooltipInfo.GetAction and safe(C_TooltipInfo.GetAction, slot)
+  local first = type(data) == "table" and type(data.lines) == "table" and data.lines[1]
+  local t = type(first) == "table" and clean(first.leftText)
+  t = type(t) == "string" and strip(t) or nil
+  return t ~= "" and t or nil
+end
+
+local named = {} -- actions named other than by their id: logged once, to learn what this client gives for them
 local function actionText(slot)
-  local kind, id = safe(GetActionInfo, slot)
+  local kind, id, sub = safe(GetActionInfo, slot)
   if not kind then return nil end
-  local name
+  local name, pet
   if kind == "spell" then
-    name = C_Spell.GetSpellName and safe(C_Spell.GetSpellName, id)
+    name = spellLabel(id)
+    if not name then
+      name = petSpellLabel(id)
+      pet = name ~= nil
+    end
+    pet = pet or sub == "pet"
   elseif kind == "item" then
     name = (C_Item.GetItemNameByID and safe(C_Item.GetItemNameByID, id)) or safe(C_Item.GetItemInfo, id)
   elseif kind == "macro" then
     local mname = safe(GetMacroInfo, id)
     local mspell = GetMacroSpell and safe(GetMacroSpell, id)
-    local sname = mspell and C_Spell.GetSpellName and safe(C_Spell.GetSpellName, mspell)
-    name = "macro " .. tostring(mname or id) .. (sname and (" → " .. sname) or "")
-  else
-    name = tostring(kind) .. " " .. tostring(id)
+    local what = mspell and spellLabel(mspell) or (GetMacroItem and safe(GetMacroItem, id))
+    name = "macro " .. tostring(mname or id) .. (what and (" → " .. what) or "")
+  elseif kind == "flyout" then
+    local fname = GetFlyoutInfo and safe(GetFlyoutInfo, id)
+    name = fname and ("flyout " .. fname)
+  elseif kind == "equipmentset" then
+    local set = type(id) == "string" and id or (C_EquipmentSet and C_EquipmentSet.GetEquipmentSetInfo
+      and safe(C_EquipmentSet.GetEquipmentSetInfo, id))
+    name = set and ("equipment set " .. set)
+  elseif kind == "summonmount" then
+    local mount = C_MountJournal and C_MountJournal.GetMountInfoByID and safe(C_MountJournal.GetMountInfoByID, id)
+    name = mount and ("mount " .. mount)
+  elseif kind == "summonpet" then
+    local r = { C_PetJournal and C_PetJournal.GetPetInfoByPetID and safe(C_PetJournal.GetPetInfoByPetID, id) }
+    name = (r[2] or r[8]) and ("companion " .. (r[2] or r[8]))
   end
-  local text = tostring(name or "?")
+  local how = pet and name and "pet" or nil
+  if not name then name, how = actionTip(slot), "tooltip" end
+  if not name then name, how = safe(GetActionText, slot), "action text" end
+  if not name then name, how = tostring(kind) .. " " .. tostring(id), "unnamed" end
+  local key = tostring(kind) .. "|" .. tostring(id) .. "|" .. tostring(sub)
+  if how and not named[key] and ns.Log then
+    named[key] = true
+    ns.Log("bars", string.format("slot %d: %s %s %s = %s (%s)", slot, tostring(kind), tostring(id), tostring(sub),
+      tostring(name), how))
+  end
+  local text = tostring(name) .. (pet and " [pet ability]" or "")
   if kind == "item" then
     local count = GetActionCount and safe(GetActionCount, slot)
     if count and count > 0 then text = text .. " x" .. count end
@@ -1340,6 +1739,96 @@ function S.auras()
   return { buffs = auras("player", "HELPFUL", 30), debuffs = auras("player", "HARMFUL", 15) }
 end
 
+-- The quests the character can pick up in a zone, or that belong to it (a dungeon: its quests are given elsewhere),
+-- wherever the player stands: from Questie's own list of what is available to them, so quests that are done, another
+-- class's, or a step of a chain not reached yet are not in it. Asked for by the AI (its zone_quests tool) when the
+-- player plans to go somewhere: the "nearbyQuests" section only reaches around the player.
+local ZONE_QUESTS_MAX = 30
+function C.ZoneQuests(zone)
+  local want = tostring(zone or ""):lower():gsub("^the ", "")
+  if want == "" then return { error = "no zone named" } end
+  local QDB = questieDB()
+  local okA, AQ = pcall(function() return QuestieLoader:ImportModule("AvailableQuests") end)
+  if not (QDB and okA and type(AQ) == "table" and type(AQ.__availableQuests) == "table") then
+    return { error = "Questie is not loaded or has not worked out the available quests yet" }
+  end
+  local function areaName(id)
+    local name = type(id) == "number" and id > 0 and C_Map.GetAreaInfo and C_Map.GetAreaInfo(id)
+    return type(name) == "string" and name or nil
+  end
+  local function matches(name)
+    name = name and name:lower():gsub("^the ", "")
+    return name ~= nil and (name == want or name:find(want, 1, true) == 1 or want:find(name, 1, true) == 1)
+  end
+  local myLevel = UnitLevel("player") or 1
+  local found, later = {}, 0
+  for questId in pairs(AQ.__availableQuests) do
+    local q = safe(QDB.GetQuest, questId)
+    if type(q) == "table" and q.name then
+      local here, anywhere
+      for _, npcId in ipairs((type(q.startedBy) == "table" and q.startedBy[1]) or {}) do
+        local npc = safe(QDB.GetNPC, QDB, npcId)
+        for areaId, spawns in pairs(type(npc) == "table" and type(npc.spawns) == "table" and npc.spawns or {}) do
+          local s, name = type(spawns) == "table" and spawns[1], areaName(areaId)
+          if s and s[1] and name then
+            local at = { npc = npc.name, where = string.format("%s %.1f, %.1f", name, s[1], s[2]) }
+            anywhere = anywhere or at
+            if matches(name) then here = here or at end
+          end
+        end
+      end
+      local about = areaName(tonumber(q.zoneOrSort)) -- the zone or dungeon the quest is filed under
+      if (here or matches(about)) and (here or anywhere) then
+        if (tonumber(q.requiredLevel) or 0) > myLevel then
+          later = later + 1 -- not yet theirs to take
+        else
+          local giver = here or anywhere
+          local e = { id = questId, title = q.name, level = tonumber(q.questLevel), minLevel = tonumber(q.requiredLevel),
+            giver = giver.npc, where = giver.where, about = about,
+            objective = type(q.objectivesText) == "table" and ns.Cut(table.concat(q.objectivesText, " "), 220) or nil,
+            turnIn = questieGivers(QDB, q.finishedBy) }
+          -- the quest that follows it in its chain, as the quest log section says it: a route plans for it
+          local nextId = tonumber(q.nextQuestInChain)
+          local nq = nextId and nextId > 0 and safe(QDB.GetQuest, nextId)
+          local nextGiver = type(nq) == "table" and nq.name and questieGivers(QDB, nq.startedBy)
+          if nextGiver and (tonumber(nq.requiredLevel) or 0) <= myLevel then
+            e.next = string.format("[%s]%s from %s", nq.name, nq.questLevel and (" (level " .. nq.questLevel .. ")") or "", nextGiver)
+            e.nextId = nextId
+          end
+          local _, tag = safe(QDB.GetQuestTagInfo, questId)
+          if type(tag) == "string" and tag ~= "" then e.type = tag end
+          local okS, sources = pcall(objectiveSources, QDB, questId)
+          e.startsWhenTaken = startsWhenTaken(QDB, questId)
+          local lines = okS and whereToGet(sources, nil, nil, nil, nil, nil) or nil
+          if lines then
+            for i = #lines, 4, -1 do lines[i] = nil end
+            for i, line in ipairs(lines) do lines[i] = ns.Cut(line, 240) end
+            e.whereToGet = lines
+          end
+          if giver.npc then C.npcCoords[giver.npc] = C.npcCoords[giver.npc] or nil end
+          found[#found + 1] = e
+        end
+      end
+    end
+  end
+  local function byLevel(a, b)
+    if (a.level or 0) ~= (b.level or 0) then return (a.level or 0) < (b.level or 0) end
+    return a.title < b.title
+  end
+  local more = math.max(0, #found - ZONE_QUESTS_MAX)
+  if more > 0 then -- too many to list: the ones furthest from the character's level go
+    table.sort(found, function(a, b)
+      local da, db = math.abs((a.level or myLevel) - myLevel), math.abs((b.level or myLevel) - myLevel)
+      if da ~= db then return da < db end
+      return byLevel(a, b)
+    end)
+    for i = #found, ZONE_QUESTS_MAX + 1, -1 do found[i] = nil end
+  end
+  table.sort(found, byLevel)
+  return { zone = zone, quests = found, more = more > 0 and more or nil, later = later > 0 and later or nil,
+           level = myLevel }
+end
+
 function C.UnitInfo(unit)
   if not UnitExists(unit) then return nil end
   local u = { name = safe(UnitName, unit), level = safe(UnitLevel, unit), isPlayer = UnitIsPlayer(unit) or nil }
@@ -1367,29 +1856,118 @@ function C.UnitInfo(unit)
   return u
 end
 
+-- How large every zone map is, in meters ("Elwynn Forest: 3173 x 2115"): the app's route planner measures the way on
+-- maps the player is not on with it (a route that goes on into other zones). The maps do not change: read once.
+local mapSizes
+function S.mapSizes()
+  if mapSizes then return mapSizes end
+  if not (C_Map.GetMapChildrenInfo and Enum and Enum.UIMapType) then return nil end
+  local top = C_Map.GetBestMapForUnit("player")
+  for _ = 1, 10 do -- up to the world map
+    local info = top and C_Map.GetMapInfo(top)
+    if not info or info.mapType == Enum.UIMapType.World or not info.parentMapID or info.parentMapID == 0 then break end
+    top = info.parentMapID
+  end
+  local out, seen = {}, {}
+  for _, child in ipairs(top and safe(C_Map.GetMapChildrenInfo, top, Enum.UIMapType.Zone, true) or {}) do
+    budget()
+    local size = child.name and not seen[child.name] and ns.MapSize(child.mapID)
+    if size then
+      seen[child.name] = true
+      out[#out + 1] = string.format("%s: %d x %d", child.name, size[1] * 0.9144 + 0.5, size[2] * 0.9144 + 0.5)
+    end
+  end
+  table.sort(out)
+  if #out > 0 then mapSizes = out end
+  return mapSizes
+end
+
 function S.target() return C.UnitInfo("target") end
 function S.mouseover() return C.UnitInfo("mouseover") end
+-- a pet function of this client: WoW Forever has them in C_PetInfo (C_PetInfo.GetPetHappiness), older clients as globals
+local function petApi(name)
+  return (C_PetInfo and rawget(C_PetInfo, name)) or _G[name]
+end
+
+-- what in the bags the pet eats, the way the game decides it
+local function petFood()
+  local canEat = C_PetInfo and rawget(C_PetInfo, "CanPetEatItem")
+  if type(canEat) ~= "function" then return nil end
+  local counts, order = {}, {}
+  for bag = 0, 5 do
+    for slot = 1, (safe(C_Container.GetContainerNumSlots, bag) or 0) do
+      budget()
+      local info = safe(C_Container.GetContainerItemInfo, bag, slot)
+      if info and info.itemID and info.hyperlink and safe(canEat, info.itemID) then
+        local name = strip(info.hyperlink)
+        if not counts[name] then order[#order + 1] = name end
+        counts[name] = (counts[name] or 0) + (info.stackCount or 1)
+      end
+    end
+  end
+  if #order == 0 then return "nothing in the bags" end
+  for i, name in ipairs(order) do order[i] = name .. " x" .. counts[name] end
+  return table.concat(order, ", ")
+end
+
+local petLogged
 function S.pet()
   local u = C.UnitInfo("pet")
   if not u then return nil end
-  -- hunter pet: happiness, loyalty, diet and its action bar
-  local happiness = GetPetHappiness and safe(GetPetHappiness)
-  if happiness then u.happiness = ({ "unhappy", "content", "happy" })[happiness] end
-  local diet = GetPetFoodTypes and { safe(GetPetFoodTypes) }
-  if diet and #diet > 0 then u.eats = table.concat(diet, ", ") end
-  local loyalty = GetPetLoyalty and safe(GetPetLoyalty)
+  u.family = UnitCreatureFamily and safe(UnitCreatureFamily, "pet")
+  -- a hunter's pet: happiness, loyalty, training points, diet, its abilities and its action bar
+  local happiness = safe(petApi("GetPetHappiness"))
+  if type(happiness) == "number" then u.happiness = ({ "unhappy", "content", "happy" })[happiness] end
+  local loyalty = safe(petApi("GetPetLoyalty"))
   if loyalty then u.loyalty = loyalty end
+  local total, spent = safe(petApi("GetPetTrainingPoints"))
+  if type(total) == "number" then
+    u.trainingPoints = string.format("%d free (%d spent)", total - (tonumber(spent) or 0), tonumber(spent) or 0)
+  end
+  local xp, xpMax = safe(petApi("GetPetExperience"))
+  if type(xp) == "number" and type(xpMax) == "number" and xpMax > 0 then u.xp = xp .. "/" .. xpMax end
+  -- the diet: names, as one list or as several values (this client returns a list)
+  local diet, raw = {}, { safe(petApi("GetPetFoodTypes")) }
+  for _, v in ipairs(raw) do
+    for _, name in ipairs(type(v) == "table" and v or { v }) do
+      if type(name) == "string" and name ~= "" then diet[#diet + 1] = name end
+    end
+  end
+  if #diet > 0 then u.diet = table.concat(diet, ", ") end
+  if not petLogged and ns.Log then -- once: what this client gives, to learn from
+    petLogged = true
+    ns.Log("pet", string.format("happiness %s, loyalty %s, training %s/%s, xp %s/%s, diet %s (%d values, first %s)",
+      tostring(happiness), tostring(loyalty), tostring(total), tostring(spent), tostring(xp), tostring(xpMax),
+      table.concat(diet, "+"), #raw, type(raw[1])))
+  end
+  local okFood, food = pcall(petFood)
+  if okFood then u.food = food end
+  local commands = {}
   if GetPetActionInfo then
     local acts = {}
     for i = 1, 10 do
-      local name, _, isToken, isActive, autoCast = safe(GetPetActionInfo, i)
+      local name, _, isToken, isActive, autoAllowed, autoOn = safe(GetPetActionInfo, i)
       if name then
-        if isToken then name = _G[name] or name end
-        acts[#acts + 1] = tostring(name) .. (isActive and " [active]" or "") .. (autoCast and " [auto]" or "")
+        if isToken then
+          name = _G[name] or name
+          commands[name] = true
+        end
+        acts[#acts + 1] = tostring(name) .. (isActive and " [active]" or "")
+          .. (autoOn and " [auto-cast on]" or autoAllowed and " [auto-cast off]" or "")
       end
     end
-    if #acts > 0 then u.actions = acts end
+    if #acts > 0 then u.bar = acts end
   end
+  -- what each of its abilities does (the commands are on its bar)
+  local abilities = {}
+  for _, ii in ipairs(petBook()) do
+    if ii.spellID and not commands[ii.name] then
+      local label = spellLabel(ii.spellID) or ii.name
+      local tip = spellTip(ii.spellID, 600)
+      abilities[#abilities + 1] = label .. (ii.isPassive and " [passive]" or "") .. (tip and (": " .. tip) or "")
+    end
+  end
+  if #abilities > 0 then u.abilities = abilities end
   return u
 end
 
@@ -1483,6 +2061,9 @@ function S.windows()
     q.money = money(safe(GetRewardMoney))
     w.questDialog = q
   end
+  if ns.Auction and ns.Auction.IsOpen() then -- auctions can be posted and cancelled now (propose_auctions)
+    w.auctionHouse = { open = true, lengthsHours = ns.Market and table.concat(ns.Market.Durations(), ", ") or nil }
+  end
   if ns.MerchantOpen() then
     local m = { npc = safe(UnitName, "npc"), items = {} }
     for i = 1, math.min(60, safe(GetMerchantNumItems) or 0) do
@@ -1514,8 +2095,12 @@ function S.windows()
       if name and kind ~= "header" then
         local cost = safe(GetTrainerServiceCost, i)
         local lvl = GetTrainerServiceLevelReq and safe(GetTrainerServiceLevelReq, i)
-        t.services[#t.services + 1] = string.format("%s%s — %s, level %s, %s", name, (sub and sub ~= "") and (" (" .. sub .. ")") or "",
-          money(cost) or "?", tostring(lvl), tostring(kind))
+        -- what it does, as the trainer's window says it (in full for what can be learned now)
+        local what = GetTrainerServiceDescription and clean((safe(GetTrainerServiceDescription, i)))
+        what = type(what) == "string" and strip(what):gsub("%s+", " ") or ""
+        what = what ~= "" and (": " .. ns.Cut(what, kind == "available" and 400 or 160)) or ""
+        t.services[#t.services + 1] = string.format("%s%s — %s, level %s, %s%s", name, (sub and sub ~= "") and (" (" .. sub .. ")") or "",
+          money(cost) or "?", tostring(lvl), tostring(kind), what)
       end
     end
     w.trainer = t
@@ -1569,8 +2154,9 @@ for _, ev in ipairs({ "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_PARTY", "CHAT_M
 end
 
 ------------------------------------------------------------------------ snapshot
-local ORDER = { "game", "player", "progress", "stats", "gearTotals", "equipment", "talents", "quests", "marks", "tracked", "nearbyQuests",
-  "zoneNPCs", "nearbyMobs", "around", "recentEvents", "actionBars", "target", "mouseover", "pet", "tooltip", "group",
+S.sinceLastAnswer = function() return ns.SeenSection and ns.SeenSection() or nil end
+local ORDER = { "game", "sinceLastAnswer", "player", "progress", "stats", "gearTotals", "equipment", "talents", "quests", "marks", "doneLately", "detours", "routeDone", "tracked",
+  "nearbyQuests", "services", "zoneNPCs", "flightMasters", "mapSizes", "nearbyMobs", "around", "recentEvents", "actionBars", "target", "mouseover", "pet", "tooltip", "group",
   "nearby", "auras", "windows", "bags", "bank", "spells", "skills", "professions", "reputations", "addons",
   "addonChanges", "chat" }
 local OPTIONAL = { bags = true, bank = "bags", spells = true, actionBars = "spells", around = "nearby", skills = true, reputations = true, nearby = true,
@@ -1643,9 +2229,20 @@ local function finish(j)
   end
 end
 
+-- how long a question waits for the NPC data of the quest database (read over some frames after login): without it
+-- the game data has no flight masters, no services and no NPCs of the zone
+local NPC_WAIT_MS = 8000
+
 runner:SetScript("OnUpdate", function()
   local j = job
   if not j then runner:Hide() return end
+  if j.waitNpcs then
+    if not (ns.Npcs and ns.Npcs.Loading and ns.Npcs.Loading()) or debugprofilestop() - j.started > NPC_WAIT_MS then
+      j.waitNpcs = nil
+    else
+      return
+    end
+  end
   j.frames = j.frames + 1
   sliceStart = debugprofilestop()
   while true do
@@ -1676,6 +2273,10 @@ function C.SnapshotAsync(done)
   local keys = enabledSections()
   table.insert(keys, 1, "_links")
   job = { keys = keys, i = 0, snap = {}, errors = {}, ms = {}, done = done, frames = 0, started = debugprofilestop() }
+  if ns.Npcs and not ns.Npcs.ready and ns.Npcs.BuildIndex then
+    pcall(ns.Npcs.BuildIndex) -- (reads on by itself; the question goes once it is through)
+    job.waitNpcs = ns.Npcs.Loading and ns.Npcs.Loading() or nil
+  end
   runner:Show()
 end
 
@@ -1683,9 +2284,26 @@ end
 function fitSize(snap)
   local limit = (ns.db.maxSnapshotKB or 60) * 1024
   local okJ, json = pcall(C_EncodingUtil.SerializeJSON, snap)
+  if not okJ then
+    -- a section that cannot be written goes first, alone: dropping sections in their order until the rest could be
+    -- written took the player's position and the quest log with it
+    for k in pairs(snap) do
+      if not pcall(C_EncodingUtil.SerializeJSON, { [k] = snap[k] }) then
+        snap[k] = nil
+        snap.collectErrors = snap.collectErrors or {}
+        table.insert(snap.collectErrors, k .. ": cannot be sent")
+      end
+    end
+    okJ, json = pcall(C_EncodingUtil.SerializeJSON, snap)
+  end
   local i = 1
   while (not okJ or #json > limit) and i <= #DROP_ORDER do
-    snap[DROP_ORDER[i]] = nil
+    if snap[DROP_ORDER[i]] ~= nil then
+      -- said to the AI: a section that is not there reads as "the character has none"
+      snap.leftOut = snap.leftOut or {}
+      table.insert(snap.leftOut, DROP_ORDER[i])
+      snap[DROP_ORDER[i]] = nil
+    end
     i = i + 1
     okJ, json = pcall(C_EncodingUtil.SerializeJSON, snap)
   end

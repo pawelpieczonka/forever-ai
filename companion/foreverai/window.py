@@ -154,7 +154,15 @@ class AppWindow:
         ttk.Button(bottom, text="Quit", command=self.quit).pack(side="right")
         self.update_dl = ttk.Button(bottom, text="Download update", command=self._download_update)
 
-        tk.Label(self.root, text="Activity", bg=BG, fg=DIM, font=(UI, 9), anchor="w").pack(fill="x", padx=16)
+        # the Activity list is always there; the files are written only when the player ticks the box
+        head = tk.Frame(self.root, bg=BG)
+        head.pack(fill="x", padx=16)
+        tk.Label(head, text="Activity", bg=BG, fg=DIM, font=(UI, 9), anchor="w").pack(side="left")
+        ttk.Button(head, text="Clear logs", command=self._clear_logs).pack(side="right")
+        self.save_logs = tk.BooleanVar(value=bool(config.SettingsStore().settings.save_logs))
+        tk.Checkbutton(head, text="Save logs to files", variable=self.save_logs, command=self._toggle_logs, bg=BG,
+                       fg=FG, selectcolor=FIELD, activebackground=BG, activeforeground=FG, font=(UI, 9),
+                       highlightthickness=0, bd=0).pack(side="right", padx=10)
         box = tk.Frame(self.root, bg=PANEL)
         box.pack(fill="both", expand=True, padx=16, pady=(2, 8))
         self.log = tk.Text(box, bg=PANEL, fg=FG, insertbackground=FG, relief="flat", font=(MONO, 9),
@@ -181,6 +189,25 @@ class AppWindow:
     def _update_kb(self) -> None:
         if self.comp and not self.comp.syncing:
             self.comp.sync_now(True)
+
+    def _toggle_logs(self) -> None:
+        from . import logs
+        on = bool(self.save_logs.get())
+        if self.comp:  # through the running app's own settings, so that its next save keeps the choice
+            self.comp.service.set_save_logs(on)
+        else:
+            config.SettingsStore().update(save_logs=on)
+            logs.set_enabled(on)
+        logging.getLogger("foreverai.activity").info("Log files: %s", "on" if on else "off")
+
+    def _clear_logs(self) -> None:
+        from . import logs
+        n = logs.clear()
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.configure(state="disabled")
+        logging.getLogger("foreverai.activity").info(
+            "Logs cleared (%d file%s removed)" % (n, "" if n == 1 else "s") if n else "Logs cleared (there were no files)")
 
     def _shortcut(self) -> None:
         from .setup_game import create_desktop_shortcut

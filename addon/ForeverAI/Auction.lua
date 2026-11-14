@@ -11,6 +11,7 @@ local CALLER = "ForeverAI"
 local BUDGET_MS = 4       -- work per frame, so the game never stalls on a large price table
 local LOAD_MAX = 250      -- item data requested from the server per search
 local LOAD_WAIT_S = 6     -- how long to wait for that item data
+local UNUSABLE_MAX = 12   -- items left out for a requirement that a search names
 local HANDS = { INVTYPE_WEAPON = true, INVTYPE_WEAPONMAINHAND = true, INVTYPE_WEAPONOFFHAND = true,
   INVTYPE_SHIELD = true, INVTYPE_HOLDABLE = true, INVTYPE_2HWEAPON = true }
 
@@ -103,6 +104,26 @@ end
 local function current(job, offer) return not job.cutoff or offer.newest >= job.cutoff end
 
 local function seenText(age) return age == 0 and "today" or (age == 1 and "yesterday" or (age .. " days ago")) end
+
+-- What the price data remembers of one item: its last lowest price and, for each day it was seen (the newest first,
+-- up to ten), the lowest and highest price of that day and how many were for sale.
+function AH.History(id)
+  local db = priceTable()
+  local entry = db and db[tostring(id)]
+  if type(entry) ~= "table" then return nil end
+  local today, days = scanDay(), {}
+  for day, high in pairs(type(entry.h) == "table" and entry.h or {}) do
+    local d = tonumber(day)
+    if d then
+      days[#days + 1] = { ago = today - d, high = tonumber(high),
+                          low = type(entry.l) == "table" and tonumber(entry.l[day]) or tonumber(high),
+                          seen = type(entry.a) == "table" and tonumber(entry.a[day]) or nil }
+    end
+  end
+  table.sort(days, function(a, b) return a.ago < b.ago end)
+  while #days > 10 do table.remove(days) end
+  return { last = tonumber(entry.m), days = days }
+end
 
 local function itemIdOf(key)
   if type(key) ~= "string" then return nil end
@@ -276,6 +297,7 @@ local function describe(job)
   local out, notLoaded = {}, 0
   local skipped = { ["not usable"] = 0, ["too high level"] = 0, ["not an upgrade"] = 0,
     ["no longer listed (not in the last full scan)"] = job.gone or 0 }
+  local unusable = {} -- the ones left out for a requirement, by name: the answer can say what was passed over and why
   local method = pawnReady() and "Pawn (the player's scales)" or
     "comparison with the equipped item (weapons: damage per second, other gear: item level)"
   for i, c in ipairs(job.candidates) do
@@ -287,7 +309,13 @@ local function describe(job)
       local low, ok = name:lower(), true
       for _, w in ipairs(want) do if not low:find(w, 1, true) then ok = false break end end
       local facts = ok and ns.Collect.ItemFacts(link, true) or nil
-      if ok and req.usableOnly and facts and facts.cannotUse then skipped["not usable"] = skipped["not usable"] + 1 ok = false end
+      if ok and req.usableOnly and facts and facts.cannotUse then
+        skipped["not usable"] = skipped["not usable"] + 1
+        if #unusable < UNUSABLE_MAX then
+          unusable[#unusable + 1] = { id = c.id, name = name, price = money(c.copper), why = facts.cannotUse }
+        end
+        ok = false
+      end
       if ok and req.usableOnly and facts and facts.tooLowLevel then skipped["too high level"] = skipped["too high level"] + 1 ok = false end
       if ok then
         local e = { id = c.id, name = name, price = money(c.copper), copper = c.copper,
@@ -338,6 +366,7 @@ local function describe(job)
   end
   return { source = "Auctionator", realm = job.realm, lastScan = lastScan(job), dbItems = job.dbItems,
     matched = #out, items = items, notLoaded = notLoaded > 0 and notLoaded or nil, skipped = skipped,
+    unusable = #unusable > 0 and unusable or nil, usableCheck = ns.Collect.unmetFrom or "skills only",
     upgradeMethod = method, sort = req.sort or "upgrade", ahOpen = AH.IsOpen() }
 end
 
@@ -420,7 +449,9 @@ end
 local function exactResult(job)
   local items, missing = {}, {}
   for _, e in ipairs(job.asked) do
-    local name = e.id and safe(C_Item.GetItemInfo, e.id)
+    local name, link
+    if e.id then name, link = safe(C_Item.GetItemInfo, e.id) end
+    local facts = link and ns.Collect.ItemFacts and ns.Collect.ItemFacts(link) or nil
     if not e.id then
       missing[#missing + 1] = { name = e.ask, why = "unknown item name (not in the game's item cache): give the item id" }
     elseif not e.copper and e.last then
@@ -431,7 +462,9 @@ local function exactResult(job)
         why = "no auction price seen in the last " .. job.maxAge .. " days" }
     else
       items[#items + 1] = { id = e.id, name = name or e.ask, price = money(e.copper), copper = e.copper,
-        seen = seenText(e.age), available = e.available }
+        seen = seenText(e.age), available = e.available,
+        cannotUse = facts and facts.cannotUse or nil,
+        tooLowLevel = facts and facts.tooLowLevel and ("requires level " .. tostring(facts.requiresLevel)) or nil }
     end
   end
   return { source = "Auctionator", realm = job.realm, lastScan = lastScan(job), dbItems = job.dbItems, exact = true,

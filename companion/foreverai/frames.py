@@ -27,7 +27,7 @@ MAGIC_V1 = b"FAI1"
 HEADER = struct.Struct(">4sIBBBBHI")
 HEADER_SIZE = HEADER.size  # 18
 DEFAULT_GRID_W = 128
-DEFAULT_MAX_ROWS = 64
+DEFAULT_MAX_ROWS = 128
 HEADER_CELLS_V1 = (HEADER_SIZE + 2) // 3  # 6 cells of 3 bytes
 HEADER_CELLS = HEADER_SIZE * 2 // 3       # 12 cells of 3 nibbles
 

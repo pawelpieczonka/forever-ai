@@ -70,6 +70,7 @@ local function quiet(on)
 end
 
 local function giveUp()
+  if ns.Log then ns.Log("track", "search by name turned off: the game showed its popup") end
   T.byName = false
   if ns.db then ns.db.lookByName = false end
   quiet(false)
@@ -109,7 +110,11 @@ local function canLookByName()
       quiet(true)
       T.byName = true -- for the two questions of the check
       local works = exists(me) and not exists("Nobody Has This Name Xq")
-      if T.byName then T.byName = works end -- unless a popup that stayed turned it off
+      if T.byName then T.byName = works end
+      if ns.Log then
+        ns.Log("track", "search by name: " .. (T.byName and "works" or not TargetUnit and "not available (the game has no TargetUnit)"
+          or "not available (the game does not refuse it the way the search needs)"))
+      end -- unless a popup that stayed turned it off
     end
   end
   quiet(T.byName)
@@ -371,6 +376,16 @@ function T.Scan()
     quiet(false) -- nothing to look for: the game's own handler has its event back
     return
   end
+  -- While something is tracked the nameplates of all enemies stay on: whatever turned them off (the player's key,
+  -- another add-on), they are turned on again, as soon as the game allows it (not in a fight).
+  if T.Sight() ~= "all" and not inFight() and GetTime() - (T.shownAt or -1) >= 1 then
+    T.shownAt = GetTime()
+    if ns.Log then
+      ns.Log("track", string.format("nameplates were %s (enemies %s, all %s): turned on again", T.Sight(),
+        tostring(cvar("nameplateShowEnemies")), tostring(cvar("nameplateShowAll"))))
+    end
+    T.ShowNameplates()
+  end
   local units = visible()
   local used, refresh, now, clock = 0, false, time(), GetTime()
   local byName = canLookByName()
@@ -436,6 +451,21 @@ function T.Scan()
     end
     s.alive, s.marked = alive, marked
     if was ~= alive then refresh = true end
+    if ns.Log then -- what the add-on sees of this creature, and every name the game shows, when that changes
+      local names = {}
+      for _, u in ipairs(units) do
+        local tag = u.shown .. (u.dead and " (dead)" or "") .. (counts[u.name] and "" or " (does not count)")
+        if not tContains(names, tag) and #names < 8 then names[#names + 1] = tag end
+      end
+      table.sort(names)
+      local seen = string.format("%s: %d in sight%s%s | nameplates %s%s | by name %s | units: %s", label(mob), alive,
+        marked and ", marked" or "", near and (", " .. near .. " near") or "", T.Sight(), inFight() and ", in a fight" or "",
+        byName and "on" or "off", #names > 0 and table.concat(names, ", ") or "none")
+      if seen ~= s.logged then
+        s.logged = seen
+        ns.Log("track", seen)
+      end
+    end
   end
   hideMarkers(used + 1)
   local mode = T.Sight() .. (inFight() and ", in a fight" or "")
@@ -463,7 +493,9 @@ local function finished(mob, quests)
       return false
     end
   end
-  return true -- the quest left the log
+  -- The quest left the log; or it is not taken yet, and the route has the stop where it is to be picked up (a route
+  -- planned with the whole of a quest watches for its creatures already: their stop went the moment it was set).
+  return not (ns.Map and ns.Map.AwaitsQuest and ns.Map.AwaitsQuest(mob.quest))
 end
 
 ------------------------------------------------------------------------ nameplates while tracking
@@ -571,6 +603,16 @@ function T.Set(mobs, add)
   for key in pairs(old) do sight[key] = nil end
   settle()
   if #tracked > 0 then T.ShowNameplates() else restoreNameplates() end
+  if ns.Log then
+    local names = {}
+    for _, m in ipairs(tracked) do
+      local counted = {}
+      for name in pairs(counting(m)) do counted[#counted + 1] = name end
+      table.sort(counted)
+      names[#names + 1] = label(m) .. " (counts: " .. table.concat(counted, ", ") .. ")"
+    end
+    ns.Log("track", #names > 0 and ("tracking " .. table.concat(names, "; ")) or "tracking nothing")
+  end
   T.Scan()
   changed()
 end
@@ -681,7 +723,15 @@ end
 
 ns.On("PLAYER_ENTERING_WORLD", function()
   T.enteredAt = GetTime()
-  if not T.ticker then T.ticker = C_Timer.NewTicker(SCAN_S, function() pcall(T.Scan) end) end
+  if not T.ticker then
+    T.ticker = C_Timer.NewTicker(SCAN_S, function()
+      local ok, err = pcall(T.Scan)
+      if not ok and err ~= T.lastError and ns.Log then
+        T.lastError = err
+        ns.Log("error", "Track.Scan: " .. tostring(err))
+      end
+    end)
+  end
   C_Timer.After(2, function() pcall(syncNameplates) end) -- what was tracked before a /reload is listened for again
 end)
 ns.On("PLAYER_REGEN_ENABLED", function() pcall(syncNameplates) end) -- the fight is over: the settings can change now

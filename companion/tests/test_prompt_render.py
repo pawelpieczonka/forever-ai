@@ -72,3 +72,41 @@ def test_tracked_creatures_come_right_after_the_marks():
                             "nearbyQuests": [{"title": "x"}]})
     assert text.index("## marks") < text.index("## tracked") < text.index("## nearbyQuests")
     assert "- Strigid Screecher: none in sight now; not seen since it is tracked" in section(text, "tracked")
+
+
+
+def test_a_message_of_the_add_on_names_the_language_and_quotes_nothing():
+    """Found by the real model: a conversation in Polish, and a check of the route answered in English. Quoting the
+    player's last words for their language made the model of route updates act on them (the player had said where
+    they were going: it planned a way there at the next update). The language is named; nothing is quoted."""
+    from datetime import datetime
+    from foreverai.prompt import build_messages
+    history = [{"q": "wracam do miasta, zaktualizuj trasę", "a": "Trasa jest na mapie."},
+               {"q": "[Quest log changed] took [Raven Hill]. Update the route on the map.", "a": "Route updated."}]
+    msgs = build_messages("[Route check] took [Raven Hill]. Check the route on the map.", {}, history, [],
+                          now=datetime(2026, 11, 13, 10, 0), kb_date=None, hotfix_date=None, auto=True, route_update=True,
+                          language="Polish")
+    last = msgs[-1]["content"]
+    assert last.endswith("The player writes in Polish: answer in Polish.") and "wracam do miasta" not in last
+    plain = build_messages("co dalej?", {}, history, [], now=datetime(2026, 11, 13, 10, 0), kb_date=None, hotfix_date=None,
+                           language="Polish")
+    assert "answer in Polish" not in plain[-1]["content"]  # the player's own message says its language itself
+
+
+def test_the_earlier_answers_go_along_whole():
+    """From the game: the model saw four of its answers whole and 400 characters of each older one; what it had told
+    the player before (which items it had recommended, what it had offered to do) was lost to it."""
+    from datetime import datetime
+    from foreverai import prompt
+    from foreverai.prompt import build_messages
+    long = "x" * 3000
+    history = [{"q": f"question {n}", "a": f"answer {n} {long[:2500]} end {n}"} for n in range(8)]
+    msgs = build_messages("and now?", {}, history, [], now=datetime(2026, 11, 13, 10, 0), kb_date=None, hotfix_date=None)
+    said = [m["content"] for m in msgs if m["role"] == "assistant"]
+    assert len(said) == 8 and all(text.endswith(f"end {n}") for n, text in enumerate(said))
+    # beyond the budget of text the oldest are cut, the newest never
+    many = [{"q": f"question {n}", "a": f"answer {n} {long} end {n}"} for n in range(12)]
+    msgs = build_messages("and now?", {}, many, [], now=datetime(2026, 11, 13, 10, 0), kb_date=None, hotfix_date=None)
+    said = [m["content"] for m in msgs if m["role"] == "assistant"]
+    assert said[-1].endswith("end 11") and said[-5].endswith("end 7") and said[0].endswith("[…]")
+    assert sum(len(text) for text in said) <= prompt.HISTORY_CHARS + 4 * 3100
