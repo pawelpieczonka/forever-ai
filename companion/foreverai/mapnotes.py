@@ -185,6 +185,26 @@ class MapNotes:
                 out.update(kinds if isinstance(kinds, dict) else ())
         return sorted(out)
 
+    def npc_spots(self, zone: str, faction: str, label: str) -> list[tuple[str, float, float]]:
+        """Every town NPC of a zone of one kind, as npcs() names the kinds ("repair", "bank", "leatherworking
+        trainer"...): (name, x, y) on this server's map."""
+        out = []
+        for row in (self.table("npcs") or {}).get(_map_id(zone)) or []:
+            if not isinstance(row, list) or len(row) < 3 or faction not in str(row[1]):
+                continue
+            kind, extra = str(row[0]), str(row[4]) if len(row) > 4 else ""
+            name = NPC_KINDS.get(kind, kind)
+            if kind == "classtrainer":
+                name = f"{extra.lower()} trainer"
+            elif kind == "proftrainer":
+                name = f"{extra} trainer"
+            if name.lower() != label.lower():
+                continue
+            spot = [on_this_map(zone, *p) for p in unpack(row[2])[:1]]
+            if spot:
+                out.append((str(row[3]) if len(row) > 3 else "", spot[0][0], spot[0][1]))
+        return out
+
     def npcs(self, zone: str, faction: str, cls: str = "", near=None) -> list[str]:
         """Town NPCs of a zone for a faction: the trainer of the class, profession trainers, inn, bank, auction house,
         mailboxes, stable; of each kind the ones nearest to ``near`` (x, y) when the player is in the zone."""
@@ -302,8 +322,10 @@ def _npcs_misplaced(notes: MapNotes, zone: str, snapshot: dict) -> bool:
     return off + near >= 3 and off > near
 
 
-def format_map_notes(notes: MapNotes, zone: str, what: str, snapshot: dict, links: list | None = None) -> tuple[str, bool]:
-    """The map_notes tool: text for the model, and whether it is an error."""
+def format_map_notes(notes: MapNotes, zone: str, what: str, snapshot: dict, links: list | None = None,
+                     near_xy: tuple[float, float] | None = None) -> tuple[str, bool]:
+    """The map_notes tool: text for the model, and whether it is an error. ``near_xy``: of each kind of town NPC the
+    ones nearest to this place of the zone (else to the player, when they are in it)."""
     if not notes.installed():
         return ("The player does not have the ForeverMapNotes add-on installed, so this cannot be read. Answer from "
                 "the game data and the web."), True
@@ -320,8 +342,8 @@ def format_map_notes(notes: MapNotes, zone: str, what: str, snapshot: dict, link
     if not name:
         return f"No map is called '{asked}'. Give the English name of a zone or city.", True
     here = _same(name, str(player.get("map") or player.get("zone") or ""))
-    near = None
-    if here:
+    near = near_xy
+    if here and near is None:
         try:
             near = tuple(float(v) for v in str(player.get("coords") or "").split(","))[:2]
             near = near if len(near) == 2 else None

@@ -871,3 +871,35 @@ def test_an_item_whose_name_holds_a_colon():
     mother = route["stops"][0]
     assert mother["title"] == "Mother Fang" and mother["mob"] == "Mother Fang"
     assert mother["tasks"][0]["label"] == "Arcane Explainer: Magical Stuff in Simple Words"
+
+
+
+def test_an_update_keeps_the_order_the_stops_have_on_the_map():
+    """From the game, 2026-11-14 00:45: the player wanted the hunter trainer right after two turn-ins (Shoni, then
+    Wilder), and the model set that order on the map. The update after the first turn-in planned from scratch and put
+    the trainer before Wilder (he stands nearer), and the check told the player that order while the map kept theirs.
+    An update keeps the order the stops have on the map; a new stop goes where it costs the least way."""
+    quests = [quest(168, "Collecting Memories", status="READY TO TURN IN", turn_in="Wilder Thistlenettle (Teldrassil 70.3, 40.8)")]
+    trainer = [{"title": "Einris Brightspear (hunter trainer)", "zone": "Teldrassil", "x": 67.3, "y": 36.2, "note": "train"}]
+    s = snap(quests, coords="62.6, 34.1")
+    assert titles(plan_route(s, extra=trainer)) == ["Einris Brightspear (hunter trainer)", "Wilder Thistlenettle"]
+    keep = [{"title": "Wilder Thistlenettle", "zone": "Teldrassil", "x": 70.3, "y": 40.8},
+            {"title": "Einris Brightspear (hunter trainer)", "zone": "Teldrassil", "x": 67.3, "y": 36.2}]
+    kept = plan_route(dict(s, keepOrder=keep), extra=trainer, along=[])
+    assert titles(kept) == ["Wilder Thistlenettle", "Einris Brightspear (hunter trainer)"]
+    # a quest taken since: its turn-in goes where it costs the least, and the two keep their order
+    more = snap(quests + [quest(373, "The Unsent Letter", status="READY TO TURN IN",
+                                turn_in="Baros Alexston (Teldrassil 57.7, 47.9)")], coords="62.6, 34.1")
+    route = titles(plan_route(dict(more, keepOrder=keep), extra=trainer, along=[]))
+    assert route.index("Wilder Thistlenettle") < route.index("Einris Brightspear (hunter trainer)") and "Baros Alexston" in route
+    # ... also for a stop the model asked for last ("right after these two", when the route had only them): what an
+    # update adds goes where it costs the least way, not all of it before the trainer and then back (the live try)
+    last = [dict(trainer[0], when="last")]
+    assert titles(plan_route(dict(more, keepOrder=keep), extra=last, along=[])) == [
+        "Wilder Thistlenettle", "Einris Brightspear (hunter trainer)", "Baros Alexston"]
+    assert titles(plan_route(more, extra=last))[-1] == "Einris Brightspear (hunter trainer)"  # (a route made anew: last)
+    # an order of the map the quests cannot be walked in (a turn-in before what it wants) is the planner's own again
+    hunt = snap([quest(1, "Far Hunt", turn_in="Giver (Teldrassil 50.0, 60.0)",
+                       where=["Boar: kill Boar (level 5) — Teldrassil 80.0, 50.0 (2400 m, 9 spawn points in your zone)"])])
+    wrong = [{"title": "Giver", "zone": "Teldrassil", "x": 50.0, "y": 60.0}, {"title": "Boar", "zone": "Teldrassil", "x": 80.0, "y": 50.0}]
+    assert titles(plan_route(dict(hunt, keepOrder=wrong), along=[])) == ["Boar", "Giver"]

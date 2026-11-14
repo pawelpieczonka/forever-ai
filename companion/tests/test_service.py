@@ -3104,3 +3104,47 @@ def test_results_of_the_game_that_come_in_one_message_reach_every_caller(env):
     assert "search_auction_house" in marked and "search_knowledge_base" in marked
     assert not marked & {"plan_route", "mark_on_map", "edit_route", "auctionator_list", "save_memory",
                          "propose_auctions", "propose_vendor_action"}
+
+
+def test_a_kind_of_npc_on_a_route_is_found_where_the_player_is_and_in_other_zones(env):
+    """plan_route's extra with a service: the NPCs of that kind are the options, from the game data in the player's
+    zone (nearest first there) and from the player's map notes elsewhere; one the app knows none of is said."""
+    svc, addons, _ = env
+    snap = {"player": {"map": "Westfall", "zone": "Westfall", "faction": "Alliance", "coords": "56.0, 50.0"},
+            "zoneNPCs": ["William MacGregor <Bowyer> [repair, vendor] — Westfall 57.7, 53.9 (156 m)",
+                         "Quartermaster Lewis <Quartermaster> [vendor] — Westfall 57.0, 47.2 (90 m)"],
+            "services": ["repair: William MacGregor <Bowyer> — Westfall 57.7, 53.9 (156 m)"]}
+    ctx = _ctx(svc, addons, snap)
+
+    class Notes:
+        def installed(self):
+            return True
+
+        def npc_spots(self, zone, faction, kind):
+            return [("Gregory Ardus", 48.2, 55.1), ("Carla Granger", 62.0, 67.8)] if (zone, kind) == ("Stormwind City", "repair") else []
+    svc.map_notes = Notes()
+    out, unknown = svc._service_stops(ctx, [{"service": "repair", "zone": "Westfall"},
+                                            {"service": "Vendor", "zone": "Stormwind City", "note": "sell junk"},
+                                            {"service": "stable master", "zone": "Duskwood"},
+                                            {"title": "Gryan", "zone": "Westfall", "x": 56.3, "y": 47.5}])
+    assert [o["title"] for o in out[0]["options"]] == ["William MacGregor (repair)"]
+    assert [o["title"] for o in out[1]["options"]] == ["Gregory Ardus (vendor)", "Carla Granger (vendor)"]  # (they all sell)
+    assert out[1]["note"] == "sell junk" and out[2] == {"title": "Gryan", "zone": "Westfall", "x": 56.3, "y": 47.5}
+    assert unknown == ["stable master in Duskwood"]
+
+
+def test_an_update_of_the_route_changes_it_at_once_never_with_a_card(env):
+    """From the game, 2026-11-14 00:50: the check of the route the add-on asked for called plan_route with
+    propose=true, and the player got a card waiting for Accept with a route that had not changed, while the map kept
+    the old one. In the add-on's own message (an update, a check) the change is made at once."""
+    svc, addons, _ = env
+    ctx = _ctx(svc, addons, ROUTE_SNAPSHOT)
+    ctx.route_update = True
+    text, err = svc.run_tool(ctx, "plan_route", {"skip": ["Letter"], "propose": True})
+    assert not err and ctx.actions == [] and [m["title"] for m in ctx.marks] == ["1. Boar", "2. Giver"]
+    assert "Accept" not in text
+    ctx = _ctx(svc, addons, ROUTE_SNAPSHOT)
+    ctx.route_update = True
+    text, err = svc.run_tool(ctx, "edit_route", {"remove": ["Old Stop"], "propose": True})
+    assert not err and ctx.actions == [] and ctx.route_edit == {"remove": [{"title": "Old Stop", "x": 40.0, "y": 40.0}]}
+    assert "Accept" not in text

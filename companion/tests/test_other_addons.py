@@ -358,3 +358,14 @@ def test_the_addon_reads_gearquest_in_the_game(tmp_path):
         assert "Ranged=nil" not in sim.lua(ask % '"legs"').decode()
     finally:
         sim.close()
+
+
+def test_town_npcs_of_a_kind_and_the_nearest_to_a_place(addons):
+    """A stop for a kind of NPC on a route takes every one of that kind (on this server's map); map_notes lists the
+    nearest to a place first when one is given."""
+    notes = MapNotes(addons)
+    assert notes.npc_spots("Stormwind City", "A", "bank") == [("Olivia Burnside", 64.3, 80.8)]
+    assert notes.npc_spots("Stormwind City", "A", "Auction House") == [("Auctioneer Fitch", 61.2, 71.3)]
+    assert notes.npc_spots("Stormwind City", "H", "bank") == [] and notes.npc_spots("Darnassus", "A", "bank") == []
+    text, _ = format_map_notes(notes, "Stormwind City", "npcs", SNAP, near_xy=(61.0, 71.0))
+    assert "auction house: Auctioneer Fitch Stormwind City 61.2, 71.3" in text

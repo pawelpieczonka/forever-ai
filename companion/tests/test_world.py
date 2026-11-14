@@ -774,3 +774,23 @@ def test_a_flight_is_named_by_its_point_on_the_flight_map(world):
     opened = world(flights=named[:1]).with_flight("Ariena Stormfeather", "Redridge Mountains", (25.5, 59.4))
     assert any(link["title"] == "Ariena Stormfeather (fly to Sentinel Hill, Westfall)" for link in opened.links)
     assert any(link["title"] == "Thor (fly to Ariena Stormfeather, Redridge Mountains)" for link in opened.links)
+
+
+def test_a_stop_given_by_its_kind_of_npc_is_the_nearest_to_the_route(world):
+    """From the game: a route back to Stormwind with the auction house, selling and repairing. The model named the
+    first NPC that repairs in the map notes' list, in the Cathedral Square, while five that repair stand within 40 m
+    of the auction house the route went to: "always some random one instead of the nearest". A stop given by its kind
+    of NPC has every NPC of that kind as an option, and the route takes the one nearest to its other stops there."""
+    s = snapshot("Elwynn Forest", "40.0, 60.0")
+    s["quests"] = []
+    repair = [{"title": "Gregory Ardus (repair)", "x": 48.2, "y": 55.1}, {"title": "Wynne Larson (repair)", "x": 51.9, "y": 83.5},
+              {"title": "Carla Granger (repair)", "x": 62.0, "y": 67.8}, {"title": "Bryan Cross (repair)", "x": 69.2, "y": 57.6}]
+    extra = [{"title": "Auctioneer Chilton (AH)", "zone": "Stormwind City", "x": 60.8, "y": 71.5},
+             {"title": "Gregory Ardus (repair)", "zone": "Stormwind City", "x": 48.2, "y": 55.1, "note": "sell and repair",
+              "options": repair}]
+    route = plan_route(s, then=[{"zone": "Stormwind City"}], extra=extra)
+    assert "Carla Granger (repair)" in titles(route) and "Gregory Ardus (repair)" not in titles(route), titles(route)
+    assert route["picked_options"] == {"Gregory Ardus (repair)": {"title": "Carla Granger (repair)", "x": 62.0, "y": 67.8}}
+    # with another stop by the bridge to the Dwarven District, the one there
+    extra[0] = {"title": "Thor's helper", "zone": "Stormwind City", "x": 68.0, "y": 58.0}
+    assert "Bryan Cross (repair)" in titles(plan_route(s, then=[{"zone": "Stormwind City"}], extra=extra))

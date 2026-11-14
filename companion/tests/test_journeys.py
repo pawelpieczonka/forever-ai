@@ -558,3 +558,106 @@ def test_an_escort_is_done_right_after_its_quest_is_taken(start):
     j2.plan({})
     first = next(s for s in j2.stops() if not s["done"])
     assert any(t["kind"] == "objective" and t["id"] == 155 for t in first["tasks"]), j2.story()
+
+
+
+def stormwind_evening() -> World:
+    """Stormwind as the player had it on 2026-11-14 at 00:45, level 20: two quests to turn in at Shoni and at Wilder,
+    the hunter trainer between them, and the chain of [The Unsent Letter] (Baros Alexston, then Warden Thelwater)."""
+    w = World()
+    shoni = w.who("Shoni the Shilent", "Stormwind City", 62.6, 34.1)
+    wilder = w.who("Wilder Thistlenettle", "Stormwind City", 70.3, 40.8)
+    w.who("Einris Brightspear", "Stormwind City", 67.3, 36.2, sub="Hunter Trainer")
+    baros = w.who("Baros Alexston", "Stormwind City", 57.7, 47.9)
+    warden = w.who("Warden Thelwater", "Stormwind City", 51.5, 69.4)
+    # (the letter starts from an item the player found: here from someone far from the route, who is never on it)
+    letter = w.who("Lost Letter", "Stormwind City", 25.0, 20.0)
+    w.quest(2040, "Underground Assault", 20, shoni)
+    w.quest(168, "Collecting Memories", 18, wilder)
+    w.quest(167, "Oh Brother. . .", 20, wilder)
+    w.quest(373, "The Unsent Letter", 22, letter, baros, then=389)
+    w.quest(389, "Bazil Thredd", 22, baros, warden, after=373)
+    return w
+
+
+@pytest.mark.parametrize("how", ["order", "last"])
+def test_the_trainer_after_two_turn_ins_the_way_the_player_asked(start, how):
+    """From the game, 2026-11-14 00:45-00:52. The player asked for the hunter trainer right after the turn-ins at
+    Shoni and at Wilder; the model planned it and set that order (``how``: with edit_route's order, as in the game,
+    or as the stop wanted last, as the model did in a try since). The update after Shoni planned from scratch (the
+    trainer before Wilder) and the check described that order. The player read a letter by the trainer, which
+    ticked the trainer's stop off; the update dropped the done stop from the list, and the next check told the player
+    the trainer had fallen off the route. Now the updates keep the order of the map, a new stop goes where it costs
+    the least way, a quest window from an item is not dealing with an NPC, and the marks section names the stops done
+    lately."""
+    import re
+    import threading
+
+    from foreverai.service import TurnContext
+    from journey import _plain, _Writer
+    j = start(stormwind_evening(), ("Stormwind City", 58.0, 40.0), level=20)
+    for qid in (2040, 168, 167):
+        j.take(qid)
+    j.pump(3)
+    # the AI's answer: plan_route with the trainer, then edit_route with the order the player asked for
+    j.sim.ask("odwiedzmy tez trenera jakos zaraz po oddaniu tych questow")
+    msg = None
+    for _ in range(60):
+        j.sim.run(0.5)
+        msg = next(iter(j._questions()), None)
+        if msg:
+            break
+    ctx = TurnContext(msg, _Writer(), msg.get("snapshot") or {}, threading.Event(), [])
+    ctx.conv = str(msg.get("conv") or "default")
+    text, err = j.svc.run_tool(ctx, "plan_route", {"extra": [{"title": "Einris Brightspear (hunter trainer)",
+        "zone": "Stormwind City", "x": 67.3, "y": 36.2, "note": "train new spells and spend the talent points",
+        **({"when": "last"} if how == "last" else {})}]})
+    assert not err, text
+    if how == "order":
+        text, err = j.svc.run_tool(ctx, "edit_route", {"order": ["Shoni the Shilent", "Wilder Thistlenettle",
+                                                                 "Einris Brightspear (hunter trainer)"]})
+        assert not err, text
+    j.sim.deliver({"kind": "answer", "final": True, "msgId": msg["msgId"], "text": "Added the trainer.",
+                   "marks": ctx.marks, "marksReplace": True, "track": ctx.track, "routePlanned": True,
+                   **({"route": ctx.route_edit} if ctx.route_edit else {})})
+    j.sim.run(4)
+    left = [s["title"] for s in j.stops() if not s["done"]]
+    assert left == ["Shoni the Shilent", "Wilder Thistlenettle", "Einris Brightspear (hunter trainer)"], left
+    # Shoni: the update keeps Wilder before the trainer, on the map and in what the AI is told
+    j.follow(until=lambda j: 2040 in j.done)
+    j.pump(8)
+    left = [s["title"] for s in j.stops() if not s["done"]]
+    assert left[:2] == ["Wilder Thistlenettle", "Einris Brightspear (hunter trainer)"], (left, j.story())
+    # a quest taken on the way, from a letter the player reads by the trainer: its stop goes in, the order of the
+    # others stays, and reading it is not training (the trainer's stop was done, and the next update took it off)
+    j.walk(67.0, 36.4)
+    j.sim._wow.fire(b"QUEST_DETAIL")
+    j.take(373)
+    j.sim._wow.fire(b"QUEST_FINISHED")
+    j.pump(8)
+    trainer = next(s for s in j.stops() if s["title"] == "Einris Brightspear (hunter trainer)")
+    assert not trainer["done"], j.story()
+    left = [s["title"] for s in j.stops() if not s["done"]]
+    # (the player stands by the trainer, Wilder a few steps away: Baros, across the town, comes after them)
+    assert left == ["Wilder Thistlenettle", "Einris Brightspear (hunter trainer)", "Baros Alexston"], (left, j.story())
+    # walked as the arrow says: the trainer comes after Wilder
+    def visited() -> list[str]:
+        return [re.sub(r"^at stop \d+\. ", "", line.split(": ", 1)[1]).split(" [")[0]
+                for line in j.trace if ": at stop " in line]
+    j.follow(until=lambda j: "Einris Brightspear (hunter trainer)" in visited())
+    j.pump(8)
+    names = visited()
+    assert names.index("Wilder Thistlenettle") < names.index("Einris Brightspear (hunter trainer)"), j.story()
+    # the stops done lately reach the AI: the trainer is done, not gone from the route
+    lately = _plain(j.sim.to_py(j.sim.lua("return ForeverAI.Collect.Snapshot().doneLately"))) or []
+    assert [line.split(" — ")[0] for line in lately][:2] == ["Shoni the Shilent", "Wilder Thistlenettle"], lately
+    trainer = next((line for line in lately if line.startswith("Einris Brightspear (hunter trainer) — ")), "")
+    assert "train new spells" in trainer, lately  # (what the stop was for)
+    j.follow()
+    # ... also once updates have taken the done stops off the list, and with no route left on the map
+    marks = _plain(j.sim.to_py(j.sim.lua("return ForeverAI.Map.Section()"))) or []
+    assert not any("Einris" in line for line in marks if re.match(r"^\d+\. ", line) and "(done)" not in line), marks
+    lately = _plain(j.sim.to_py(j.sim.lua("return ForeverAI.Collect.Snapshot().doneLately"))) or []
+    assert any(line.startswith("Einris Brightspear (hunter trainer) — ") for line in lately), lately
+    assert j.problems == [], j.story()
+    assert {2040, 168, 167, 373, 389} <= j.done, j.story()

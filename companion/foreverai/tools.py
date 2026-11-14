@@ -166,7 +166,8 @@ TOOLS.append({
                 "propose": {"type": "boolean",
                             "description": "true when the player did not ask for this change and you think the route "
                                            "no longer fits: the player gets it as a card to accept, and the route "
-                                           "stays as it is until then"},
+                                           "stays as it is until then. Not in a message of the add-on (a route "
+                                           "update or check): there the change is made at once"},
                 "go_to": {"type": "string",
                           "description": "The stop the player heads to now (its title or number; also a stop marked in "
                                          "this answer): the arrow leads there. Otherwise it leads to the first stop "
@@ -246,6 +247,16 @@ TOOLS.append({
                                          "player no longer wants is left out by its name in skip. Coordinates from the "
                                          "game data or the knowledge base, never a guess",
                           "items": {"type": "object", "properties": {
+                              "service": {"type": "string",
+                                          "description": "Instead of title, x and y: a kind of NPC the player wants "
+                                                         "on the route, as the game data names roles (repair, vendor, "
+                                                         "innkeeper, banker, auctioneer, stable master, flight "
+                                                         "master) or a trainer as the services section names it "
+                                                         "(leatherworking trainer, hunter trainer). The app puts on "
+                                                         "the route the NPC of that kind in that zone nearest to the "
+                                                         "route's other stops there, in the zone the player is in and "
+                                                         "in others alike. Use it whenever the player wants a kind of "
+                                                         "NPC rather than a particular one"},
                               "title": {"type": "string", "description": "Who or what is there"},
                               "zone": {"type": "string", "description": "English name of the zone it is in"},
                               "x": {"type": "number"}, "y": {"type": "number"},
@@ -254,8 +265,12 @@ TOOLS.append({
                               "when": {"type": "string", "enum": ["first", "last"],
                                        "description": "Only when the player wants it so: first = before everything "
                                                       "else in its zone; last = the last stop of the whole route "
-                                                      "(the route comes back to its zone for it)"}},
-                              "required": ["title", "zone", "x", "y"]}},
+                                                      "(the route comes back to its zone for it). Once it is on the "
+                                                      "map it keeps its place there, and what an update adds goes "
+                                                      "where it costs the least way. A stop wanted right after "
+                                                      "certain others goes there with edit_route's order: updates "
+                                                      "keep the order the stops have on the map"}},
+                              "required": ["zone"]}},
                 "avoid": {"type": "array", "items": {"type": "string"},
                           "description": "Ways the route must not take, when the player says one is not there or "
                                          "does not want it: the name of a flight master whose flight path the "
@@ -269,7 +284,8 @@ TOOLS.append({
                 "propose": {"type": "boolean",
                             "description": "true when the player did not ask for a route and you think the one on the "
                                            "map no longer fits: the new route goes to the player as a card to accept, "
-                                           "and the map stays as it is until then"},
+                                           "and the map stays as it is until then. Not in a message of the add-on (a "
+                                           "route update or check): there the route is set at once"},
                 "end_x": {"type": "number", "description": "Where the player goes after these quests, in the "
                                                              "coordinates of the route's last zone (the road to the "
                                                              "next zone, a flight master), when that zone itself is "
@@ -370,6 +386,11 @@ TOOLS.append({
                 "what": {"type": "string", "description": "rares, ore, herbs, chests, fishing, npcs, books, travel, or "
                                                           "one node or pool (copper, tin, peacebloom, firefin...); "
                                                           "leave out for everything in the zone"},
+                "near_x": {"type": "number", "description": "With near_y: a place in that zone (where the player "
+                                                            "will be); of each kind of town NPC the ones nearest to "
+                                                            "it come first. Without it, the nearest to the player "
+                                                            "when they are in the zone, else the database's order"},
+                "near_y": {"type": "number"},
             },
         },
     },

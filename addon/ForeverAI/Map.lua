@@ -415,9 +415,12 @@ local NPC_WAIT_S = 20 -- how long a stop waits for the NPC data to say whether s
 local met, windowOpen = {}, {}
 local askedAt = setmetatable({}, { __mode = "k" }) -- stop -> when the NPC data was first asked about it
 
-local function noteMet()
+local function noteMet(kind)
   local mapID, px, py = playerSpot()
   local name = UnitName("npc")
+  -- A quest window with nobody behind it is a quest from an item the player opened: reading a letter by the trainer
+  -- is not training, and the place does not count as one where an NPC was dealt with.
+  if kind == "quest" and not (type(name) == "string" and name ~= "" and name ~= UnitName("player")) then return end
   if not name and UnitExists("target") and not UnitIsPlayer("target") then name = UnitName("target") end
   met[#met + 1] = { t = time(), mapID = mapID, x = px, y = py, name = type(name) == "string" and name:lower() or nil }
   while #met > MET_KEEP do table.remove(met, 1) end
@@ -430,17 +433,17 @@ for kind, events in pairs({ gossip = { "GOSSIP_SHOW", "GOSSIP_CLOSED" }, merchan
     stable = { "PET_STABLE_SHOW", "PET_STABLE_CLOSED" }, quest = { "QUEST_DETAIL", "QUEST_FINISHED" } }) do
   ns.On(events[1], function()
     windowOpen[kind] = true
-    noteMet()
+    noteMet(kind)
   end)
   ns.On(events[2], function() -- only a window that was open: the game sends some of these without one
-    if windowOpen[kind] then noteMet() end
+    if windowOpen[kind] then noteMet(kind) end
     windowOpen[kind] = nil
   end)
 end
 for _, event in ipairs({ "QUEST_GREETING", "QUEST_PROGRESS", "QUEST_COMPLETE" }) do
   ns.On(event, function()
     windowOpen.quest = true
-    noteMet()
+    noteMet("quest")
   end)
 end
 
@@ -658,11 +661,12 @@ function M.Check()
         end
       end
       if finished then
+        local how = mk.back and "reached again" or travels and "in the next zone" or mk.tasks and "what was to be done is done"
+          or mk.npc and "the player dealt with an NPC there" or "reached"
         if ns.Log then
-          ns.Log("route", string.format("stop done: %d. %s (%s)", i, tostring(mk.title):gsub("^%d+[%.%)]%s*", ""),
-            mk.back and "reached again" or travels and "in the next zone" or mk.tasks and "what was to be done is done"
-            or mk.npc and "the player dealt with an NPC there" or "reached"))
+          ns.Log("route", string.format("stop done: %d. %s (%s)", i, tostring(mk.title):gsub("^%d+[%.%)]%s*", ""), how))
         end
+        if M.NoteDone then M.NoteDone(mk, how) end
         M.Finish(saved, i)
         moved = true
         -- (a stop of the route was just done: when the arrow now leads into another zone, that is not a border
@@ -1326,6 +1330,30 @@ function M.List()
   return out
 end
 
+-- The stops of routes the player did lately, the newest last: { title, zone, what, at }. A done stop leaves the list
+-- at the next update, and without this the AI took a stop the player had just done for one that fell off the route.
+local DONE_KEEP, DONE_S = 10, 3 * 3600
+function M.NoteDone(mk, how)
+  if not ns.char then return end
+  local done = ns.char.routeVisited or {}
+  done[#done + 1] = { title = bare(mk.title), zone = mk.zone, what = M.What(mk) or how, at = time() }
+  while #done > DONE_KEEP do table.remove(done, 1) end
+  ns.char.routeVisited = done
+end
+
+-- for the AI (its own section, with a route on the map or without one): them, oldest first, with how long ago
+function M.DoneLately()
+  local out, now = {}, time()
+  for _, d in ipairs(ns.char and ns.char.routeVisited or {}) do
+    local ago = now - (tonumber(d.at) or 0)
+    if ago <= DONE_S then
+      out[#out + 1] = string.format("%s — %s (%s, %d min ago)", tostring(d.title), tostring(d.what or "reached"),
+        tostring(d.zone or "?"), math.floor(ago / 60))
+    end
+  end
+  return #out > 0 and out or nil
+end
+
 -- for the AI: what is marked now, in order, with the distance when the stop is in the player's zone, and the stops
 -- the player took off themselves
 function M.Section()
@@ -1868,4 +1896,5 @@ if ns.Collect and ns.Collect.sections then
   ns.Collect.sections.marks = M.Section
   ns.Collect.sections.detours = M.Detours
   ns.Collect.sections.routeDone = M.RouteDone
+  ns.Collect.sections.doneLately = M.DoneLately
 end

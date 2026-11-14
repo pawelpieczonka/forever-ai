@@ -853,13 +853,15 @@ class Journey:
         """What a player does at a stop: everything it is for, as far as the game lets them. At a quest NPC they
         talk to him first (his window opens, and closes when they are done)."""
         talks = any(t["kind"] in ("pick_up", "turn_in") for t in stop["tasks"])
-        if talks:
+        if talks:  # (the game names the NPC whose window it is)
+            self.sim.lua(f"TEST_npc = {_lua(stop['title'].split(' (')[0])}")
             self.sim._wow.fire(b"QUEST_GREETING")
         try:
             self._act(stop)
         finally:
             if talks:
                 self.sim._wow.fire(b"QUEST_FINISHED")
+                self.sim.lua("TEST_npc = nil")
 
     def _act(self, stop: dict) -> None:
         for t in stop["tasks"]:

@@ -275,6 +275,15 @@ def _route_view(ctx: "TurnContext", stops: list[dict], added: list[dict], remove
     return ordered(route)
 
 
+# a kind of NPC as the game data names its roles, and as the player's map notes name it (they list town NPCs that
+# repair, and every one of them sells)
+_SERVICE_NOTES = {"banker": "bank", "auctioneer": "auction house", "vendor": "repair"}
+_ROLES = re.compile(r"^(?P<who>[^<\[—]+?)(?: <[^>]*>)? \[(?P<roles>[^\]]*)\] — (?P<zone>.+?) (?P<x>\d+(?:\.\d+)?), "
+                    r"(?P<y>\d+(?:\.\d+)?)")
+_SERVICE = re.compile(r"^(?P<label>[^:]+): (?P<who>[^<\[—]+?)(?: <[^>]*>)?(?: \[[^\]]*\])? — (?P<zone>.+?) "
+                      r"(?P<x>\d+(?:\.\d+)?), (?P<y>\d+(?:\.\d+)?)")
+
+
 def _extra_stops(value) -> list[dict]:
     """plan_route's `extra` as the planner takes it: the stops with a title and a place, at most ten."""
     out = []
@@ -291,6 +300,7 @@ def _extra_stops(value) -> list[dict]:
                     **({"mob": str(e["mob"]).strip("[] ")[:60]} if e.get("mob") else {}),
                     **({"when": e["when"]} if e.get("when") in ("first", "last") else {}),
                     **({"tasks": e["tasks"]} if isinstance(e.get("tasks"), list) else {}),
+                    **({"options": e["options"]} if isinstance(e.get("options"), list) else {}),
                     **({"placed": True} if e.get("placed") else {})})
     return out[:10]
 
@@ -554,7 +564,7 @@ def edit_route(ctx: "TurnContext", args: dict) -> tuple[str, bool]:
                     + (f" Added in this answer: {', '.join(s['title'] for s in added)}." if added else "")), True
     # In an update of the route (the player asked for nothing), a stop a quest of the quest log still needs stays:
     # quests of one chain can share a title, and the log tells them apart by number, not by name.
-    if getattr(ctx, "route_update", False) and args.get("propose") is not True:
+    if getattr(ctx, "route_update", False):
         needed = [(s, t) for s in (stops if clear else gone) for t in _stop_tasks(ctx.snapshot, s)]
         if needed:
             s, t = needed[0]
@@ -574,7 +584,7 @@ def edit_route(ctx: "TurnContext", args: dict) -> tuple[str, bool]:
             unwatched.append(hit)
 
     said, notes, edit = [], [], {}
-    propose = args.get("propose") is True
+    propose = args.get("propose") is True and not getattr(ctx, "route_update", False)  # (an update: at once)
     # the calls of one answer add up: what an earlier one took off stays off, and its order holds until another is given
     state = {"remove": set(), "first": []} if propose else ctx.route_state
     removed = state["remove"] | {_stop_key(s) for s in gone}
@@ -1606,6 +1616,48 @@ class Service:
         self._zone_quests[key] = (now, quests)
         return quests
 
+    def _service_stops(self, ctx: TurnContext, extra) -> tuple[list, list[str]]:
+        """plan_route's extra with each stop given by its kind of NPC (service) made a stop the planner can place:
+        every NPC of that kind in that zone is an option, and the planner takes the one nearest to the route's other
+        stops there. Where the player is, from the game data (its services and zoneNPCs); elsewhere from the player's
+        map notes. Returns (the extra stops, the services no NPC is known for)."""
+        out, unknown = [], []
+        player = ctx.snapshot.get("player") or {}
+        here = str(player.get("map") or player.get("zone") or "")
+        faction = "H" if str(player.get("faction") or "").lower().startswith("h") else "A"
+        for e in extra if isinstance(extra, list) else []:
+            service = str(e.get("service") or "").strip().lower()[:40] if isinstance(e, dict) else ""
+            if not service:
+                out.append(e)
+                continue
+            zone = str(e.get("zone") or here).strip()[:60] or here
+            options: list[dict] = []
+            if zone.lower() == here.lower():
+                for line in ctx.snapshot.get("zoneNPCs") or []:
+                    m = _ROLES.match(str(line))
+                    if m and service in [r.strip().lower() for r in m.group("roles").split(",")]:
+                        options.append({"title": m.group("who").strip(), "x": float(m.group("x")), "y": float(m.group("y"))})
+                for line in ctx.snapshot.get("services") or []:
+                    m = _SERVICE.match(str(line))
+                    if m and m.group("label").strip().lower() == service and not any(
+                            o["title"] == m.group("who").strip() for o in options):
+                        options.append({"title": m.group("who").strip(), "x": float(m.group("x")), "y": float(m.group("y"))})
+            if not options and self.map_notes.installed():
+                for kind in dict.fromkeys([service, _SERVICE_NOTES.get(service, service)]):
+                    options += [{"title": name or kind, "x": round(x, 1), "y": round(y, 1)}
+                                for name, x, y in self.map_notes.npc_spots(zone, faction, kind)]
+                    if options:
+                        break
+            if not options:
+                unknown.append(f"{service} in {zone}")
+                continue
+            note = str(e.get("note") or service).strip()[:120]
+            out.append({"title": f"{options[0]['title']} ({service})"[:EXTRA_TITLE], "zone": zone,
+                        "x": options[0]["x"], "y": options[0]["y"], "note": note,
+                        **({"when": e["when"]} if e.get("when") in ("first", "last") else {}),
+                        "options": [dict(o, title=f"{o['title']} ({service})"[:EXTRA_TITLE]) for o in options[:40]]})
+        return out, unknown
+
     def _plan_route(self, ctx: TurnContext, args: dict, along: list | None = None) -> tuple[str, bool]:
         """The plan_route tool: the route computed from the game data, marked or proposed as the arguments say.
         ``along``: for the add-on's update, the quests the route took along on the way when it was planned."""
@@ -1632,7 +1684,8 @@ class Service:
                  "via_title": str(hop.get("via_title") or "").strip()[:60]}
                 for hop in ([then] if isinstance(then, dict) else then if isinstance(then, list) else [])
                 if isinstance(hop, dict) and str(hop.get("zone") or "").strip()]
-        extra = _extra_stops(args.get("extra"))
+        extra_args, unknown = self._service_stops(ctx, args.get("extra"))
+        extra = _extra_stops(extra_args)
         # the quests of other zones looked up with zone_quests (in this answer, or when the route was planned) are
         # offered to the planner like the ones around the player
         wanted = {str(t).strip("[] ").lower() for t in (new_quests if isinstance(new_quests, list) else [])}
@@ -1675,8 +1728,13 @@ class Service:
         far = [q for q in far if q.get("id") not in through]
         # an update keeps the source the route has for each objective (a route planned anew chooses again)
         keep = (self._plans().get(getattr(ctx, "conv", None)) or {}).get("sources") if along is not None else None
+        # ... and the order its stops have on the map (the player's, or one set for them): a new stop goes where it
+        # costs the least way, and the stops that stay are not shuffled
+        order = ([s for s in _map_stops(ctx.snapshot) if not s["done"]]
+                 if along is not None or getattr(ctx, "route_update", False) else [])
         snapshot = dict(ctx.snapshot, nearbyQuests=nearby + far, through=sorted(through),
-                        **({"keepSources": keep} if isinstance(keep, dict) and keep else {}))
+                        **({"keepSources": keep} if isinstance(keep, dict) and keep else {}),
+                        **({"keepOrder": order} if order else {}))
         args = dict(args, offered=far) if far else {k: v for k, v in args.items() if k != "offered"}
         def planned(snap: dict) -> dict:
             return plan_route(snap, new_quests=new_quests, skip=skip, last=last, end=end,
@@ -1698,7 +1756,19 @@ class Service:
                 snapshot = dict(snapshot, nearbyQuests=nearby + far)
                 route = planned(snapshot)
         text = route["text"]
-        propose = args.get("propose") is True
+        # a stop given by its kind of NPC is the one the planner took from now on (an update does not move it)
+        for e in extra:
+            took = (route.get("picked_options") or {}).get(str(e.get("title")))
+            if took and e.get("options"):
+                e.update(took)
+                e.pop("options", None)
+                text += f"\nFor {e.get('note') or 'the stop asked for'} in {e.get('zone')}: {took['title']}, the nearest to the route there."
+        if unknown:
+            text += ("\nNo NPC known for " + "; ".join(unknown) + ": name one from the game data, the map notes or the "
+                     "knowledge base, with its place.")
+        # (in the add-on's own message the route is changed at once: a card would wait for an Accept the player did
+        # not know they owed, while the route on the map stayed the old one)
+        propose = args.get("propose") is True and not getattr(ctx, "route_update", False)
         if route["stops"] and (propose or args.get("mark") is not False):
             # what the route holds and why goes into the conversation: an update later keeps to it
             def way(hop: dict) -> str:
@@ -2538,9 +2608,13 @@ class Service:
         if name == "map_notes":
             from . import ways
             ctx.phase_cb("Reading the map notes…")
+            try:
+                near = (float(args["near_x"]), float(args["near_y"]))
+            except (KeyError, TypeError, ValueError):
+                near = None
             return format_map_notes(self.map_notes, str(args.get("zone") or "").strip("[] ")[:60],
                                     str(args.get("what") or "").strip("[] ")[:40], ctx.snapshot or {},
-                                    ways.world_for(ctx.snapshot or {}).links)
+                                    ways.world_for(ctx.snapshot or {}).links, near)
         if name == "pet_abilities":
             from . import ways
             ctx.phase_cb("Reading the pet abilities…")

@@ -399,6 +399,8 @@ def test_the_stops_that_are_done_leave_when_the_route_is_updated(sim):
     sim.run(2)
     assert "Route (1)" in shown(sim) and "done" not in text(sim.lua(SECTION))
     assert text(sim.lua(SECTION)).startswith("1. Bloodfeather Rogue — ")
+    # (the AI is still told that Byancie was done: off the list, not fallen off the route)
+    assert text(sim.lua("return table.concat(ForeverAI.Map.DoneLately() or {}, ' | ')")).startswith("Byancie — ")
 
 
 def test_an_update_that_gets_no_answer_gives_up_soon_and_is_asked_again(sim):

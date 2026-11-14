@@ -2155,7 +2155,7 @@ end
 
 ------------------------------------------------------------------------ snapshot
 S.sinceLastAnswer = function() return ns.SeenSection and ns.SeenSection() or nil end
-local ORDER = { "game", "sinceLastAnswer", "player", "progress", "stats", "gearTotals", "equipment", "talents", "quests", "marks", "detours", "routeDone", "tracked",
+local ORDER = { "game", "sinceLastAnswer", "player", "progress", "stats", "gearTotals", "equipment", "talents", "quests", "marks", "doneLately", "detours", "routeDone", "tracked",
   "nearbyQuests", "services", "zoneNPCs", "flightMasters", "mapSizes", "nearbyMobs", "around", "recentEvents", "actionBars", "target", "mouseover", "pet", "tooltip", "group",
   "nearby", "auras", "windows", "bags", "bank", "spells", "skills", "professions", "reputations", "addons",
   "addonChanges", "chat" }

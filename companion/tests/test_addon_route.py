@@ -108,6 +108,10 @@ def test_a_click_on_a_stop_makes_it_the_one_to_go_to(sim):
     assert stops(sim) == ["1. Befouled Webwood", "2. Sentinel Glynda", "3. Old Chest",
                           "The player is heading to stop 3 (Old Chest) now, not to the first one."]
     assert "2. Sentinel Glynda — Darkshore 38.1, 43.2 (done)" in text(sim.lua(SECTION))  # it stays, with its number
+    # (and the AI is told in a section of its own that the player did it, and when: once the list drops it at the next
+    # update, it is a stop done, not one that fell off the route)
+    assert re.match(r"^Sentinel Glynda — .+ \(Darkshore, 0 min ago\)$",
+                    text(sim.lua("return table.concat(ForeverAI.Map.DoneLately() or {}, ' | ')")))
     assert text(sim.lua(ARROW)) == "ForeverAI: 3. Old Chest" and "Route (1/3)" in shown(sim)
     sim._wow.player.x, sim._wow.player.y = 0.41, 0.45  # the last stop reached: back to the first that is left
     sim.run(3)

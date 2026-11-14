@@ -562,6 +562,34 @@ def _shorter(order: list[int], start, nodes: list[dict], end, dist) -> list[int]
     return order
 
 
+def _kept_order(part: list[dict], zone: str, keep) -> dict[int, set[int]]:
+    """For an update of a route: each stop of ``part`` (one zone's nodes) that is on the map already comes after the
+    ones before it there, so that the route keeps the order the player walks it in (their own, or one the model set
+    for them); a new stop goes where it costs the least way. ``keep``: the stops left on the map, in their order
+    ({"title", "zone", "x", "y"}). A stop is the one of the map with its name on that map, or, with no such name, the
+    one at its very place (two NPCs side by side are one stop there); a stop the map has more than once (an NPC the
+    route comes back to), or one that is two stops of the plan now (a quest taken there and one turned in), is left
+    to the planner. Returns {index: the indices it comes after}."""
+    def name(title) -> str:
+        return re.sub(r"\s*\(.*$", "", re.sub(r"^\d+[.)]\s*", "", str(title or ""))).strip().lower()
+    spots = []
+    for n, k in enumerate(keep or []):
+        xy = _pair((k.get("x"), k.get("y"))) if isinstance(k, dict) else None
+        if xy and str(k.get("zone") or "").strip().lower() == zone.strip().lower():
+            spots.append((n, name(k.get("title")), xy))
+    rank: dict[int, int] = {}
+    for i, node in enumerate(part):
+        x, y = node["xy"]
+        hits = [n for n, t, _ in spots if t == name(node["title"])]
+        if not hits:
+            hits = [n for n, _, (kx, ky) in spots if abs(kx - x) <= 0.3 and abs(ky - y) <= 0.3]
+        if len(hits) == 1:
+            rank[i] = hits[0]
+    shared = {r for r in rank.values() if list(rank.values()).count(r) > 1}
+    rank = {i: r for i, r in rank.items() if r not in shared}
+    return {i: {j for j, r in rank.items() if r < ri} for i, ri in rank.items()}
+
+
 def _merge(nodes: list[dict]) -> list[dict]:
     """One stop per place: stops with the same name at the same spot become one (two quests turned in to one NPC,
     two quests' creatures at one spawn), so the player is never sent to a place twice. Turn-ins merge only with
@@ -1061,6 +1089,7 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
     # further down, once every quest stop is there: a stop asked for at a quest's NPC is that quest's stop, not a
     # second one at the same place.
     asked = []
+    picked_options: dict[str, dict] = {}  # a stop given by its kind of NPC -> the NPC the route took for it
     for e in extras:
         xy = _pair((e.get("x"), e.get("y")))
         z = region_of(world.name(str(e.get("zone") or "").strip()) if e.get("zone") else home, xy)
@@ -1075,6 +1104,21 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
 
     def put_asked() -> None:
         for e, title, xy, leg, tasks in asked:
+            options = [o for o in e.get("options") or [] if isinstance(o, dict) and _pair((o.get("x"), o.get("y")))]
+            if options:
+                # a kind of NPC (repair, a trainer, the bank): the one of that kind nearest to the route's other
+                # stops in that zone, where it comes into it and where it leaves it
+                anchors = [n["xy"] for n in nodes if n["leg"] == leg]
+                anchors += [legs[leg][key] for key in ("entry", "via") if legs[leg].get(key)]
+                if leg == 0 and start:
+                    anchors.append(start)
+
+                def off(o: dict) -> float:
+                    p = _pair((o.get("x"), o.get("y")))
+                    return min((math.hypot(p[0] - a[0], p[1] - a[1]) for a in anchors), default=0.0)
+                best = min(options, key=off) if anchors else options[0]
+                title, xy = str(best.get("title") or title).strip()[:60], _pair((best.get("x"), best.get("y")))
+                picked_options[str(e["title"])] = {"title": title, "x": xy[0], "y": xy[1]}
             name = re.sub(r"\s*\(.*$", "", title).strip().lower()
             # the same spot, or the NPC of that name close by; on the part of the route the stop would go to, else on
             # another part through the same zone (the quest decides when its NPC is visited)
@@ -1237,6 +1281,7 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
         for node in part:
             node["after"] = sorted(local[a] for a in node["after"] if a in local)
             node["glue"] = local.get(node.get("glue")) if isinstance(node.get("glue"), int) else None
+        own = [list(node["after"]) for node in part]  # (what each waits for by its quests alone)
         for node in part:
             if node["late"]:
                 node["after"] = sorted(set(node["after"]) | {n for n, o in enumerate(part) if not o["late"]})
@@ -1266,7 +1311,25 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
                 v = at(via)
                 return math.hypot(p[0] - v[0], p[1] - v[1]) + math.hypot(v[0] - q[0], v[1] - q[1])
             return math.hypot(p[0] - q[0], p[1] - q[1])
-        for i in _order(pos, part, at(goal) if goal else None, walk if here else None) if part else []:
+        # (an update: the stops of the map in the order they have there, when the quests let them be walked so)
+        kept = _kept_order(part, map_of(leg["zone"]), snapshot.get("keepOrder")) if part else {}
+        seq = None
+        if kept:
+            def held(n: int, node: dict) -> list[int]:
+                # (a stop wanted last that is on the map keeps its place there: what an update adds goes where it
+                # costs the least way, not all of it before that stop, far off and back. "Right after these two",
+                # asked of a route of two stops, came to the model as last.)
+                after = set(own[n]) | {m for m, o in enumerate(part) if o["early"]} if node["late"] and n in kept \
+                    else set(node["after"])
+                return sorted(after | kept.get(n, set()))
+            try:
+                seq = _order(pos, [dict(node, after=held(n, node)) for n, node in enumerate(part)],
+                             at(goal) if goal else None, walk if here else None)
+            except ValueError:  # (a quest now waits for a stop the map has after it: the planner's own order)
+                seq = None
+        if seq is None:
+            seq = _order(pos, part, at(goal) if goal else None, walk if here else None) if part else []
+        for i in seq:
             node = part[i]
             via = pos and here and _round_via(back(pos), node["xy"], here)
             if via:  # the straight way is blocked: the arrow leads round first
@@ -1421,6 +1484,7 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
     ways = [{"zone": legs[k + 1]["zone"], "via": leg["via"], "title": leg["via_title"], "arrive": legs[k + 1]["entry"]}
             for k, leg in enumerate(legs[:-1])]
     return {"stops": stops, "left_out": left_out, "meters": total if scale else None, "ways": ways,
+            **({"picked_options": picked_options} if picked_options else {}),
             "targets": targets, "along": taken_keys, "along_titles": taken, "text": "\n".join(lines),
             "sources": picked,
             "candidates": [(key, leg, close, title) for _, key, leg, close, title in sorted(candidates, key=lambda c: c[0])]}

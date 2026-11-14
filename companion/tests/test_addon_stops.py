@@ -509,10 +509,12 @@ def test_a_next_part_beside_a_turn_in_that_waits_lets_the_arrow_go_on(sim):
     sim.run(3)
     assert text(sim.lua(now)) == "2. Gryan"
     # ... while he talks to him; once his window is closed without it, it waits for the turn-in
+    sim.lua('TEST_npc = "Gryan"')  # (the game names the NPC whose window it is)
     sim._wow.fire(b"QUEST_GREETING")
     sim.run(3)
     assert text(sim.lua(now)) == "2. Gryan"
     sim._wow.fire(b"QUEST_FINISHED")
+    sim.lua("TEST_npc = nil")
     sim.run(3)
     assert text(sim.lua(now)) == "1. Trapper" and sim.errors == []
 
