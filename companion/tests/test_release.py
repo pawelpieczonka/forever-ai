@@ -80,9 +80,14 @@ def _transport(payload, status=200):
 
 def test_newer_release_from_github():
     rel = {"tag_name": "v9.1.0", "html_url": "https://github.com/pawelpieczonka/forever-ai/releases/tag/v9.1.0",
-           "assets": [{"name": updates.asset_name("9.1.0"), "browser_download_url": "https://dl/x"}]}
+           "assets": [{"name": updates.asset_name("9.1.0"), "browser_download_url": "https://dl/x", "size": 1234,
+                       "digest": "sha256:ab"},
+                      {"name": updates.asset_name("9.1.0", "Windows" if updates.PLATFORM == "Linux" else "Linux"),
+                       "browser_download_url": "https://dl/other-platform"},
+                      {"name": "SHA256SUMS.txt", "browser_download_url": "https://dl/sums"}]}
     found = updates.newer_release("0.5.0", transport=_transport(rel))
-    assert found == {"version": "9.1.0", "url": rel["html_url"], "download": "https://dl/x"}
+    assert found == {"version": "9.1.0", "url": rel["html_url"], "download": "https://dl/x", "size": 1234,
+                     "digest": "sha256:ab", "sums": "https://dl/sums"}
     assert updates.newer_release("9.1.0", transport=_transport(rel)) is None  # already up to date
     assert updates.newer_release("0.5.0", transport=_transport({"message": "Not Found"}, 404)) is None
     assert updates.newer_release("0.5.0", transport=_transport(dict(rel, prerelease=True))) is None

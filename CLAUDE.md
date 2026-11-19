@@ -11,7 +11,7 @@ The prebuilt apps are not committed. `.github/workflows/release.yml` builds both
 
 - Every pull request builds both apps (workflow artifacts). A push to `main` publishes the GitHub Release `v<version>` with both files and `SHA256SUMS.txt` when the version in the source has no release yet; the workflow creates the tag. So a version bump merged to `main` is a release, and changes merged without a bump are released with the next one. Pushing a tag `v<version>` also publishes it; the tag must match the version in the source.
 - `release/`, `build/` and `dist/` are local build output and ignored by git. Never commit build output.
-- The file names carry the platform (Windows / Linux) and must stay that way; `companion/foreverai/updates.py` (`asset_name`) finds the download for the update notice by these names, and `companion/tests/test_release.py` checks that the scripts and the workflow agree.
+- The file names carry the platform (Windows / Linux) and must stay that way. Installed apps update themselves from these files (`companion/foreverai/updates.py`): they look for the archive by its name (`asset_name`), check it against `SHA256SUMS.txt`, and expect one top folder (`ForeverAI-Windows/`, `ForeverAI-Linux/`) with the program of the same name in it. Keep all of that as it is. `companion/tests/test_release.py` checks that the scripts and the workflow agree.
 - The starter knowledge base is `seed/kb.sqlite` (committed, bundled into both apps).
 
 ## Changes that affect the apps
@@ -42,6 +42,16 @@ d="$(mktemp -d)" && cp seed/kb.sqlite "$d/" && (cd companion && FOREVERAI_DATA="
 On Windows the same steps with `companion\.venv\Scripts\python.exe` and `$env:FOREVERAI_DATA`. Start from the committed file, not an empty one: Blizzard articles that have left the news pages are kept only from the existing knowledge base. `--force` checks every page against its source, downloads what changed and drops wiki pages that left the category.
 
 The workflow's `version` job checks all of this on every pull request. For the knowledge base, the newest sync of each source (`sync_log` in the file) must have no errors and must have finished at most 24 hours before the commit that changed the file.
+
+### Self-update
+
+The packaged app downloads a newer release in the background and installs it when it quits, on **Restart now**, or at the next start (`companion/foreverai/updates.py` describes how). Things to keep in mind:
+
+- **A release reaches every installed app by itself** (0.9.0 and later), within about six hours of the merge. Before the folders are swapped, the new version's copy imports every module of the app and starts Tcl, so a build that cannot start is refused; a bug that shows later is not.
+- **The command line of the installer is a contract between versions.** The version that runs starts the next version's copy with `--install-update <app folder> --pid <pid> [--restart]` and reads its `started` and `result.json` in `.ForeverAI-update`. Every later version must keep accepting these (`test_the_command_line_of_the_installer_is_accepted` in `companion/tests/test_updates.py`).
+- **Each build job runs `companion/tests/test_update_e2e.py`** against the built app: a copy of it downloads a newer copy of itself from a local server and installs it. Run it after a local build too: `cd companion && FOREVERAI_BUILT_APP="$PWD/../release/linux/ForeverAI-Linux" .venv/bin/python -m pytest -q tests/test_update_e2e.py`.
+- **For tests only:** `FOREVERAI_RELEASES_API` replaces the address of the latest release, `FOREVERAI_INSTANCE_PORT` moves the single-instance lock (so a test does not meet the ForeverAI running on this computer). `FOREVERAI_NO_UPDATE_CHECK` turns the checks off.
+- **From source there are no updates**: the window's Updates row says so. Pictures of its other states come from a build started with `FOREVERAI_RELEASES_API` pointing at a local release (a copy of the build with another version in its add-on's `.toc`, as `test_update_e2e.py` makes one).
 
 ### The add-on simulator
 
@@ -98,7 +108,7 @@ Pull request images go on the `screenshots` branch, which is never merged, so th
 
 1. Run the tests: `companion/.venv/bin/python -m pytest -q` (Linux) or `companion\.venv\Scripts\python.exe -m pytest -q` (Windows), in `companion`. They include the add-on simulator's tests and, when `lua5.1` is installed, a Lua 5.1 test of the add-on's auction code and the check that the simulator knows every game global the add-on reads; `luac5.1 -p addon/ForeverAI/*.lua` checks the add-on's syntax.
 2. If you changed the add-on, run the changed flow end to end in the add-on simulator and look at its pictures.
-3. If you changed what goes into the apps, build your platform and smoke-test it. `build_linux.sh` refuses to build while the app in `release/linux` is running (replacing its files breaks it): ask the user to close it. Linux: `release/linux/ForeverAI-Linux/ForeverAI-Linux --help` must print the usage. Windows (a windowed .exe prints nothing): check that `ForeverAI-Windows.exe` exists. On both: `_internal/seed/kb.sqlite` and `_internal/addon/ForeverAI/ForeverAI.toc` must be present, and the `## Version:` in that `.toc` must match the source.
+3. If you changed what goes into the apps, build your platform and smoke-test it. `build_linux.sh` refuses to build while the app in `release/linux` is running (replacing its files breaks it): ask the user to close it. Linux: `release/linux/ForeverAI-Linux/ForeverAI-Linux --help` must print the usage. Windows (a windowed .exe prints nothing): check that `ForeverAI-Windows.exe` exists. On both: `_internal/seed/kb.sqlite` and `_internal/addon/ForeverAI/ForeverAI.toc` must be present, and the `## Version:` in that `.toc` must match the source. Then run the self-update test against the build (see Self-update).
 4. Push, open the pull request (with the screenshots when the app or the add-on looks different) and check that the workflow's test, version, Linux and Windows jobs pass.
 5. Mention in your summary which builds were checked and how (local build, CI run).
 
