@@ -1,11 +1,17 @@
 """New versions come as GitHub Releases: one archive per platform, named after it (ForeverAI-<version>-Windows-x64.zip,
-ForeverAI-<version>-Linux-x86_64.tar.gz, as the release workflow names them), and SHA256SUMS.txt.
+ForeverAI-<version>-Linux-x86_64.tar.gz, as the release workflow names them), SHA256SUMS.txt and SHA256SUMS.txt.sig.
 
 The packaged app updates itself. It looks for a newer release when it starts and every few hours, downloads the archive
 in the background, checks it against SHA256SUMS.txt and unpacks it next to its own folder. The new version is installed
 when the app quits, when the player clicks Restart now, or at the next start when the app was not quit (the computer
 was shut down with it open). With automatic updates off the window only says that a new version is out; from source,
 or from a folder the app may not write to (Program Files), it offers the download page instead.
+
+SHA256SUMS.txt.sig is the Ed25519 signature of SHA256SUMS.txt with the release key. Its private half is a secret of the
+repository that only the release workflow uses (.github/sign_sums.sh); the app knows the public half (RELEASE_KEYS) and
+takes no update without that signature, which it checks before it downloads the archive. So someone who can publish a
+release on GitHub but does not have the key cannot ship an update. Nor can the signed files of an older release pass
+for a newer one: the names in SHA256SUMS.txt carry the version, and the archive must hold the version of its release.
 
 The app cannot replace its own folder while it runs from it: Windows locks a running program's files, and on Linux the
 running app would go on reading its code from the new files. A second copy of the new version does it. The app starts
@@ -27,10 +33,12 @@ Next to the app's folder (Games/ForeverAI-Linux, say):
         install.log                         the copy's log
         old/                                the previous version, after the swap
 
-FOREVERAI_RELEASES_API replaces the GitHub address of the latest release (a test serves its own release with it)."""
+For tests: FOREVERAI_RELEASES_API replaces the GitHub address of the latest release, and FOREVERAI_RELEASE_KEY the
+release keys, so that a test can serve its own release, signed with a key of its own."""
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -61,6 +69,14 @@ RELEASES_URL = f"https://github.com/{REPO}/releases"
 LATEST_API = f"https://api.github.com/repos/{REPO}/releases/latest"
 PLATFORM = "Windows" if WINDOWS else "Linux"
 SUMS = "SHA256SUMS.txt"
+SIGNATURE = SUMS + ".sig"  # the Ed25519 signature of SHA256SUMS.txt (64 bytes), made by .github/sign_sums.sh
+# The public half of the release key (32 bytes in base64): an update is installed only when its SHA256SUMS.txt carries
+# the signature of one of these. How to make one, and to change it, is in CLAUDE.md (Self-update).
+RELEASE_KEYS: tuple[str, ...] = ("nVEPi98TbpkzcHFetmY4OUC3P82qH1Q+WJMMkKedKXg=",)
+# RFC 8032, 7.1, test 1 (the empty message): the copy of a new version checks with it that it can check signatures
+_RFC8032_KEY = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+_RFC8032_SIGNATURE = ("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155"
+                      "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b")
 STAGING = ".ForeverAI-update"
 CHECK_EVERY = 6 * 3600  # seconds between two checks while the app runs
 MAX_ATTEMPTS = 3  # installations of one downloaded update before it is given up
@@ -106,8 +122,8 @@ def newer(version: str | None, than: str | None = None) -> bool:
 # ---------------------------------------------------------------- finding and downloading a release
 def fetch_latest(transport: httpx.BaseTransport | None = None, timeout: float = 10.0) -> dict | None:
     """The newest published release: {version, url (its page), download, size, digest (the archive of this platform),
-    sums (SHA256SUMS.txt)}, or None when there is none. Raises UpdateError when GitHub cannot be asked (offline, rate
-    limit)."""
+    sums (SHA256SUMS.txt), signature (SHA256SUMS.txt.sig)}, or None when there is none. Raises UpdateError when GitHub
+    cannot be asked (offline, rate limit)."""
     api = os.environ.get("FOREVERAI_RELEASES_API") or LATEST_API
     try:
         with httpx.Client(timeout=timeout, transport=transport, follow_redirects=True,
@@ -129,7 +145,8 @@ def fetch_latest(transport: httpx.BaseTransport | None = None, timeout: float = 
     archive = assets.get(asset_name(version)) or {}
     return {"version": version, "url": data.get("html_url") or RELEASES_URL,
             "download": archive.get("browser_download_url"), "size": int(archive.get("size") or 0),
-            "digest": str(archive.get("digest") or ""), "sums": (assets.get(SUMS) or {}).get("browser_download_url")}
+            "digest": str(archive.get("digest") or ""), "sums": (assets.get(SUMS) or {}).get("browser_download_url"),
+            "signature": (assets.get(SIGNATURE) or {}).get("browser_download_url")}
 
 
 def latest_release(transport: httpx.BaseTransport | None = None, timeout: float = 10.0) -> dict | None:
@@ -156,13 +173,54 @@ def parse_sums(text: str) -> dict[str, str]:
     return out
 
 
+def release_keys() -> list[bytes]:
+    """The public keys whose signature an update needs: RELEASE_KEYS, or the one in FOREVERAI_RELEASE_KEY (tests)."""
+    test_key = (os.environ.get("FOREVERAI_RELEASE_KEY") or "").strip()
+    keys = []
+    for text in [test_key] if test_key else RELEASE_KEYS:
+        try:
+            key = base64.b64decode(text, validate=True)
+        except ValueError:
+            key = b""
+        if len(key) != 32:
+            raise UpdateError(f"{text!r} is not a release key (an Ed25519 public key, 32 bytes in base64)")
+        keys.append(key)
+    if not keys:
+        raise UpdateError("this version of ForeverAI knows no release key")
+    return keys
+
+
+def ed25519_verify(key: bytes, signature: bytes, data: bytes) -> bool:
+    """``signature`` is the Ed25519 signature of ``data`` made with the private half of the public key ``key``."""
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    except Exception as e:  # a build without it can check no update
+        raise UpdateError(f"signatures cannot be checked ({_short(e)})") from e
+    try:
+        Ed25519PublicKey.from_public_bytes(key).verify(signature, data)
+    except (InvalidSignature, ValueError):
+        return False
+    return True
+
+
+def check_signature(sums: bytes, signature: bytes) -> None:
+    """``signature`` (SHA256SUMS.txt.sig) is the release key's signature of ``sums`` (SHA256SUMS.txt, as downloaded);
+    raises UpdateError when it is not."""
+    if not any(ed25519_verify(key, signature, sums) for key in release_keys()):
+        raise UpdateError(f"the release is not signed with ForeverAI's release key ({SIGNATURE} does not match)")
+
+
 def download(rel: dict, folder: Path, progress: Callable[[int, int], None] | None = None,
              transport: httpx.BaseTransport | None = None) -> Path:
-    """The archive of this platform from release ``rel``, saved in ``folder`` and checked against the release's
-    SHA256SUMS.txt (and against the digest GitHub lists for it). ``progress(done, total)`` follows the download."""
+    """The archive of this platform from release ``rel``, saved in ``folder``. SHA256SUMS.txt must carry the release
+    key's signature, checked before the archive is downloaded, and the archive must match its line there (and the
+    digest GitHub lists for it). ``progress(done, total)`` follows the download."""
     name = asset_name(rel["version"])
     if not rel.get("download") or not rel.get("sums"):
         raise UpdateError(f"the release has no {name} or {SUMS}")
+    if not rel.get("signature"):
+        raise UpdateError(f"the release is not signed (it has no {SIGNATURE})")
     target, part = folder / name, folder / (name + ".part")
     h = hashlib.sha256()
     try:
@@ -170,7 +228,11 @@ def download(rel: dict, folder: Path, progress: Callable[[int, int], None] | Non
                           headers={"User-Agent": "ForeverAI"}) as c:
             r = c.get(rel["sums"])
             r.raise_for_status()
-            want = parse_sums(r.text).get(name)
+            sums = r.content  # the bytes that were signed
+            r = c.get(rel["signature"])
+            r.raise_for_status()
+            check_signature(sums, r.content)
+            want = parse_sums(sums.decode("utf-8", errors="replace")).get(name)
             if not want:
                 raise UpdateError(f"{SUMS} of the release has no line for {name}")
             with c.stream("GET", rel["download"]) as r:
@@ -530,8 +592,9 @@ def swap(app_dir: Path, new: Path, old: Path) -> None:
 
 
 def self_check() -> None:
-    """The new version's code loads here: every module of the app imports and Tcl starts. A build that would not start
-    stops the update before anything is moved."""
+    """The new version's code loads here: every module of the app imports, Tcl starts, and it can check the signature
+    of the update after it. A build that would not start, or not update again, stops the update before anything is
+    moved."""
     import importlib
     import pkgutil
 
@@ -543,6 +606,10 @@ def self_check() -> None:
         importlib.import_module(name)
     import tkinter
     tkinter.Tcl().eval("info patchlevel")
+    release_keys()
+    key, signature = bytes.fromhex(_RFC8032_KEY), bytes.fromhex(_RFC8032_SIGNATURE)
+    if not ed25519_verify(key, signature, b"") or ed25519_verify(key, signature, b"x"):
+        raise UpdateError("the new version cannot check signatures")
     log.info("the new version loads (%d modules)", len(names))
 
 

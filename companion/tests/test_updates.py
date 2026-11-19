@@ -1,8 +1,9 @@
-"""The packaged app updates itself (updates.py): finding a release, the checked download, the two unpacked copies, the
-hand-over to the new version's installer, the swap of the folders and what the new version reports. The installer runs
-for real in a child process, on a stand-in app whose programs are shell scripts; test_update_e2e.py does the same with
-the built apps."""
+"""The packaged app updates itself (updates.py): finding a release, the signed and checked download, the two unpacked
+copies, the hand-over to the new version's installer, the swap of the folders and what the new version reports. The
+installer runs for real in a child process, on a stand-in app whose programs are shell scripts; test_update_e2e.py does
+the same with the built apps. The releases here are signed with a key of the tests (FOREVERAI_RELEASE_KEY)."""
 
+import base64
 import hashlib
 import io
 import json
@@ -20,6 +21,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from foreverai import __version__, app, config, updates
 
@@ -28,6 +31,15 @@ COMPANION = Path(__file__).resolve().parents[1]
 NEW = "99.1.0"
 APP, EXE = updates.app_name(), updates.exe_name()
 posix = pytest.mark.skipif(os.name == "nt", reason="shell scripts stand in for the programs")
+KEY = Ed25519PrivateKey.generate()  # the release key of these tests
+PUBLIC = base64.b64encode(KEY.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)).decode()
+NOT_SIGNED = "the release is not signed with ForeverAI's release key"
+
+
+@pytest.fixture(autouse=True)
+def release_key(monkeypatch):
+    """The app takes the releases of these tests: they are signed with KEY."""
+    monkeypatch.setenv("FOREVERAI_RELEASE_KEY", PUBLIC)
 
 
 def toc(version: str) -> str:
@@ -74,17 +86,20 @@ def version_in(app_dir: Path) -> str:
 
 
 class Releases:
-    """GitHub as the app sees it: the latest release, its archive for this platform and SHA256SUMS.txt."""
+    """GitHub as the app sees it: the latest release, its archive for this platform, SHA256SUMS.txt and its signature
+    (made with KEY unless another ``signature`` is given; ``signed=False``: the release has none)."""
 
     API = "/repos/pawelpieczonka/forever-ai/releases/latest"
 
     def __init__(self, version=NEW, data: bytes | None = None, sums: str | None = None, digest: str | None = None,
-                 status=200, archive_status=200):
+                 signature: bytes | None = None, signed=True, status=200, archive_status=200):
         self.version = version
         self.data = data if data is not None else archive(bundle(version))
         sha = hashlib.sha256(self.data).hexdigest()
         self.sums = sums if sums is not None else f"{'0' * 64}  other.zip\n{sha}  {updates.asset_name(version)}\n"
         self.digest = digest if digest is not None else f"sha256:{sha}"
+        self.signature = signature if signature is not None else KEY.sign(self.sums.encode())
+        self.signed = signed
         self.status, self.archive_status = status, archive_status
         self.paths: list[str] = []
 
@@ -94,13 +109,18 @@ class Releases:
         if path == self.API:
             if self.status != 200:
                 return httpx.Response(self.status, json={"message": "no"})
+            assets = [{"name": updates.asset_name(self.version), "size": len(self.data), "digest": self.digest,
+                       "browser_download_url": "https://dl.test/archive"},
+                      {"name": "SHA256SUMS.txt", "browser_download_url": "https://dl.test/sums"}]
+            if self.signed:
+                assets.append({"name": "SHA256SUMS.txt.sig", "browser_download_url": "https://dl.test/sig"})
             return httpx.Response(200, json={
                 "tag_name": f"v{self.version}", "html_url": f"https://github.com/x/releases/tag/v{self.version}",
-                "assets": [{"name": updates.asset_name(self.version), "size": len(self.data), "digest": self.digest,
-                            "browser_download_url": "https://dl.test/archive"},
-                           {"name": "SHA256SUMS.txt", "browser_download_url": "https://dl.test/sums"}]})
+                "assets": assets})
         if path == "/sums":
             return httpx.Response(200, text=self.sums)
+        if path == "/sig":
+            return httpx.Response(200, content=self.signature)
         if path == "/archive":
             return httpx.Response(self.archive_status, content=self.data if self.archive_status == 200 else b"")
         return httpx.Response(404)
@@ -167,7 +187,8 @@ def test_the_latest_release_and_why_it_could_not_be_asked(monkeypatch):
     rel = srv.latest()
     assert rel == {"version": NEW, "url": f"https://github.com/x/releases/tag/v{NEW}",
                    "download": "https://dl.test/archive", "size": len(srv.data), "digest": srv.digest,
-                   "sums": "https://dl.test/sums"}
+                   "sums": "https://dl.test/sums", "signature": "https://dl.test/sig"}
+    assert Releases(signed=False).latest()["signature"] is None
     assert updates.fetch_latest(transport=Releases(status=404).transport) is None  # no release yet
     with pytest.raises(updates.UpdateError, match="403"):  # the rate limit: not "up to date"
         updates.fetch_latest(transport=Releases(status=403).transport)
@@ -206,6 +227,80 @@ def test_the_download_is_checked_against_the_release(tmp_path):
     fails(Releases(archive_status=404), "the download failed")
     with pytest.raises(updates.UpdateError, match="has no"):
         updates.download(dict(srv.latest(), sums=None), tmp_path, transport=srv.transport)
+
+
+def test_an_update_needs_the_signature_of_the_release_key(tmp_path):
+    """Someone who can publish a release but has not the release key cannot ship an update: SHA256SUMS.txt.sig must be
+    the release key's signature of SHA256SUMS.txt, and it is checked before the archive is downloaded."""
+    def refused(srv, match):
+        folder = tmp_path / str(len(list(tmp_path.iterdir())))
+        folder.mkdir()
+        with pytest.raises(updates.UpdateError, match=match):
+            updates.download(srv.latest(), folder, transport=srv.transport)
+        assert "/archive" not in srv.paths and not list(folder.iterdir())  # nothing downloaded, nothing left
+    srv = Releases()
+    assert updates.download(srv.latest(), tmp_path, transport=srv.transport).read_bytes() == srv.data
+    assert srv.paths.index("/sig") < srv.paths.index("/archive")
+    refused(Releases(signed=False), r"the release is not signed \(it has no SHA256SUMS.txt.sig\)")
+    refused(Releases(signature=Ed25519PrivateKey.generate().sign(srv.sums.encode())), NOT_SIGNED)  # another key
+    # the checksum of another archive in SHA256SUMS.txt, under the signature of the real one
+    other = archive(bundle(NEW, program=b"#!/bin/sh\necho another\n"))
+    refused(Releases(data=other, signature=srv.signature), NOT_SIGNED)
+    # SHA256SUMS.txt changed by a byte (a line added, a line ending), or a signature that is not one
+    refused(Releases(sums=srv.sums + "\n", signature=srv.signature), NOT_SIGNED)
+    refused(Releases(sums=srv.sums.replace("\n", "\r\n"), signature=srv.signature), NOT_SIGNED)
+    sig = srv.signature
+    flipped = (bytes([sig[0] ^ 1]) + sig[1:], sig[:63] + bytes([sig[63] ^ 0x80]))  # in R, in s
+    for bad in (b"", sig[:63], sig + b"\0", bytes(64), *flipped, base64.b64encode(sig), sig.hex().encode()):
+        refused(Releases(signature=bad), NOT_SIGNED)
+    # the signed files of an older release, offered as a newer one: SHA256SUMS.txt names the older version's archive
+    older = Releases(version="99.0.9")
+    refused(Releases(data=older.data, sums=older.sums, signature=older.signature), "has no line for")
+
+
+def test_the_release_keys(monkeypatch):
+    for text in updates.RELEASE_KEYS:  # the app's own: Ed25519 public keys
+        assert len(base64.b64decode(text, validate=True)) == 32, text
+    assert updates.release_keys() == [base64.b64decode(PUBLIC)]  # FOREVERAI_RELEASE_KEY replaces them (tests only)
+    srv = Releases()
+    updates.check_signature(srv.sums.encode(), srv.signature)
+    monkeypatch.delenv("FOREVERAI_RELEASE_KEY")
+    assert updates.release_keys() == [base64.b64decode(k) for k in updates.RELEASE_KEYS]
+    with pytest.raises(updates.UpdateError):  # a release signed with the tests' key is not taken without it
+        updates.check_signature(srv.sums.encode(), srv.signature)
+    # a key that changes: a release signed with any of the keys the app knows is taken
+    new = Ed25519PrivateKey.generate()
+    new_public = base64.b64encode(new.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)).decode()
+    monkeypatch.setattr(updates, "RELEASE_KEYS", (PUBLIC, new_public))
+    updates.check_signature(srv.sums.encode(), srv.signature)
+    updates.check_signature(srv.sums.encode(), new.sign(srv.sums.encode()))
+    monkeypatch.setattr(updates, "RELEASE_KEYS", ())
+    with pytest.raises(updates.UpdateError, match="knows no release key"):
+        updates.check_signature(srv.sums.encode(), srv.signature)
+    for wrong in ("not a key", PUBLIC[:-4], base64.b64encode(bytes(33)).decode()):
+        monkeypatch.setenv("FOREVERAI_RELEASE_KEY", wrong)
+        with pytest.raises(updates.UpdateError, match="is not a release key"):
+            updates.release_keys()
+
+
+def test_the_signature_check(monkeypatch):
+    """Ed25519 as RFC 8032 (7.1) has it, and a build that cannot check signatures says so."""
+    vectors = [(updates._RFC8032_KEY, b"", updates._RFC8032_SIGNATURE),
+               ("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c", b"\x72",
+                "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da"
+                "085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00"),
+               ("fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025", b"\xaf\x82",
+                "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac"
+                "18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a")]
+    for key, message, signature in vectors:
+        key, signature = bytes.fromhex(key), bytes.fromhex(signature)
+        assert updates.ed25519_verify(key, signature, message)
+        assert not updates.ed25519_verify(key, signature, message + b"\0")
+        assert not updates.ed25519_verify(bytes(32), signature, message)
+    assert not updates.ed25519_verify(b"short", bytes(64), b"")
+    monkeypatch.setitem(sys.modules, "cryptography.hazmat.primitives.asymmetric.ed25519", None)
+    with pytest.raises(updates.UpdateError, match="signatures cannot be checked"):
+        updates.ed25519_verify(bytes.fromhex(updates._RFC8032_KEY), bytes.fromhex(updates._RFC8032_SIGNATURE), b"")
 
 
 def test_unpacking_keeps_the_bundle_and_nothing_outside_it(tmp_path):
@@ -370,6 +465,24 @@ def test_the_installer_refuses_a_new_version_that_does_not_load(installed, port,
     assert updates.install(installed, os.getpid(), restart=True) == 1  # the check comes before the wait
     assert result_of(folder)["error"] == "No module named 'tkinter'" and not (folder / "started").exists()
     assert version_in(installed) == __version__ and started == []
+
+
+def test_the_installer_refuses_a_new_version_that_could_not_update_again(installed, port, monkeypatch):
+    """A new version that cannot check the signature of the update after it, or knows no release key, would refuse
+    every update after it: it is not installed."""
+    folder = staged(installed)
+    started = []
+    monkeypatch.setattr(updates, "spawn", lambda args, cwd: started.append(args))
+    with monkeypatch.context() as m:
+        m.setitem(sys.modules, "cryptography.hazmat.primitives.asymmetric.ed25519", None)  # not in its bundle
+        assert updates.install(installed, os.getpid(), restart=True) == 1
+    assert result_of(folder)["error"].startswith("signatures cannot be checked")
+    with monkeypatch.context() as m:
+        m.delenv("FOREVERAI_RELEASE_KEY")
+        m.setattr(updates, "RELEASE_KEYS", ())
+        assert updates.install(installed, os.getpid(), restart=True) == 1
+    assert result_of(folder)["error"] == "this version of ForeverAI knows no release key"
+    assert not (folder / "started").exists() and version_in(installed) == __version__ and started == []
 
 
 def test_the_self_check_loads_every_module_but_does_not_start_the_app(monkeypatch):
@@ -556,6 +669,21 @@ def test_the_states_of_the_updates_row(installed, monkeypatch):
     assert upd.text() == f"Installing ForeverAI {NEW}…" and upd.button() == ("Restart now", False)
 
 
+def test_an_update_signed_with_another_key_is_refused_and_the_window_says_why(installed, caplog):
+    caplog.set_level(logging.INFO, logger="foreverai")
+    srv = Releases(signature=Ed25519PrivateKey.generate().sign(b"another release"))
+    upd = updates.Updater(config.SettingsStore(), transport=srv.transport)
+    upd._check()
+    assert upd.state == "failed" and upd.button() == ("Try again", True)
+    assert upd.text() == f"The update to {NEW} failed: {NOT_SIGNED} (SHA256SUMS.txt.sig does not match)"
+    assert f"The update to ForeverAI {NEW} failed: {NOT_SIGNED}" in caplog.text  # the window's activity list
+    assert "/archive" not in srv.paths and not (installed.parent / updates.STAGING).exists()
+    # checked again later, as a download that failed: a release that is signed meanwhile is installed
+    srv.signature = KEY.sign(srv.sums.encode())
+    upd._check()
+    assert upd.state == "ready" and updates.staged_update()["version"] == NEW
+
+
 def test_a_download_that_failed_is_tried_again_but_a_failed_installation_is_not(installed):
     store = config.SettingsStore()
     srv = Releases(archive_status=503)
@@ -720,6 +848,11 @@ def test_update_from_the_command_line(installed, port, monkeypatch):
     said.clear()
     assert updates.update_now(said.append, transport=Releases(version=__version__).transport) == 0
     assert said == [f"ForeverAI {__version__} is up to date."]
+    shutil.rmtree(installed.parent / updates.STAGING)
+    said.clear()
+    assert updates.update_now(said.append, transport=Releases(signed=False).transport) == 1
+    assert said[-1] == "The update failed: the release is not signed (it has no SHA256SUMS.txt.sig)"
+    assert calls == [False] and not (installed.parent / updates.STAGING).exists()
     other = socket.socket()
     other.bind(("127.0.0.1", port))
     try:

@@ -195,7 +195,7 @@ From [the latest release](https://github.com/pawelpieczonka/forever-ai/releases/
 | Windows 10/11 | `ForeverAI-<version>-Windows-x64.zip` | `ForeverAI-Windows/ForeverAI-Windows.exe` |
 | Linux, glibc 2.35+ (Ubuntu 22.04, Debian 12 and later) | `ForeverAI-<version>-Linux-x86_64.tar.gz` | `ForeverAI-Linux/ForeverAI-Linux` |
 
-No Python needed. `SHA256SUMS.txt` in the release has the checksums.
+No Python needed. `SHA256SUMS.txt` in the release has the checksums, and `SHA256SUMS.txt.sig` its signature with the ForeverAI release key.
 
 **The app updates itself** (0.9.0 and later). It looks for a new version when it starts and every six hours, downloads it in the background and installs it when you quit the app, or at once with **Restart now** in the **Updates** row of its window. Untick **Install updates automatically** there to only be told about new versions and install them with **Install**.
 
@@ -204,12 +204,22 @@ No Python needed. `SHA256SUMS.txt` in the release has the checksums.
 
 <br>
 
-- The download is checked against the release's `SHA256SUMS.txt` and unpacked next to the app's folder, in `.ForeverAI-update`. Nothing in the app's folder changes before you quit.
+- The app takes only a release signed with the ForeverAI release key: `SHA256SUMS.txt.sig` must be that key's signature of `SHA256SUMS.txt`, which only the release workflow can make. Someone who could publish a release on GitHub without the key could not get it installed. The download is then checked against `SHA256SUMS.txt` and unpacked next to the app's folder, in `.ForeverAI-update`. Nothing in the app's folder changes before you quit.
 - After you quit, a copy of the new version checks that it starts on your computer, moves the old folder aside and the new one into its place, and starts the app again after **Restart now**. Your settings, keys, conversations and knowledge base are not in that folder and stay as they are. The new version installs its add-on in the game: type `/reload` there.
 - If the computer was shut down with the app open, the next start installs the update before the window opens.
 - If installing fails, the old version stays and the update is tried again when you quit, three tries in all. After that the window offers **Try again**.
 - An app in a folder it may not write to (such as `Program Files`) cannot replace itself: its window links to the download page instead.
 - From a terminal: `ForeverAI-Linux --update` (or `ForeverAI-Windows.exe --update`) installs a new version while the app is closed.
+- To check a download by hand, save the release key below as `forever-ai-release-key.pem` next to the downloaded files and run (OpenSSL 3; on Windows, Git Bash has it):
+  ```bash
+  openssl pkeyutl -verify -pubin -inkey forever-ai-release-key.pem -rawin -in SHA256SUMS.txt -sigfile SHA256SUMS.txt.sig
+  sha256sum -c --ignore-missing SHA256SUMS.txt
+  ```
+  ```
+  -----BEGIN PUBLIC KEY-----
+  MCowBQYDK2VwAyEAnVEPi98TbpkzcHFetmY4OUC3P82qH1Q+WJMMkKedKXg=
+  -----END PUBLIC KEY-----
+  ```
 
 </details>
 
@@ -385,7 +395,7 @@ flowchart LR
 ```
 
 1. Set the new version in `addon/ForeverAI/ForeverAI.toc`, `ns.version` in `addon/ForeverAI/Core.lua`, `companion/foreverai/__init__.py` and `companion/pyproject.toml`. A test checks that they agree.
-2. Merge to `main`. Since this version has no release yet, the workflow publishes `v<version>` (it creates the tag) with both files and `SHA256SUMS.txt`. Installed apps (0.9.0 and later) find it within six hours and install it when they quit.
+2. Merge to `main`. Since this version has no release yet, the workflow publishes `v<version>` (it creates the tag) with both files, `SHA256SUMS.txt` and its signature, made with the release key in the repository secret `RELEASE_SIGNING_KEY`. Installed apps (0.9.0 and later) find it within six hours and install it when they quit.
 
 A push to `main` with a version that is already released only builds the apps. Pushing a tag `v<version>` that matches the version in the source publishes it as well.
 

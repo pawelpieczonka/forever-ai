@@ -3,10 +3,13 @@
     FOREVERAI_BUILT_APP="$PWD/../release/linux/ForeverAI-Linux" .venv/bin/python -m pytest -q tests/test_update_e2e.py
 
 A copy of the built app plays the installed one. A second copy, with another version in its add-on's .toc and a file to
-recognize it by, is the new release, served from this computer with SHA256SUMS.txt like a GitHub release. The installed
-copy runs --update: it downloads and checks the archive, unpacks both copies next to its folder and starts the new
-version's copy, which checks that it loads in the frozen app and installs it once --update has ended."""
+recognize it by, is the new release, served from this computer with SHA256SUMS.txt and its signature like a GitHub
+release. The release is signed with a key made for the test, which the app takes in FOREVERAI_RELEASE_KEY. The installed
+copy runs --update twice. While the signature is another key's, it refuses the release before it downloads the archive.
+Then it downloads and checks the archive, unpacks both copies next to its folder and starts the new version's copy,
+which checks that it loads (and can check signatures) in the frozen app and installs it once --update has ended."""
 
+import base64
 import hashlib
 import json
 import os
@@ -23,6 +26,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from foreverai import updates
 
@@ -32,6 +37,12 @@ NEW = "99.0.0"
 
 
 class _Quiet(SimpleHTTPRequestHandler):
+    asked: list[str] = []  # the paths the app asked for
+
+    def do_GET(self):
+        self.asked.append(self.path)
+        super().do_GET()
+
     def log_message(self, *args):
         pass
 
@@ -75,27 +86,47 @@ def test_the_built_app_installs_a_newer_release(tmp_path):
     serve.mkdir()
     name = _release(built, top, platform, serve)
     digest = hashlib.sha256((serve / name).read_bytes()).hexdigest()
-    (serve / "SHA256SUMS.txt").write_text(f"{digest}  {name}\n", encoding="utf-8")
+    sums = f"{digest}  {name}\n".encode()
+    (serve / "SHA256SUMS.txt").write_bytes(sums)
+    key = Ed25519PrivateKey.generate()  # the release key of this test
+    (serve / "SHA256SUMS.txt.sig").write_bytes(Ed25519PrivateKey.generate().sign(sums))  # another key's, at first
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_Quiet, directory=str(serve)))
     url = f"http://127.0.0.1:{server.server_address[1]}"
     (serve / "latest.json").write_text(json.dumps({
         "tag_name": f"v{NEW}", "html_url": f"{url}/", "assets": [
             {"name": name, "size": (serve / name).stat().st_size, "digest": f"sha256:{digest}",
              "browser_download_url": f"{url}/{name}"},
-            {"name": "SHA256SUMS.txt", "browser_download_url": f"{url}/SHA256SUMS.txt"}]}), encoding="utf-8")
+            {"name": "SHA256SUMS.txt", "browser_download_url": f"{url}/SHA256SUMS.txt"},
+            {"name": "SHA256SUMS.txt.sig", "browser_download_url": f"{url}/SHA256SUMS.txt.sig"}]}),
+        encoding="utf-8")
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    env = dict(os.environ, FOREVERAI_RELEASES_API=f"{url}/latest.json", FOREVERAI_DATA=str(tmp_path / "data"),
-               FOREVERAI_GAME_DIR=str(tmp_path / "game"), FOREVERAI_INSTANCE_PORT=str(_free_port()))
+    public = base64.b64encode(key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)).decode()
+    env = dict(os.environ, FOREVERAI_RELEASES_API=f"{url}/latest.json", FOREVERAI_RELEASE_KEY=public,
+               FOREVERAI_DATA=str(tmp_path / "data"), FOREVERAI_GAME_DIR=str(tmp_path / "game"),
+               FOREVERAI_INSTANCE_PORT=str(_free_port()))
     env.pop("FOREVERAI_NO_UPDATE_CHECK", None)
     folder = games / updates.STAGING
+    _Quiet.asked.clear()
 
     def log() -> str:
         p = folder / "install.log"
         return p.read_text(encoding="utf-8", errors="replace") if p.exists() else "(no install.log)"
     try:
+        # signed with another key: refused once the signature is in, before the archive (the windowed Windows app
+        # prints nothing, so what it asked for shows where it stopped)
+        run = subprocess.run([str(games / top / exe), "--update"], env=env, capture_output=True, text=True,
+                             timeout=600)
+        assert run.returncode == 1, f"{run.stdout}\n{run.stderr}"
+        if platform == "Linux":
+            assert "the release is not signed with ForeverAI's release key" in run.stdout, run.stdout + run.stderr
+        assert "/SHA256SUMS.txt.sig" in _Quiet.asked and f"/{name}" not in _Quiet.asked, _Quiet.asked
+        assert not folder.exists() and updates.bundled_version(games / top) == old_version
+        # signed with the release key: downloaded and installed
+        (serve / "SHA256SUMS.txt.sig").write_bytes(key.sign(sums))
         run = subprocess.run([str(games / top / exe), "--update"], env=env, capture_output=True, text=True,
                              timeout=600)
         assert run.returncode == 0, f"{run.stdout}\n{run.stderr}\n{log()}"
+        assert f"/{name}" in _Quiet.asked
         deadline = time.monotonic() + 300
         while not (folder / "result.json").exists():
             assert time.monotonic() < deadline, f"no result.json\n{log()}"
