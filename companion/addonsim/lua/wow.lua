@@ -2033,6 +2033,13 @@ function sim.leave()
   sim.hovered, sim.cursor = nil, nil
   if w then runScript(w, "OnLeave", true) end
 end
+-- the mouse moved to a point of the screen (UI units, as GetLeft and GetTop give them), over no widget in particular:
+-- what it was over gets OnLeave. For the way between two widgets.
+function sim.pointAt(x, y)
+  sim.leave()
+  local px = ppu(UIParent)
+  sim.cursor = { x = x * px, y = y * px }
+end
 
 function sim.focusedEditBox() return focused end
 function sim.firstEditBox()

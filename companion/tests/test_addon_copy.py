@@ -93,6 +93,35 @@ def test_a_question_is_copied_with_its_copy_button_and_pasted_into_the_field(tmp
     sim.close()
 
 
+def test_the_copy_button_beside_a_question_stays_while_the_mouse_goes_to_it(tmp_path):
+    """"Przycisk copy wyświetla się obok boxa z moim promptem, ale przy próbie najechania znika, bo wychodzę myszką za
+    obszar boxa"."""
+    sim = _start(tmp_path)
+    question = "where is the inn?"
+    _answer(sim, question, "In Auberdine, by the docks.")
+    sim.hover(question)
+    left, top, right, bottom = sim.lua(RECT, _copy_button(sim))
+    m_left = sim.lua(RECT, _message(sim, question))[0]
+    y = (top + bottom) / 2
+    # slowly from the question to its button, through the gap between them, stopping on the way
+    for x in (m_left + 2, (right + m_left) / 2, right - 2, (left + right) / 2):
+        sim.point(x, y)
+        sim.run(0.6)
+        assert "Copy" in sim.clickables(), f"the button went with the mouse at x={x:.0f}"
+    sim.click("Copy")
+    assert sim.selected_text() == question
+    sim.key("ESCAPE")
+    # off the question and its button the button goes, after a moment to come back
+    sim.hover(question)
+    sim.point(left - 40, y)
+    sim.run(0.1)
+    assert "Copy" in sim.clickables()
+    sim.run(0.5)
+    assert "Copy" not in sim.clickables()
+    assert sim.errors == []
+    sim.close()
+
+
 def test_an_answer_is_copied_as_text_with_its_web_addresses_whole(tmp_path):
     sim = _start(tmp_path)
     md = ("## Where to sell\n\nSell your [Linen Cloth] at the auction house; see "
@@ -114,6 +143,7 @@ def test_an_answer_is_copied_as_text_with_its_web_addresses_whole(tmp_path):
     # the line under the answer (the model, the time) is not a message: no button over it
     sim.run(1)
     sim.hover("model  ·  1.2 s")
+    sim.run(0.5)  # (the answer's button stays a moment after the mouse left it)
     assert "Copy" not in sim.clickables()
     assert sim.errors == []
     sim.close()
@@ -240,7 +270,7 @@ def test_the_copy_button_of_a_long_answer_stays_in_sight_and_messages_take_no_cl
     left, top, right, bottom = sim.lua(RECT, _copy_button(sim))
     assert a_bottom < c_bottom < bottom <= c_bottom + 6 and top < c_top and c_left < left < right <= c_right
     sim.leave()  # the mouse leaves the window
-    sim.step()
+    sim.run(0.5)
     assert "Copy" not in sim.clickables()
     assert sim.errors == []
     sim.close()

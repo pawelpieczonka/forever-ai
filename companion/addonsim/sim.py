@@ -427,6 +427,12 @@ class Sim:
         self._wow.leave()
         self.step()
 
+    def point(self, x: float, y: float) -> None:
+        """Moves the mouse to a point of the screen, in UI units as GetLeft and GetTop give them, over no widget in
+        particular (what it was over gets OnLeave): for the way between two widgets."""
+        self._wow.pointAt(x, y)
+        self.step()
+
     def type(self, text: str) -> None:
         ok, why = _pair(self._wow.typeText(_b(text)))
         if not ok:

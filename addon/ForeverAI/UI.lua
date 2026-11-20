@@ -280,7 +280,7 @@ local function clearEntries()
   end
   wipe(entries)
   currentAnswer = nil
-  if copyBtn then copyBtn.entry = nil copyBtn:Hide() end
+  if copyBtn then copyBtn.entry, copyBtn.away = nil, nil copyBtn:Hide() end
 end
 
 local function sourcesLine(sources)
@@ -685,9 +685,17 @@ end
 
 -- The Copy button sits on the message under the mouse. The messages take no mouse themselves, so what they cover
 -- when scrolled out of sight (the text field, the tabs) keeps its clicks; the button follows the mouse instead.
+local COPY_GRACE = 0.4 -- seconds the button stays after the mouse has left its message and the button
+
 local function messageUnderMouse()
   local e = copyBtn.entry
-  if e and e.copy and e.frame:IsShown() and e.frame:IsMouseOver() then return e end
+  if e and e.copy and e.frame:IsShown() then
+    if e.frame:IsMouseOver() then return e end
+    -- the player's own question has its button beside it: the way over to the button is the question's too
+    if e.align == "right" and copyBtn:IsShown() and e.frame:IsMouseOver(2, -2, -(copyBtn:GetWidth() + 8), 0) then
+      return e
+    end
+  end
   for i = #entries, 1, -1 do
     e = entries[i]
     if e.copy and e.frame:IsMouseOver() then return e end
@@ -696,13 +704,19 @@ end
 
 local function placeCopyButton()
   if copyBox and copyBox:IsShown() then copyBtn:Hide() return end
-  if copyBtn:IsShown() and copyBtn:IsMouseOver() then return end -- on the button itself
+  if copyBtn:IsShown() and copyBtn:IsMouseOver() then copyBtn.away = nil return end -- on the button itself
   local e = chat:IsMouseOver() and messageUnderMouse() or nil
   if not e or e.copy == "" then
-    copyBtn.entry = nil
+    -- off the message: the button stays a moment, so that a mouse that strays on its way can still reach it
+    if copyBtn:IsShown() then
+      copyBtn.away = copyBtn.away or GetTime()
+      if GetTime() - copyBtn.away < COPY_GRACE then return end
+    end
+    copyBtn.entry, copyBtn.away = nil, nil
     copyBtn:Hide()
     return
   end
+  copyBtn.away = nil
   -- where the chat shows only a part of the message, the button stays on that part: the parts above and below it
   local above = math.max(0, math.floor((e.frame:GetTop() or 0) - (chat:GetTop() or 0) + 0.5))
   local below = math.max(0, math.floor((chat:GetBottom() or 0) - (e.frame:GetBottom() or 0) + 0.5))
