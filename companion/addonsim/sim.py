@@ -397,8 +397,31 @@ class Sim:
         self.step()
 
     def hover(self, label: str, nth: int = 1) -> None:
-        self._wow.hover(self._find(label, nth))
+        """Moves the mouse over a button or field by its text, else over a text on the screen (a message)."""
+        w, _ = _pair(self._wow.find(_b(label), nth))
+        if w is None:
+            w, count = _pair(self._wow.findText(_b(label), nth))
+            if w is None:
+                raise SimError(f"no visible button, field or text {label!r}"
+                               + (f" #{nth} (there are {count})" if count else ""))
+        self._wow.hover(w)
         self.step()
+
+    @property
+    def clipboard(self) -> str | None:
+        """What Ctrl+C (or Ctrl+X) last copied from a text field, as the field had it; None before anything was."""
+        v = self._wow.clipboard if self._wow is not None else None
+        return None if v is None else _s(v)
+
+    @clipboard.setter
+    def clipboard(self, text: str | None) -> None:
+        self._wow.clipboard = None if text is None else _b(text)
+
+    def selected_text(self) -> str | None:
+        """The selected part of the text field that has the keyboard, or None."""
+        box = self._wow.focusedEditBox()
+        v = self._wow.selection(box) if box is not None else None
+        return None if v is None else _s(v)
 
     def leave(self) -> None:
         self._wow.leave()
@@ -548,7 +571,7 @@ class Sim:
     def report(self) -> dict:
         return {"errors": self.errors, "warnings": sorted(set(self.warnings)), "missingApi": sorted(self.missing),
                 "placeholderTextures": sorted(self.placeholders), "chat": self.chat, "reloads": self.reloads,
-                "gameTime": round(self.now, 2), "fonts": self.text.describe()}
+                "clipboard": self.clipboard, "gameTime": round(self.now, 2), "fonts": self.text.describe()}
 
 
 def parse_clock(text: str) -> datetime:

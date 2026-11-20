@@ -292,6 +292,8 @@ ForeverAI reads other add-ons and never changes their files. Their settings chan
 |---|---|
 | **Alt+click** an item, a spell or a quest | add it to your question |
 | **Up** and **Down** in the text field | bring back what you asked before, like in a command line |
+| **Copy** on a message (it shows while the mouse is over it), then **Ctrl+C** | copy a question, an answer or any other message as text, to paste it outside the game or back into the text field |
+| a click on a web address in an answer or in its sources | copy the whole address: the game opens no web pages |
 | the count, **All**, the price and **2 h / 8 h / 24 h** on an auction card | post something else than the AI proposed: what stands on the card at your click is what is posted |
 | **Search on the AH** / **Save as list** on the shopping list | open every item of the list in Auctionator's Shopping tab, or keep them as an Auctionator shopping list |
 | hover an item on a card (to post, to sell, the shopping list) | see the game's own tooltip of it, as in your bags; **Shift+click** puts it into the chat |

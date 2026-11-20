@@ -94,6 +94,8 @@ class Canvas:
             self._texture(self._box(x0, y0, x1, y1), clip, color, a[12].decode(errors="replace"))
         elif kind == "text":
             self._text((x0, y0, x1, y1), clip, color, *a[12:])
+        elif kind == "selection":
+            self._selection((x0, y0, x1, y1), clip, color, *a[12:])
         elif kind == "cursor":
             self._cursor((x0, y0, x1, y1), clip, color, *a[12:])
 
@@ -224,11 +226,52 @@ class Canvas:
 
         self._paint(bbox, clip, paint)
 
-    def _cursor(self, box, clip, color, text: bytes, font: bytes, size, flags: bytes) -> None:
+    def _upto(self, raw: bytes, n: int, game_font: str, size: float, wrap_width: float, wrap: bool):
+        """Where the text's first ``n`` bytes end: the line they reach and how far into it (pixels). Laid out on their
+        own, so a word cut short at the end may fit where the whole word would not: close enough for a picture."""
+        if n <= 0:
+            return 0, 0.0
+        part = self.text.layout(raw[:n].decode("utf-8", errors="ignore"), game_font, size, wrap_width, wrap)
+        if not part.lines:
+            return 0, 0.0
+        return len(part.lines) - 1, part.lines[-1].width
+
+    def _selection(self, box, clip, color, text: bytes, font: bytes, size, flags: bytes, wrap, wrap_width,
+                   sel_from, sel_to) -> None:
+        """The colour behind the selected part of a text field (bytes ``sel_from`` to ``sel_to``, counted from 1)."""
+        raw, game_font, size, wrap = bytes(text), font.decode(errors="replace"), float(size), bool(wrap)
+        lay = self.text.layout(raw.decode("utf-8", errors="replace"), game_font, size, float(wrap_width), wrap)
+        if not lay.lines:
+            return
+        x0, y0, x1, y1 = box
+        top = y0 if wrap else y0 + (y1 - y0 - lay.height) / 2
+        # a one-line field shows the end of a text longer than itself, as _text draws it
+        shift = (x1 - x0) - lay.lines[0].width if not wrap and lay.lines[0].width > x1 - x0 else 0.0
+        if int(sel_to) >= len(raw):
+            l1, xb = len(lay.lines) - 1, lay.lines[-1].width
+        else:
+            l1, xb = self._upto(raw, int(sel_to), game_font, size, float(wrap_width), wrap)
+        l0, xa = self._upto(raw, int(sel_from) - 1, game_font, size, float(wrap_width), wrap)
+        for i in range(l0, min(l1, len(lay.lines) - 1) + 1):
+            a = xa if i == l0 else 0.0
+            b = xb if i == l1 else lay.lines[i].width
+            b = max(b, a + size * 0.3)  # an empty line still shows that it is selected
+            y = top + i * lay.line_height
+            self._rect(self._box(x0 + shift + a, y, x0 + shift + b, y + lay.line_height), clip, color)
+
+    def _cursor(self, box, clip, color, text: bytes, font: bytes, size, flags: bytes, multi=0, wrap_width=0,
+                pos=None) -> None:
         s = text.decode("utf-8", errors="replace")
         game_font = font.decode(errors="replace")
-        lay = self.text.layout(s, game_font, float(size), 0, False)
         x0, y0, x1, y1 = box
+        if multi:  # at its place in the text: the line it is on, after the bytes before it
+            raw = bytes(text)
+            n = len(raw) if pos is None else max(0, min(len(raw), int(pos)))
+            line, w = self._upto(raw, n, game_font, float(size), float(wrap_width), True)
+            x, y = x0 + w + (1 if n else 0), y0 + line * float(size)
+            self._rect(self._box(x, y, x + max(1, size / 12), y + size), clip, color)
+            return
+        lay = self.text.layout(s, game_font, float(size), 0, False)
         x = min(x1 - 1, x0 + lay.width + 1)
         mid = (y0 + y1) / 2
         self._rect(self._box(x, mid - size / 2, x + max(1, size / 12), mid + size / 2), clip, color)
