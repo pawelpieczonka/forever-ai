@@ -1,6 +1,7 @@
 """The ForeverAI window: shows that the app is running, what it is connected to, the knowledge base state with an
-"Update now" button, the AI settings (provider, model, thinking level, web search) and a short English activity log.
-It asks for an OpenRouter or Google Gemini key when Claude Code is not available. Closing the window quits the app."""
+"Update now" button, new versions of the app (updates.py), the AI settings (provider, model, thinking level, web
+search) and a short English activity log. It asks for an OpenRouter or Google Gemini key when Claude Code is not
+available. Closing the window quits the app."""
 
 from __future__ import annotations
 
@@ -129,17 +130,32 @@ class AppWindow:
         grid.columnconfigure(1, weight=1)
         self.rows = {}
         for i, (key, label) in enumerate((("game", "Game"), ("addon", "Add-on"), ("ai", "AI"),
-                                          ("kb", "Knowledge base"))):
-            tk.Label(grid, text=label, bg=PANEL, fg=DIM, font=(UI, 9), anchor="w").grid(
-                row=i, column=0, sticky="w", padx=(10, 12), pady=5)
-            v = tk.Label(grid, text="…", bg=PANEL, fg=FG, font=(UI, 9), anchor="w", justify="left",
-                         wraplength=380)
-            v.grid(row=i, column=1, sticky="we", pady=5)
+                                          ("kb", "Knowledge base"), ("updates", "Updates"))):
+            tk.Label(grid, text=label, bg=PANEL, fg=DIM, font=(UI, 9), anchor="nw" if key == "updates" else "w").grid(
+                row=i, column=0, sticky="nw" if key == "updates" else "w", padx=(10, 12), pady=5)
+            if key == "updates":  # the state, and under it whether new versions install by themselves
+                cell = self.update_cell = tk.Frame(grid, bg=PANEL)
+                cell.grid(row=i, column=1, sticky="we", pady=5)
+            v = tk.Label(cell if key == "updates" else grid, text="…", bg=PANEL, fg=FG, font=(UI, 9), anchor="w",
+                         justify="left", wraplength=380)
+            if key == "updates":
+                v.pack(fill="x")
+            else:
+                v.grid(row=i, column=1, sticky="we", pady=5)
             self.rows[key] = v
         self.change_btn = ttk.Button(grid, text="Change…", command=self._change_game)
         self.change_btn.grid(row=0, column=2, padx=8)
         self.update_btn = ttk.Button(grid, text="Update now", command=self._update_kb)
         self.update_btn.grid(row=3, column=2, padx=8)
+        self.app_btn = ttk.Button(grid, text="Check now", command=self._update_app)
+        self.app_btn.grid(row=4, column=2, padx=8, sticky="n", pady=(2, 0))
+        self.app_btn.grid_remove()  # shown with the button of the update's state
+        self.auto_update = tk.BooleanVar(value=bool(config.SettingsStore().settings.auto_update))
+        self.auto_box = tk.Checkbutton(self.update_cell, text="Install updates automatically", variable=self.auto_update,
+                                       command=self._toggle_auto, bg=PANEL, fg=FG, selectcolor=FIELD,
+                                       activebackground=PANEL, activeforeground=FG, font=(UI, 9), highlightthickness=0,
+                                       bd=0, anchor="w")
+        self.auto_box.pack(fill="x", pady=(4, 0))
 
         tk.Label(self.root, text="AI settings", bg=BG, fg=DIM, font=(UI, 9), anchor="w").pack(fill="x", padx=16)
         self.ai = AISettings(self.root, self.ask_key)
@@ -152,7 +168,6 @@ class AppWindow:
         ttk.Button(bottom, text="Open data folder", command=lambda: open_path(config.data_dir())).pack(side="left")
         ttk.Button(bottom, text="Desktop shortcut", command=self._shortcut).pack(side="left", padx=8)
         ttk.Button(bottom, text="Quit", command=self.quit).pack(side="right")
-        self.update_dl = ttk.Button(bottom, text="Download update", command=self._download_update)
 
         # the Activity list is always there; the files are written only when the player ticks the box
         head = tk.Frame(self.root, bg=BG)
@@ -175,6 +190,7 @@ class AppWindow:
         self.log.tag_configure("time", foreground=DIM)
         self._key_dialog = None
         self._key_asked = False
+        self._closed = False
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
 
     # ---------------------------------------------------------------- actions
@@ -228,12 +244,25 @@ class AppWindow:
             return
         self._key_dialog = KeyDialog(self.root, self.comp, provider)
 
-    def _download_update(self) -> None:
-        rel = self.comp.update if self.comp else None
-        if rel:
-            open_path(rel.get("url"))
+    def _update_app(self) -> None:
+        """The button of the Updates row: Check now, Install, Restart now, Try again or Download…"""
+        if self.comp:
+            self.comp.updater.press()
+            self._show_update()
+
+    def _toggle_auto(self) -> None:
+        on = bool(self.auto_update.get())
+        if self.comp:  # the running app's own settings, which it saves again later
+            self.comp.store.update(auto_update=on)
+            self.comp.updater.toggled()
+        else:
+            config.SettingsStore().update(auto_update=on)
+        logging.getLogger("foreverai.activity").info("Automatic updates: %s", "on" if on else "off")
 
     def quit(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         try:
             if self.comp:
                 self.comp.stop()
@@ -274,9 +303,10 @@ class AppWindow:
             if c.needs_key and not self._key_asked:
                 self._key_asked = True
                 self.ask_key()
-            if c.update and not self.update_dl.winfo_ismapped():
-                self.update_dl.configure(text=f"Download update {c.update['version']}")
-                self.update_dl.pack(side="right", padx=8)
+            if c.updater.exit_requested:  # the new version's installer runs and waits for this app to quit
+                self.quit()
+                return
+            self._show_update()
             if not c.claude_checked:
                 ai = "Checking Claude Code…"
             elif c.needs_key:
@@ -313,6 +343,23 @@ class AppWindow:
             self.update_btn.state(["disabled"] if c.syncing else ["!disabled"])
             self.ai.sync()
         self.root.after(700, self._refresh)
+
+    def _show_update(self) -> None:
+        """The Updates row: the updater's state and the button that goes with it."""
+        u = self.comp.updater
+        self.rows["updates"].configure(text=u.text(), fg=WARN if u.state == "failed" else FG)
+        button = u.button()
+        if button is None:
+            if self.app_btn.winfo_manager():
+                self.app_btn.grid_remove()
+        else:
+            label, enabled = button
+            self.app_btn.configure(text=label)
+            self.app_btn.state(["!disabled"] if enabled else ["disabled"])
+            if not self.app_btn.winfo_manager():
+                self.app_btn.grid()
+        if u.state in ("source", "off") and self.auto_box.winfo_manager():  # nothing installs by itself
+            self.auto_box.pack_forget()
 
     def run(self) -> None:
         self.root.after(200, self._refresh)

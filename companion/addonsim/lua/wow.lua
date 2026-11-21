@@ -554,7 +554,16 @@ function Region:IsRectValid() return rectOf(self) ~= nil end
 function Region:GetEffectiveScale() return effScale(self) end
 function Region:GetScale() local s = st(self) return s.isRegion and 1 or (s.scale or 1) end
 function Region:IsAnchoringRestricted() return false end
-function Region:IsMouseOver() return sim.hovered == self end
+-- whether the point the mouse is at (sim.cursor, set by hover and click) is in the region's rect, as in the game:
+-- its own rect, also where a scroll frame cuts it off, shown or not. The offsets move the edges (a positive top or
+-- right and a negative bottom or left make the rect larger).
+function Region:IsMouseOver(top, bottom, left, right)
+  local c, r = sim.cursor, rectOf(self)
+  if not (c and r) then return sim.hovered == self end
+  local px = ppu(self)
+  return c.x >= r.l + (left or 0) * px and c.x <= r.r + (right or 0) * px
+    and c.y >= r.b + (bottom or 0) * px and c.y <= r.t + (top or 0) * px
+end
 
 local function isVisible(w)
   local guard = 0
@@ -1032,22 +1041,36 @@ end
 ------------------------------------------------------------------------ EditBox
 local focused -- the EditBox with keyboard focus
 
+-- the selected part of a text field (HighlightText): its first and last byte, or nil when nothing is selected
+local function selection(s)
+  local h = s.highlight
+  if not h then return nil end
+  local a, b = max(0, h[1] or 0), h[2] or -1
+  if b < 0 or b > #s.text then b = #s.text end
+  if b <= a then return nil end
+  return a + 1, b
+end
+sim.selection = function(box) local a, b = selection(st(box)) if a then return st(box).text:sub(a, b) end end
+
 function EditBox:SetText(text)
   local s = st(self)
   local t = textOf(text)
   if s.maxLetters and s.maxLetters > 0 and #t > s.maxLetters then t = t:sub(1, s.maxLetters) end
   s.text = t
   s.cursor = #t
+  s.highlight = nil
   dirty()
   runScript(self, "OnTextChanged", false)
 end
 function EditBox:GetText() return st(self).text end
-function EditBox:Insert(text)
+function EditBox:Insert(text) -- at the cursor, in place of the selection
   local s = st(self)
   local t = textOf(text)
-  local c = s.cursor or #s.text
-  s.text = s.text:sub(1, c) .. t .. s.text:sub(c + 1)
+  local a, b = selection(s)
+  local c = a and (a - 1) or s.cursor or #s.text
+  s.text = s.text:sub(1, c) .. t .. s.text:sub((b or c) + 1)
   s.cursor = c + #t
+  s.highlight = nil
   dirty()
   runScript(self, "OnTextChanged", true)
 end
@@ -1062,6 +1085,7 @@ end
 function EditBox:ClearFocus()
   if focused ~= self then return end
   focused = nil
+  st(self).highlight = nil
   runScript(self, "OnEditFocusLost")
 end
 function EditBox:HasFocus() return focused == self end
@@ -1072,8 +1096,14 @@ function EditBox:SetMaxBytes(n) st(self).maxBytes = tonumber(n) or 0 end
 function EditBox:SetNumeric(on) st(self).numeric = on and true or false end
 function EditBox:SetMultiLine(on) st(self).multiLine = on and true or false end
 function EditBox:IsMultiLine() return st(self).multiLine == true end
-function EditBox:HighlightText(a, b) st(self).highlight = { a or 0, b or -1 } end
-function EditBox:SetCursorPosition(n) st(self).cursor = tonumber(n) or 0 end
+function EditBox:HighlightText(a, b) st(self).highlight = { a or 0, b or -1 } dirty() end
+function EditBox:SetHighlightColor(r, g, b, a) st(self).highlightColor = { r or 1, g or 1, b or 1, a or 1 } end
+function EditBox:GetHighlightColor() return unpack(st(self).highlightColor or { 0.5, 0.6, 0.9, 0.45 }) end
+function EditBox:SetCursorPosition(n) -- (a selection is gone when the cursor moves)
+  local s = st(self)
+  s.cursor, s.highlight = tonumber(n) or 0, nil
+  dirty()
+end
 function EditBox:GetCursorPosition() local s = st(self) return s.cursor or #s.text end
 function EditBox:SetTextInsets(l, r, t, b) st(self).insets = { l or 0, r or 0, t or 0, b or 0 } dirty() end
 function EditBox:GetTextInsets() return unpack(st(self).insets or { 0, 0, 0, 0 }) end
@@ -1852,6 +1882,7 @@ function GetMouseFocus() return sim.hovered end
 function IsAltKeyDown() return sim.modifiers.alt == true end
 function IsShiftKeyDown() return sim.modifiers.shift == true end
 function IsControlKeyDown() return sim.modifiers.ctrl == true end
+function IsMetaKeyDown() return sim.modifiers.meta == true end -- (Command on a Mac)
 function IsModifierKeyDown() return IsAltKeyDown() or IsShiftKeyDown() or IsControlKeyDown() end
 function GetBindingKey() return nil end
 function GetBindingText(key) return key end
@@ -1946,9 +1977,39 @@ function sim.find(label, nth, kinds)
   return list[nth or 1], #list
 end
 
+-- a text the player sees (a message in the chat), by its words as find takes them: for moving the mouse over it
+function sim.findText(label, nth)
+  label = stripCodes(label)
+  local lower = label:lower()
+  local exact, loose = {}, {}
+  for _, w in ipairs(widgets) do
+    local s = S[w]
+    if s.kind == "FontString" and s.text ~= "" and isVisible(w) and onScreen(w) then
+      local text = stripCodes(s.text)
+      if text == label then exact[#exact + 1] = w
+      elseif text:lower() == lower or (#lower > 2 and text:lower():find(lower, 1, true)) then
+        loose[#loose + 1] = w
+      end
+    end
+  end
+  local list = #exact > 0 and exact or loose
+  return list[nth or 1], #list
+end
+
+-- the middle of the part of a widget that can be seen: where the mouse goes to point at it (pixels, y up)
+local function visibleCenter(w)
+  local r = rectOf(w)
+  if not r then return nil end
+  local l, b, rr, t = clipOf(w)
+  local x0, x1, y0, y1 = max(r.l, l), min(r.r, rr), max(r.b, b), min(r.t, t)
+  if x1 <= x0 or y1 <= y0 then x0, x1, y0, y1 = r.l, r.r, r.b, r.t end
+  return { x = (x0 + x1) / 2, y = (y0 + y1) / 2 }
+end
+
 function sim.click(w, button)
   local s = st(w)
   button = button or "LeftButton"
+  sim.cursor = visibleCenter(w) -- the mouse is where it clicks
   if s.kind == "EditBox" then w:SetFocus() return true end
   if s.disabled then return false, "the button is disabled" end
   runScript(w, "OnMouseDown", button)
@@ -1957,16 +2018,27 @@ function sim.click(w, button)
   return true
 end
 
+-- w: a widget, or a text on one (the mouse then points at that text, over the frame it is on)
 function sim.hover(w)
+  local at = w
+  if st(w).isRegion then w = st(w).parent end
   if sim.hovered and sim.hovered ~= w then sim.leave() end
   sim.hovered = w
+  sim.cursor = visibleCenter(at)
   local s = st(w)
   if not s.disabled or s.motionDisabled or s.kind ~= "Button" then runScript(w, "OnEnter", true) end
 end
 function sim.leave()
   local w = sim.hovered
-  sim.hovered = nil
+  sim.hovered, sim.cursor = nil, nil
   if w then runScript(w, "OnLeave", true) end
+end
+-- the mouse moved to a point of the screen (UI units, as GetLeft and GetTop give them), over no widget in particular:
+-- what it was over gets OnLeave. For the way between two widgets.
+function sim.pointAt(x, y)
+  sim.leave()
+  local px = ppu(UIParent)
+  sim.cursor = { x = x * px, y = y * px }
 end
 
 function sim.focusedEditBox() return focused end
@@ -1984,10 +2056,49 @@ function sim.typeText(text)
   return true
 end
 
+-- What a text field does by itself with Ctrl (Command on a Mac): C copies the selection to the clipboard, X cuts it,
+-- V pastes. sim.clipboard holds what was copied, as the field's text has it.
+local function editKeys(box, key)
+  if not (sim.modifiers.ctrl or sim.modifiers.meta) then return end
+  local s = S[box]
+  if key == "C" or key == "X" then
+    local a, b = selection(s)
+    if not a then return end
+    sim.clipboard = s.text:sub(a, b)
+    if key == "X" then
+      s.text, s.cursor, s.highlight = s.text:sub(1, a - 1) .. s.text:sub(b + 1), a - 1, nil
+      dirty()
+      runScript(box, "OnTextChanged", true)
+    end
+  elseif key == "V" and sim.clipboard and sim.clipboard ~= "" then
+    box:Insert(sim.clipboard)
+  end
+end
+
+local MODIFIER = { CTRL = "ctrl", CONTROL = "ctrl", SHIFT = "shift", ALT = "alt", META = "meta", CMD = "meta" }
+
+local pressKey
+-- KEY, or with the modifiers held as the game names them in key bindings: CTRL-C, SHIFT-ENTER, CTRL-SHIFT-X (also +)
 function sim.key(key)
   key = tostring(key):upper()
+  local held = {}
+  while true do
+    local m, rest = key:match("^(%a+)[%-%+](.+)$")
+    if not (m and MODIFIER[m]) then break end
+    held[MODIFIER[m]], key = true, rest
+  end
+  local before = {}
+  for name in pairs(held) do before[name], sim.modifiers[name] = sim.modifiers[name], true end
+  local ok, err = pcall(pressKey, key)
+  for name in pairs(held) do sim.modifiers[name] = before[name] end
+  if not ok then error(err, 0) end
+  return true
+end
+
+function pressKey(key)
   local box = focused
   if box then
+    editKeys(box, key)
     if key == "ENTER" then runScript(box, "OnEnterPressed")
     elseif key == "ESCAPE" then runScript(box, "OnEscapePressed")
     elseif key == "TAB" then runScript(box, "OnTabPressed")
@@ -2148,14 +2259,21 @@ local function emitFrame(f, alpha)
     local col = fieldOf(s, "color", { 1, 1, 1, 1 })
     local x0, y0, x1, y1 = r.l + ins[1] * px, SCREEN_H - r.t + ins[3] * px, r.r - ins[2] * px, SCREEN_H - r.b - ins[4] * px
     local c0, c1, c2, c3 = max(cl, r.l), max(SCREEN_H - ct, SCREEN_H - r.t), min(cr, r.r), min(SCREEN_H - cb, SCREEN_H - r.b)
+    local selFrom, selTo = selection(s)
+    local wrapW = s.multiLine and (x1 - x0) or 0
+    if focused == f and selFrom then -- the selection's colour behind its text (drawn for a whole selected text)
+      local hc = s.highlightColor or { 0.5, 0.6, 0.9, 0.45 }
+      host.draw("selection", x0, y0, x1, y1, c0, c1, c2, c3, hc[1], hc[2], hc[3], (hc[4] or 1) * alpha, s.text, path,
+        size * px, flags, s.multiLine and 1 or 0, wrapW, selFrom, selTo)
+    end
     if s.text ~= "" then
       host.draw("text", x0, y0, x1, y1, c0, c1, c2, c3, col[1], col[2], col[3], (col[4] or 1) * alpha, s.text, path,
         size * px, flags, fieldOf(s, "justifyH", "LEFT"), s.multiLine and "TOP" or "MIDDLE", s.multiLine and 1 or 0,
-        0, 0, s.multiLine and (x1 - x0) or 0, 0, 0, 0, 0, 0, 0, 1)
+        0, 0, wrapW, 0, 0, 0, 0, 0, 0, 1)
     end
-    if focused == f then
+    if focused == f and not selFrom then
       host.draw("cursor", x0, y0, x1, y1, c0, c1, c2, c3, col[1], col[2], col[3], alpha, s.text, path, size * px,
-        flags)
+        flags, s.multiLine and 1 or 0, wrapW, s.cursor or #s.text)
     end
   end
 end

@@ -156,6 +156,8 @@ class Settings:
     route_effort: str = ""  # Claude Code: the thinking level of route updates; "" = the one of questions
     shortcut_offered: bool = False
     save_logs: bool = False  # the log files are written only when the player asks for them (the app window)
+    auto_update: bool = True  # new versions are downloaded and installed by themselves (updates.py)
+    update_failed: str = ""  # a version whose installation failed: downloaded again only when the player asks
 
 
 class SettingsStore:

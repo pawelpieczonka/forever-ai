@@ -128,10 +128,10 @@ local function Check(parent, text, get, set)
   return cb
 end
 
--- scroll area with mouse wheel, thin indicator and "stick to bottom"
-local function Scroll(parent)
+-- scroll area with mouse wheel, thin indicator and "stick to bottom"; makeChild(sf) makes what scrolls (a frame)
+local function Scroll(parent, makeChild)
   local sf = CreateFrame("ScrollFrame", nil, parent)
-  local child = CreateFrame("Frame", nil, sf)
+  local child = makeChild and makeChild(sf) or CreateFrame("Frame", nil, sf)
   child:SetSize(10, 10)
   sf:SetScrollChild(child)
   sf.child = child
@@ -171,7 +171,7 @@ end
 
 ------------------------------------------------------------------------ state
 local main, panels, tabs, header, pill, footer, notice, reloadBtn, sendBtn, input, screenCheck, strip
-local chat, emptyState
+local chat, emptyState, copyBtn, copyBox
 local entries = {}
 local currentAnswer
 local lastQuestion
@@ -198,7 +198,8 @@ local function relayout()
   if emptyState then emptyState:SetShown(#entries == 0) end
 end
 
-local function bubble(kind, text)
+-- copy: the message as it is kept (links and colour codes in it), for its Copy button; nil for none
+local function bubble(kind, text, copy)
   local f = CreateFrame("Frame", nil, chat.child, "BackdropTemplate")
   if kind == "user" then backdrop(f, P.user)
   elseif kind == "ai" then backdrop(f, P.ai)
@@ -207,7 +208,8 @@ local function bubble(kind, text)
   fs:SetPoint("TOPLEFT", kind == "meta" and 2 or 10, kind == "meta" and 0 or -7)
   f.fs = fs
   ns.Links.Attach(f)
-  local e = { frame = f, kind = kind, align = kind == "user" and "right" or "left", gap = kind == "ai" and 3 or 8 }
+  local e = { frame = f, kind = kind, align = kind == "user" and "right" or "left", gap = kind == "ai" and 3 or 8,
+              copy = copy }
   e.layout = function(width)
     if kind == "meta" then
       fs:SetWidth(width - 6)
@@ -278,6 +280,7 @@ local function clearEntries()
   end
   wipe(entries)
   currentAnswer = nil
+  if copyBtn then copyBtn.entry, copyBtn.away = nil, nil copyBtn:Hide() end
 end
 
 local function sourcesLine(sources)
@@ -285,9 +288,14 @@ local function sourcesLine(sources)
   local out = {}
   for i, s in ipairs(sources) do
     if i > 5 then break end
-    local domain = tostring(s.url or ""):match("https?://([^/]+)") or ""
+    local url = tostring(s.url or "")
+    local domain = url:match("https?://([^/]+)") or ""
     domain = domain:gsub("^www%.", "")
-    out[#out + 1] = esc(s.title or domain):sub(1, 48) .. " |cff6a7380(" .. esc(domain) .. ((s.date and s.date ~= "") and (", " .. s.date) or "") .. ")|r"
+    local title = esc(s.title or domain):sub(1, 48):gsub("|+$", "")
+    if domain ~= "" and not url:find("[|%s]") then -- the title as a link that keeps the address (a click copies it)
+      title = "|Hforeverai:url:" .. url .. "|h" .. title .. "|h"
+    end
+    out[#out + 1] = title .. " |cff6a7380(" .. esc(domain) .. ((s.date and s.date ~= "") and (", " .. s.date) or "") .. ")|r"
   end
   return "Sources: " .. table.concat(out, "  ·  ")
 end
@@ -308,14 +316,14 @@ local function questionText(text)
 end
 
 function UI.AddSystemNote(text)
-  bubble("meta", "|cff8fd3ff" .. esc(ns.stripCodes(text)) .. "|r")
+  bubble("meta", "|cff8fd3ff" .. esc(ns.stripCodes(text)) .. "|r", text)
   ns.RecordEntry({ k = "s", t = text })
   chat:ToBottom()
   relayout()
 end
 
 function UI.AddQuestion(text)
-  bubble("user", questionText(text))
+  bubble("user", questionText(text), text)
   ns.RecordEntry({ k = "q", t = text })
   lastQuestion = text
   chat:ToBottom()
@@ -344,6 +352,7 @@ end
 
 local function newsLine(text)
   local line = tostring(text or ""):gsub("^%s+", ""):gsub("\n%s*\n.*$", ""):gsub("\n", " ")
+  line = line:gsub("|Hforeverai:url:.-|h(.-)|h", "%1") -- (a web address as its site: cut short, a link would break)
   if #line > 220 then line = line:sub(1, 220):gsub("%s+%S*$", "") .. "…" end
   return line
 end
@@ -365,7 +374,7 @@ function UI.RouteProgress(done, nextStop, meters)
     pcall(UIErrorsFrame.AddMessage, UIErrorsFrame, "ForeverAI: " .. text, AUTO_ON[1], AUTO_ON[2], AUTO_ON[3])
   end
   local line = text:gsub("^d", "D")
-  bubble("meta", newsText("|cff9aa3ad" .. esc(line) .. "|r"))
+  bubble("meta", newsText("|cff9aa3ad" .. esc(line) .. "|r"), line)
   ns.RecordEntry({ k = "n", t = line })
   if ns.Seen then ns.Seen("route alert shown to the player: " .. line) end
   chat:ToBottom()
@@ -427,16 +436,19 @@ function UI.UpdateAnswer(data)
       -- the AI agrees with what the planner did: the line of the update stays as it is
     elseif e.news and data.routeUnchanged then
       -- looked at, nothing to change: one dim line, which the next update writes into; nothing on the screen
-      e.frame.fs:SetText(newsText("|cff7f8a99" .. esc(newsLine(data.text)) .. "|r"))
+      e.copy = newsLine(data.text)
+      e.frame.fs:SetText(newsText("|cff7f8a99" .. esc(e.copy) .. "|r"))
       UI.heldNews = e
     elseif e.news then
       local line = newsLine(data.text)
+      e.copy = line
       e.frame.fs:SetText(newsText(ns.Links.Linkify(line, data.links)))
       ns.RecordEntry({ k = "n", t = line, links = data.links })
       UI.RouteAlert("done")
       UI.lastNews = e
     else
       local text = ns.Links.Linkify(data.text or "", data.links)
+      e.copy = data.text or ""
       e.frame.fs:SetText(text)
       local meta = metaLine(data)
       local src = sourcesLine(data.sources)
@@ -503,6 +515,7 @@ function UI.FailAnswer(text)
   if currentAnswer and currentAnswer.news then -- the news line says it, and so does the screen
     local line = "Route not updated: " .. tostring(text)
     if ns.Seen then ns.Seen("shown to the player: " .. line) end
+    currentAnswer.copy = line
     currentAnswer.frame.fs:SetText(newsText("|cffff9a9a" .. esc(line) .. "|r"))
     ns.RecordEntry({ k = "n", t = line })
     currentAnswer = nil
@@ -519,7 +532,7 @@ function UI.FailAnswer(text)
     end
     currentAnswer = nil
   end
-  bubble("error", "|cffff9a9a" .. esc(text) .. "|r")
+  bubble("error", "|cffff9a9a" .. esc(text) .. "|r", text)
   ns.RecordEntry({ k = "e", t = text })
   relayout()
 end
@@ -535,21 +548,191 @@ function UI.LoadConversation()
   local c = ns.CurrentConv()
   for _, en in ipairs(c.entries) do
     if en.k == "q" then
-      bubble("user", questionText(en.t))
+      bubble("user", questionText(en.t), en.t)
     elseif en.k == "a" then
-      bubble("ai", ns.Links.Linkify(en.t or "", en.links))
+      bubble("ai", ns.Links.Linkify(en.t or "", en.links), en.t or "")
       if en.meta then bubble("meta", en.meta) end
     elseif en.k == "e" then
-      bubble("error", "|cffff9a9a" .. esc(en.t) .. "|r")
+      bubble("error", "|cffff9a9a" .. esc(en.t) .. "|r", en.t)
     elseif en.k == "s" then
-      bubble("meta", "|cff8fd3ff" .. esc(ns.stripCodes(en.t or "")) .. "|r")
+      bubble("meta", "|cff8fd3ff" .. esc(ns.stripCodes(en.t or "")) .. "|r", en.t)
     elseif en.k == "n" then
-      bubble("meta", newsText(ns.Links.Linkify(en.t or "", en.links)))
+      bubble("meta", newsText(ns.Links.Linkify(en.t or "", en.links)), en.t)
     end
   end
   chat:ToBottom()
   relayout()
   UI.RefreshConversations()
+end
+
+------------------------------------------------------------------------ copying a message
+-- The game gives an add-on the clipboard only through a text field. A message's Copy button opens its text in one,
+-- selected, and Ctrl+C copies it (or the part the player selects with the mouse). The text is what the chat shows:
+-- links as their [names], no colours or icons; a web address whole, where the chat shows only its site.
+local function plainText(raw)
+  local s = tostring(raw or ""):gsub("|Hforeverai:url:(.-)|h(.-)|h", function(url, shown)
+    if shown == url or shown == url:match("^%a+://([^/]+)") then return url end
+    return shown .. " (" .. url .. ")"
+  end)
+  return (ns.stripCodes(s):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+UI.PlainText = plainText
+
+local COPY_TOP, COPY_PAD = 34, 10
+
+local function buildCopyBox()
+  -- over the whole window, dimming it: the chat under it takes no clicks, and a click beside the box closes it
+  local shade = CreateFrame("Frame", "ForeverAICopyFrame", main)
+  shade:SetAllPoints(main)
+  shade:SetFrameStrata("DIALOG")
+  shade:EnableMouse(true)
+  shade:Hide()
+  local dim = shade:CreateTexture(nil, "BACKGROUND")
+  dim:SetAllPoints()
+  dim:SetColorTexture(0, 0, 0, 0.55)
+  shade:SetScript("OnMouseDown", function(self) self:Hide() end)
+  local f = CreateFrame("Frame", nil, shade, "BackdropTemplate")
+  backdrop(f, P.bg, P.accent)
+  f:EnableMouse(true)
+  f:SetPoint("LEFT", main, "LEFT", 14, 0)
+  f:SetPoint("RIGHT", main, "RIGHT", -14, 0)
+  f:SetHeight(200) -- (set to the text when it opens)
+  shade.box = f
+  local title = label(f, "|cffffd27aCopy|r", F.body)
+  title:SetPoint("TOPLEFT", 12, -11)
+  local hint = label(f, "", F.small)
+  hint:SetPoint("LEFT", title, "RIGHT", 10, 0)
+  shade.hint = hint
+  local close = Btn(f, "x", 24, 24, function() shade:Hide() end, "ghost", "Close (Esc)")
+  close:SetPoint("TOPRIGHT", -4, -4)
+  local all = Btn(f, "Select all", 78, 20, function() shade.Select() end, "ghost")
+  all:SetPoint("RIGHT", close, "LEFT", -4, 0)
+  local field = CreateFrame("Frame", nil, f, "BackdropTemplate")
+  backdrop(field, { 0.08, 0.09, 0.11, 1 }, P.edge)
+  field:SetPoint("TOPLEFT", COPY_PAD, -COPY_TOP)
+  field:SetPoint("BOTTOMRIGHT", -COPY_PAD, COPY_PAD)
+  local sf = Scroll(field, function(s) return CreateFrame("EditBox", nil, s) end)
+  sf:SetPoint("TOPLEFT", 8, -6)
+  sf:SetPoint("BOTTOMRIGHT", -4, 6)
+  sf.stick = false
+  local edit = sf.child
+  edit:SetMultiLine(true)
+  edit:SetAutoFocus(false)
+  edit:EnableMouse(true) -- a part of the text can be selected with the mouse
+  edit:SetFontObject(F.body)
+  edit:SetTextColor(0.92, 0.93, 0.95)
+  edit:SetMaxLetters(0)
+  if edit.SetMaxBytes then edit:SetMaxBytes(0) end
+  if edit.SetHighlightColor then edit:SetHighlightColor(P.accent[1], P.accent[2], P.accent[3], 0.32) end
+  shade.edit, shade.scroll = edit, sf
+  shade.measure = label(f, "", F.body) -- the height of the text, before the field shows it
+  shade.measure:Hide()
+  function shade.Select()
+    edit:SetCursorPosition(0)
+    edit:SetFocus()
+    edit:HighlightText()
+  end
+  -- what the player types does not change the text: it is there to be copied
+  edit:SetScript("OnTextChanged", function(self, userInput)
+    if userInput and self:GetText() ~= shade.text then
+      self:SetText(shade.text)
+      shade.Select()
+    end
+  end)
+  edit:SetScript("OnKeyDown", function(_, key)
+    if (key == "C" or key == "X") and (IsControlKeyDown() or (IsMetaKeyDown and IsMetaKeyDown())) then
+      -- the game copies the selection itself; the box says so and closes
+      hint:SetText("|cff5dff9dCopied|r")
+      local token = {}
+      shade.token = token
+      C_Timer.After(0.6, function() if shade.token == token then shade:Hide() end end)
+      UI.Notice("Copied to the clipboard.", "ok")
+    end
+  end)
+  edit:SetScript("OnEscapePressed", function() shade:Hide() end)
+  -- the keys go back to the game; closed with the window too, so it does not come back when the window opens
+  shade:SetScript("OnHide", function(self)
+    edit:ClearFocus()
+    self:Hide()
+  end)
+  return shade
+end
+
+-- raw: a message as the chat keeps it; the box opens over the window with its text selected
+function UI.CopyText(raw)
+  if not main then return end
+  local text = plainText(raw)
+  if text == "" then return end
+  copyBox = copyBox or buildCopyBox()
+  local box, edit, sf = copyBox, copyBox.edit, copyBox.scroll
+  box.text, box.token = text, nil
+  box.hint:SetText("Ctrl+C copies the selected text")
+  box:Show()
+  local width = sf:GetWidth() - 8
+  if width < 50 then width = main:GetWidth() - 28 - 2 * COPY_PAD - 20 end
+  edit:SetWidth(width)
+  box.measure:SetWidth(width)
+  box.measure:SetText(text)
+  local textH = math.ceil(box.measure:GetStringHeight()) + 4
+  edit:SetHeight(textH)
+  box.box:SetHeight(math.min(math.max(120, main:GetHeight() - 120), COPY_TOP + 12 + textH + COPY_PAD))
+  edit:SetText(text)
+  sf:SetVerticalScroll(0)
+  box.Select()
+  sf.UpdateBar()
+  if copyBtn then copyBtn:Hide() end
+end
+
+-- The Copy button sits on the message under the mouse. The messages take no mouse themselves, so what they cover
+-- when scrolled out of sight (the text field, the tabs) keeps its clicks; the button follows the mouse instead.
+local COPY_GRACE = 0.4 -- seconds the button stays after the mouse has left its message and the button
+
+local function messageUnderMouse()
+  local e = copyBtn.entry
+  if e and e.copy and e.frame:IsShown() then
+    if e.frame:IsMouseOver() then return e end
+    -- the player's own question has its button beside it: the way over to the button is the question's too
+    if e.align == "right" and copyBtn:IsShown() and e.frame:IsMouseOver(2, -2, -(copyBtn:GetWidth() + 8), 0) then
+      return e
+    end
+  end
+  for i = #entries, 1, -1 do
+    e = entries[i]
+    if e.copy and e.frame:IsMouseOver() then return e end
+  end
+end
+
+local function placeCopyButton()
+  if copyBox and copyBox:IsShown() then copyBtn:Hide() return end
+  if copyBtn:IsShown() and copyBtn:IsMouseOver() then copyBtn.away = nil return end -- on the button itself
+  local e = chat:IsMouseOver() and messageUnderMouse() or nil
+  if not e or e.copy == "" then
+    -- off the message: the button stays a moment, so that a mouse that strays on its way can still reach it
+    if copyBtn:IsShown() then
+      copyBtn.away = copyBtn.away or GetTime()
+      if GetTime() - copyBtn.away < COPY_GRACE then return end
+    end
+    copyBtn.entry, copyBtn.away = nil, nil
+    copyBtn:Hide()
+    return
+  end
+  copyBtn.away = nil
+  -- where the chat shows only a part of the message, the button stays on that part: the parts above and below it
+  local above = math.max(0, math.floor((e.frame:GetTop() or 0) - (chat:GetTop() or 0) + 0.5))
+  local below = math.max(0, math.floor((chat:GetBottom() or 0) - (e.frame:GetBottom() or 0) + 0.5))
+  local shift = e.align == "right" and above or below
+  if copyBtn.entry ~= e or copyBtn.shift ~= shift or not copyBtn:IsShown() then
+    copyBtn.entry, copyBtn.shift = e, shift
+    copyBtn:ClearAllPoints()
+    if e.align == "right" then -- the player's own question: beside it, not over its words
+      copyBtn:SetPoint("TOPRIGHT", e.frame, "TOPLEFT", -4, -above - 3)
+    elseif e.kind == "meta" then
+      copyBtn:SetPoint("BOTTOMRIGHT", e.frame, "BOTTOMRIGHT", 0, below - 2)
+    else -- in the bottom right corner, where the last line of a message usually leaves room
+      copyBtn:SetPoint("BOTTOMRIGHT", e.frame, "BOTTOMRIGHT", -4, below + 4)
+    end
+    copyBtn:Show()
+  end
 end
 
 ------------------------------------------------------------------------ cards
@@ -1960,6 +2143,12 @@ local function build()
   chat:SetPoint("TOPLEFT", 10, -6)
   chat:SetPoint("BOTTOMRIGHT", routeList, "TOPRIGHT", 0, 6)
   chat:HookScript("OnSizeChanged", function() C_Timer.After(0, relayout) end)
+  copyBtn = Btn(pc, "Copy", 44, 18, function(self) if self.entry then UI.CopyText(self.entry.copy) end end)
+  backdrop(copyBtn, P.btn, P.edge)
+  copyBtn:SetFrameLevel(chat:GetFrameLevel() + 20)
+  copyBtn:Hide()
+  local mouseWatch = CreateFrame("Frame", nil, pc) -- (runs while the chat is shown)
+  mouseWatch:SetScript("OnUpdate", placeCopyButton)
   emptyState = CreateFrame("Frame", nil, pc)
   emptyState:SetPoint("CENTER", chat, "CENTER", 0, 20)
   emptyState:SetSize(360, 220)

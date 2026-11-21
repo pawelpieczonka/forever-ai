@@ -1,4 +1,4 @@
--- ForeverAI: clickable item/spell/quest/NPC links inside answers
+-- ForeverAI: clickable item/spell/quest/NPC links and web addresses inside answers
 local ADDON, ns = ...
 local L = {}
 ns.Links = L
@@ -92,6 +92,13 @@ end
 ------------------------------------------------------------------------ hover / click
 local function customTooltip(owner, link)
   local kind, name = link:match("^foreverai:(%w+):(.+)$")
+  if kind == "url" then -- a web address: the game opens none, the add-on copies it
+    GameTooltip:SetOwner(owner, "ANCHOR_CURSOR_RIGHT", 12, 0)
+    GameTooltip:SetText(name, 0.56, 0.72, 1, 1, true)
+    GameTooltip:AddLine("Click to copy the address", 0.4, 1, 0.7)
+    ns.ApplyTooltipFont()
+    return true
+  end
   if kind ~= "npc" then return false end
   local c = ns.Collect.npcCoords[name]
   GameTooltip:SetOwner(owner, "ANCHOR_CURSOR_RIGHT", 12, 0)
@@ -113,6 +120,11 @@ function L.Attach(frame)
   frame:SetScript("OnHyperlinkLeave", function() GameTooltip:Hide() end)
   frame:SetScript("OnHyperlinkClick", function(self, link, text, button)
     local kind, name = link:match("^foreverai:(%w+):(.+)$")
+    if kind == "url" then
+      GameTooltip:Hide()
+      ns.UI.CopyText(name)
+      return
+    end
     if kind == "npc" then
       local c = ns.Collect.npcCoords[name]
       if c then ns.UI.MarksCard({ { title = name, x = c.x, y = c.y, zone = c.zone } }) end

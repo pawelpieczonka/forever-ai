@@ -13,9 +13,12 @@ open                      open the ForeverAI window (/fai) when it is closed
 tab NAME                  click a tab (Chat, History, Memory, Settings)
 click LABEL [#N]          click a button, check box or text field by its text (#N: the N-th of several)
 rclick LABEL [#N]         the same with the right mouse button
-hover LABEL [#N]          move the mouse over it (its tooltip shows); leave: move it away
+hover LABEL [#N]          move the mouse over it (its tooltip shows), or over a text on the screen (a message in the
+                          chat); leave: move it away
 type TEXT                 type into the focused text field (else the first visible one)
-key KEY                   ENTER, ESCAPE, TAB, UP, ...
+key KEY                   ENTER, ESCAPE, TAB, UP, ...; with modifiers: CTRL-C copies the selected text of the field
+                          to the clipboard, CTRL-X cuts it, CTRL-V pastes
+expect-clipboard TEXT     the clipboard contains TEXT (else the run fails)
 ask TEXT                  type a question into the chat and press Enter
 wait SECONDS              let time pass
 wait-answer [SECONDS]     until the answer is complete (default 90)
@@ -106,6 +109,9 @@ class Runner:
                 raise SimError(f"no visible text contains {arg!r}; visible: " + " | ".join(sim.texts())[:1500])
             if cmd == "expect-not" and found:
                 raise SimError(f"a visible text contains {arg!r}")
+        elif cmd == "expect-clipboard":
+            if arg not in (sim.clipboard or ""):
+                raise SimError(f"the clipboard does not contain {arg!r}; it has {sim.clipboard!r}")
         elif cmd == "resize":
             w, h = (float(x) for x in arg.split())
             sim.lua("ForeverAIFrame:SetSize(...)", w, h)

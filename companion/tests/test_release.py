@@ -1,8 +1,16 @@
+import base64
+import os
 import re
 import runpy
+import shutil
+import subprocess
 from pathlib import Path
 
 import httpx
+import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
 
 from foreverai import __version__, updates
 
@@ -80,9 +88,58 @@ def _transport(payload, status=200):
 
 def test_newer_release_from_github():
     rel = {"tag_name": "v9.1.0", "html_url": "https://github.com/pawelpieczonka/forever-ai/releases/tag/v9.1.0",
-           "assets": [{"name": updates.asset_name("9.1.0"), "browser_download_url": "https://dl/x"}]}
+           "assets": [{"name": updates.asset_name("9.1.0"), "browser_download_url": "https://dl/x", "size": 1234,
+                       "digest": "sha256:ab"},
+                      {"name": updates.asset_name("9.1.0", "Windows" if updates.PLATFORM == "Linux" else "Linux"),
+                       "browser_download_url": "https://dl/other-platform"},
+                      {"name": "SHA256SUMS.txt", "browser_download_url": "https://dl/sums"},
+                      {"name": "SHA256SUMS.txt.sig", "browser_download_url": "https://dl/sig"}]}
     found = updates.newer_release("0.5.0", transport=_transport(rel))
-    assert found == {"version": "9.1.0", "url": rel["html_url"], "download": "https://dl/x"}
+    assert found == {"version": "9.1.0", "url": rel["html_url"], "download": "https://dl/x", "size": 1234,
+                     "digest": "sha256:ab", "sums": "https://dl/sums", "signature": "https://dl/sig"}
     assert updates.newer_release("9.1.0", transport=_transport(rel)) is None  # already up to date
     assert updates.newer_release("0.5.0", transport=_transport({"message": "Not Found"}, 404)) is None
     assert updates.newer_release("0.5.0", transport=_transport(dict(rel, prerelease=True))) is None
+
+
+@pytest.mark.skipif(not (shutil.which("openssl") and shutil.which("bash")), reason="needs openssl and bash")
+def test_the_release_job_signs_what_the_app_checks(tmp_path, monkeypatch):
+    """.github/sign_sums.sh (the release job) signs SHA256SUMS.txt with openssl; the app checks the signature with
+    cryptography. The job stops when the secret is missing or its key is not one that updates.py knows."""
+    key = Ed25519PrivateKey.generate()
+    pem = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode()
+    public = base64.b64encode(key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)).decode()
+    sums = tmp_path / "SHA256SUMS.txt"
+    sums.write_text(f"{'a' * 64}  {updates.asset_name('9.1.0', 'Windows')}\n"
+                    f"{'b' * 64}  {updates.asset_name('9.1.0', 'Linux')}\n")
+    source = tmp_path / "updates.py"
+
+    def sign(release_key: str, keys: tuple) -> subprocess.CompletedProcess:
+        source.write_text("RELEASE_KEYS = (" + "".join(f'"{k}", ' for k in keys) + ")\n")  # as updates.py has it
+        (tmp_path / "SHA256SUMS.txt.sig").unlink(missing_ok=True)
+        return subprocess.run(["bash", str(ROOT / ".github/sign_sums.sh"), str(sums), str(source)], capture_output=True,
+                              text=True, env=dict(os.environ, RELEASE_SIGNING_KEY=release_key))
+    assert sign(pem, ("another key", public)).returncode == 0  # one of the keys the app knows
+    run = sign(pem, (public,))
+    assert run.returncode == 0 and f"with the release key {public}" in run.stdout, run.stdout + run.stderr
+    signature = (tmp_path / "SHA256SUMS.txt.sig").read_bytes()
+    assert len(signature) == 64
+    monkeypatch.setenv("FOREVERAI_RELEASE_KEY", public)
+    updates.check_signature(sums.read_bytes(), signature)
+    # the app's own keys are written so that the job finds them
+    text = (ROOT / "companion/foreverai/updates.py").read_text()
+    assert updates.RELEASE_KEYS and all(f'"{k}"' in text for k in updates.RELEASE_KEYS)
+    # the secret is missing, or its key is not in updates.py: no signature, so no release
+    run = sign("", (public,))
+    assert run.returncode == 1 and "RELEASE_SIGNING_KEY is empty" in run.stdout
+    run = sign(pem, ("another key",))
+    assert run.returncode == 1 and f"public half {public} is not in RELEASE_KEYS" in run.stdout
+    p256 = ec.generate_private_key(ec.SECP256R1()).private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+    run = sign(p256.decode(), (public,))
+    assert run.returncode == 1 and "RELEASE_SIGNING_KEY is not an Ed25519 key" in run.stdout
+    assert not (tmp_path / "SHA256SUMS.txt.sig").exists()
+    # the workflow runs it before it publishes the signature with the archives
+    workflow = (ROOT / ".github/workflows/release.yml").read_text()
+    assert "../.github/sign_sums.sh SHA256SUMS.txt ../companion/foreverai/updates.py" in workflow
+    assert "RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}" in workflow
+    assert 'gh release create "v$VERSION" ForeverAI-* SHA256SUMS.txt SHA256SUMS.txt.sig' in workflow

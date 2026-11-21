@@ -4,6 +4,10 @@
 # version to release); pushing a tag v<version> does the same:
 #   ForeverAI-<version>-Windows-x64.zip     -> ForeverAI-Windows/ForeverAI-Windows.exe
 #   ForeverAI-<version>-Linux-x86_64.tar.gz -> ForeverAI-Linux/ForeverAI-Linux
+# The apps update themselves from these files (companion/foreverai/updates.py); each build job also has a copy of the
+# built app install a newer copy of itself (companion/tests/test_update_e2e.py). They take an update only when
+# SHA256SUMS.txt carries the signature of the release key (SHA256SUMS.txt.sig): the release job signs it with the
+# secret RELEASE_SIGNING_KEY (.github/sign_sums.sh; CLAUDE.md, Self-update).
 name: Build and release
 
 on:
@@ -86,6 +90,11 @@ jobs:
           for m in keyring.backends.SecretService secretstorage jeepney cryptography; do
             grep -qx " $m" <<< "$modules" || { echo "not bundled: $m"; exit 1; }
           done
+          # updates: the signature check that foreverai/updates.py imports is in the bundle
+          grep -qx " cryptography.hazmat.primitives.asymmetric.ed25519" <<< "$modules" || { echo "not bundled: ed25519"; exit 1; }
+      - name: Self-update (the built app downloads and installs a newer copy of itself)
+        working-directory: companion
+        run: FOREVERAI_BUILT_APP="$GITHUB_WORKSPACE/release/linux/ForeverAI-Linux" .venv/bin/python -m pytest -q tests/test_update_e2e.py
       - uses: actions/upload-artifact@v4
         with:
           name: ForeverAI-Linux
@@ -122,6 +131,13 @@ jobs:
           if (-not ($modules -contains " keyring.backends.Windows")) { throw "not bundled: keyring.backends.Windows" }
           if (-not ($modules -contains " win32ctypes.pywin32.win32cred")) { throw "not bundled: win32ctypes.pywin32.win32cred" }
           if (-not ($modules -match '^ win32ctypes\.core\.(cffi|ctypes)\._authentication$')) { throw "not bundled: win32ctypes backend" }
+          # updates: the signature check that foreverai/updates.py imports is in the bundle
+          if (-not ($modules -contains " cryptography.hazmat.primitives.asymmetric.ed25519")) { throw "not bundled: ed25519" }
+      - name: Self-update (the built app downloads and installs a newer copy of itself)
+        working-directory: companion
+        run: |
+          $env:FOREVERAI_BUILT_APP = "$env:GITHUB_WORKSPACE\release\windows\ForeverAI-Windows"
+          .venv\Scripts\python.exe -m pytest -q tests\test_update_e2e.py
       - uses: actions/upload-artifact@v4
         with:
           name: ForeverAI-Windows
@@ -156,13 +172,20 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Sign SHA256SUMS.txt (the apps take an update only with this signature)
+        if: env.PUBLISH == '1'
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          cd dist
+          sha256sum ForeverAI-* > SHA256SUMS.txt
+          ../.github/sign_sums.sh SHA256SUMS.txt ../companion/foreverai/updates.py
       - name: Publish
         if: env.PUBLISH == '1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd dist
-          sha256sum ForeverAI-* > SHA256SUMS.txt
           cat > notes.md <<EOF
           ## Download
 
@@ -171,8 +194,9 @@ jobs:
           | \`ForeverAI-$VERSION-Windows-x64.zip\` | **Windows 10/11**: extract, run \`ForeverAI-Windows/ForeverAI-Windows.exe\` |
           | \`ForeverAI-$VERSION-Linux-x86_64.tar.gz\` | **Linux** (WoW Forever under Wine): extract, run \`ForeverAI-Linux/ForeverAI-Linux\` |
 
-          No Python needed. The Linux app runs on distributions with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and later).
+          No Python needed. The Linux app runs on distributions with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and later). Once installed, the app updates itself (0.9.0 and later).
           EOF
           # creates the tag v<version> on this commit unless it was pushed
-          gh release create "v$VERSION" ForeverAI-* SHA256SUMS.txt -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+          gh release create "v$VERSION" ForeverAI-* SHA256SUMS.txt SHA256SUMS.txt.sig -R "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
             --title "ForeverAI $VERSION" --notes-file notes.md --generate-notes

@@ -1,5 +1,6 @@
 """The AI settings in the app window (they were in the game before 0.6.0)."""
 
+import gc
 import time
 import types
 
@@ -8,6 +9,15 @@ import pytest
 from foreverai import claude_code, config
 
 from test_service import FreeClient, env, free_env  # noqa: F401  (fixtures)
+
+
+@pytest.fixture(autouse=True)
+def collect_tk_garbage():
+    """The Tk objects of a closed window are freed here, on the main thread. Left to a collection that happens to run in
+    one of the background threads (the model lists load in threads), they were freed there and Tcl crashed the tests
+    ("Fatal Python error: Illegal instruction")."""
+    yield
+    gc.collect()
 
 
 @pytest.fixture
@@ -162,8 +172,11 @@ def test_app_window_shows_the_ai_settings(env, monkeypatch):  # noqa: F811
     try:
         w.root.withdraw()
         kb = types.SimpleNamespace(meta=lambda k: "2026-11-01", count_pages=lambda: 120)
+        from foreverai.updates import Updater
+        updater = Updater(svc.store)
+        updater.state, updater.checked_at = "current", time.time()
         comp = types.SimpleNamespace(paths={"game": tmp}, store=svc.store, service=svc, files_replaced=lambda: False,
-                                     needs_key=False, update=None, claude_checked=True, kb=kb, syncing=False,
+                                     needs_key=False, updater=updater, claude_checked=True, kb=kb, syncing=False,
                                      sync_now=lambda force: None, stop=lambda: None)
         w.attach(comp)
         w.root.after(10, w._refresh)
@@ -182,6 +195,90 @@ def test_app_window_shows_the_ai_settings(env, monkeypatch):  # noqa: F811
         w._key_dialog.close()
     finally:
         w.root.destroy()
+
+
+def test_the_updates_row_follows_the_updater(env, monkeypatch):  # noqa: F811
+    """New versions of the app: the row shows the updater's state with its button, the box under it switches automatic
+    updates, and the window quits once the new version's installer runs."""
+    import tkinter as tk
+
+    from foreverai import window
+    from foreverai.updates import Updater
+    svc, _, tmp = env
+    svc.prewarm_later = lambda: None
+    monkeypatch.setattr(claude_code, "_detect_cache", None)
+    try:
+        w = window.AppWindow()
+    except tk.TclError:
+        pytest.skip("no display")
+    stopped = []
+    try:
+        w.root.withdraw()
+        updater = Updater(svc.store)
+        pressed = []
+        monkeypatch.setattr(updater, "press", lambda: pressed.append(updater.state))
+        kb = types.SimpleNamespace(meta=lambda k: "2026-11-01", count_pages=lambda: 120)
+        comp = types.SimpleNamespace(paths={"game": tmp}, store=svc.store, service=svc, files_replaced=lambda: False,
+                                     needs_key=False, updater=updater, claude_checked=True, kb=kb, syncing=False,
+                                     sync_now=lambda force: None, stop=lambda: stopped.append(True))
+        w.attach(comp)
+        row, button = w.rows["updates"], w.app_btn
+        texts = _texts(w.root)
+        assert "Updates" in texts and "Install updates automatically" in texts
+        assert "Download update" not in " ".join(texts)  # the old button at the bottom
+        assert w.auto_update.get() is True
+
+        updater.state, updater.checked_at = "current", time.time()
+        w._show_update()
+        w.root.update()
+        assert row.cget("text").startswith("Up to date · checked ") and button.cget("text") == "Check now"
+        assert button.winfo_manager() == "grid" and button.instate(["!disabled"])
+        assert button.grid_info()["row"] == row.master.grid_info()["row"]  # in the line of the Updates row
+        button.invoke()
+        assert pressed == ["current"]
+
+        updater.state, updater.release, updater.done, updater.total = "downloading", {"version": "9.9.0"}, 30, 120
+        w._show_update()
+        assert row.cget("text") == "Downloading ForeverAI 9.9.0… 25%" and button.instate(["disabled"])
+        updater.state = "ready"
+        w._show_update()
+        assert row.cget("text") == "ForeverAI 9.9.0 is ready: it is installed when you quit ForeverAI"
+        assert button.cget("text") == "Restart now" and button.instate(["!disabled"])
+        updater.state, updater.error = "failed", "the download failed (timed out)"
+        w._show_update()
+        assert row.cget("fg") == window.WARN and button.cget("text") == "Try again"
+        assert row.cget("text") == "The update to 9.9.0 failed: the download failed (timed out)"
+
+        # automatic updates off: saved in the app's settings, and the row says what is left to do
+        toggled = []
+        monkeypatch.setattr(updater, "toggled", lambda: toggled.append(svc.store.settings.auto_update))
+        w.auto_box.invoke()
+        assert svc.store.settings.auto_update is False and toggled == [False]
+        assert config.SettingsStore(svc.store.path).settings.auto_update is False  # on disk
+        updater.state = "ready"
+        w._show_update()
+        assert row.cget("text") == "ForeverAI 9.9.0 is ready to install"
+        w.auto_box.invoke()
+        assert svc.store.settings.auto_update is True and toggled == [False, True]
+
+        # from source: no button and no box
+        updater.state = "source"
+        w._show_update()
+        w.root.update()
+        assert button.winfo_manager() == "" and w.auto_box.winfo_manager() == ""
+        assert row.cget("text") == "Runs from source: new versions come with git pull"
+
+        # the installer runs and waits for this app: the window quits
+        updater.state, updater.exit_requested = "installing", True
+        w._refresh()
+        assert stopped == [True]
+        with pytest.raises(tk.TclError):
+            w.root.winfo_exists()
+    finally:
+        try:
+            w.root.destroy()
+        except tk.TclError:
+            pass
 
 
 def test_key_dialog_preselects_the_provider(tk_root):

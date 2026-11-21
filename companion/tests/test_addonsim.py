@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from PIL import Image
+from PIL import Image, ImageStat
 
 from addonsim import App, Sim, install_game
 
@@ -352,3 +352,94 @@ def test_a_route_is_made_with_the_zones_quests_read_from_the_game(tmp_path, monk
             assert sim.errors == []
         finally:
             sim.close()
+
+FIELD = "Ask… (Alt+click an item, spell or quest to tag it)"
+TEXT_OF = "local b = ... return b:GetText()"
+
+
+def test_text_fields_copy_cut_and_paste_with_ctrl(sim):
+    """As in the game's text fields: Ctrl+C copies the selected text of the field that has the keyboard to the
+    clipboard, Ctrl+X cuts it, Ctrl+V pastes in place of the selection, typing replaces it. Ctrl is down for that
+    key only, and the add-on's own key handler sees it held."""
+    sim.slash("/fai")
+    sim.click(FIELD)
+    sim.type("hello world")
+    box = sim._wow.focusedEditBox()
+    sim.lua('local b = ... b:SetScript("OnKeyDown", function(_, key) '
+            'KEYS = (KEYS or "") .. (IsControlKeyDown() and "ctrl-" or "") .. key .. " " end)', box)
+    sim.key("CTRL-C")  # nothing is selected: nothing is copied
+    assert sim.clipboard is None
+    sim.lua("local b = ... b:HighlightText(6, 11)", box)
+    assert sim.selected_text() == "world"
+    sim.key("CTRL-C")
+    assert sim.clipboard == "world" and sim.lua("return IsControlKeyDown()") is False
+    sim.key("ctrl+x")
+    assert sim.lua(TEXT_OF, box) == b"hello " and sim.clipboard == "world" and sim.selected_text() is None
+    sim.key("CTRL-V")
+    sim.key("CTRL-V")
+    assert sim.lua(TEXT_OF, box) == b"hello worldworld"
+    sim.lua("local b = ... b:HighlightText()", box)
+    sim.type("new")
+    assert sim.lua(TEXT_OF, box) == b"new"
+    sim.key("UP")
+    assert sim.lua("return KEYS") == b"ctrl-C ctrl-C ctrl-X ctrl-V ctrl-V UP "
+    # a selection ends when the text is set, the cursor moves or the field loses the keyboard
+    for end in ("b:SetText('other')", "b:SetCursorPosition(1)", "b:ClearFocus()"):
+        sim.lua("local b = ... b:SetFocus() b:HighlightText()", box)
+        assert sim._wow.selection(box) is not None
+        sim.lua("local b = ... " + end, box)
+        assert sim._wow.selection(box) is None, end
+    assert sim.errors == []
+
+
+def test_the_mouse_is_where_it_was_moved(sim):
+    """hover and click put the mouse on a widget, or on a text of one. IsMouseOver is the game's: whether that point
+    is in a region's rect, so the window is under the mouse when one of its buttons is."""
+    sim.slash("/fai")
+    over = "return ForeverAIFrame:IsMouseOver(), GameTooltip:IsMouseOver()"
+    assert sim.lua(over) == (False, False)
+    sim.hover("Send")
+    assert sim.lua(over) == (True, False)
+    # the offsets move the edges: the right edge moved onto the left one leaves the middle outside
+    assert sim.lua("local b = GetMouseFocus() return b:IsMouseOver(), b:IsMouseOver(0, 0, 0, -b:GetWidth())") == (
+        True, False)
+    # a text: the mouse is over it, on the frame it is on
+    sim.hover("How can I help?")
+    assert sim.lua("local f = GetMouseFocus() return f:GetObjectType(), f:IsMouseOver()") == (b"Frame", True)
+    sim.leave()
+    assert sim.lua(over) == (False, False)
+    sim.click("History")
+    assert sim.lua(over) == (True, False)
+
+
+def test_a_selected_text_is_drawn_selected(sim):
+    sim.slash("/fai")
+    sim.click(FIELD)
+    sim.type("selected words in the field")
+    box = sim._wow.focusedEditBox()
+    x0, y0, x1, y1 = sim.box("selected words in the field")
+
+    def mean():
+        return ImageStat.Stat(sim.render().image().crop((x0 + 2, y0 + 2, x0 + (x1 - x0) // 3, y1 - 2))).mean
+
+    plain = mean()
+    sim.lua("local b = ... b:HighlightText()", box)
+    blue = mean()  # the game's own colour for a selection, bluish
+    assert blue[2] > plain[2] + 20
+    sim.lua("local b = ... b:SetHighlightColor(0, 1, 0, 0.5) b:HighlightText()", box)
+    green = mean()
+    assert green[1] > plain[1] + 20 and green[1] > green[2]
+    sim.lua("local b = ... b:SetCursorPosition(0)", box)
+    assert all(abs(a - b) < 3 for a, b in zip(mean(), plain, strict=True))
+
+
+def test_scenario_steps_copy_a_message(tmp_path, capsys):
+    out = tmp_path / "out"
+    steps = ["open", "ask copy me please", "hover copy me please", "click Copy", "key CTRL-C",
+             "expect-clipboard copy me"]
+    code = main(["--no-app", "-o", str(out)] + [x for s in steps for x in ("-s", s)])
+    report = json.loads(capsys.readouterr().out)
+    assert code == 0 and report["failed"] is None and report["sim"]["clipboard"] == "copy me please"
+    code = main(["--no-app", "-o", str(out), "-s", "open", "-s", "expect-clipboard anything"])
+    report = json.loads(capsys.readouterr().out)
+    assert code == 1 and "the clipboard does not contain 'anything'" in report["failed"]

@@ -14,15 +14,16 @@ import threading
 import time
 from pathlib import Path
 
-from . import __version__, config
+from . import config
 from .kb.store import KB
 from .kb.sync import kb_path, run_due
 from .service import PROVIDER_NAMES, Service
+from .updates import Updater
 from .watcher import ScreenshotWatcher
 
 log = logging.getLogger("foreverai")
 activity = logging.getLogger("foreverai.activity")
-SINGLE_INSTANCE_PORT = 47811
+SINGLE_INSTANCE_PORT = int(os.environ.get("FOREVERAI_INSTANCE_PORT") or 47811)  # another port: tests only
 
 
 def setup_logging() -> Path:
@@ -79,7 +80,7 @@ class Companion:
         self.syncing = False
         self.claude_checked = False  # the start-up check of Claude Code is done
         self.needs_key = False  # no AI provider is usable: the window asks for a key
-        self.update: dict | None = None  # a newer release on GitHub
+        self.updater = Updater(self.store)  # new versions of the app
         self._stop = threading.Event()
         self.service.on_event = self.set_status
         self.service.screen_for = self.watcher.screen_for
@@ -103,8 +104,7 @@ class Companion:
         threading.Thread(target=self._maintenance, daemon=True, name="maintenance").start()
 
         threading.Thread(target=self.check_providers, daemon=True, name="claude-detect").start()
-        if not config.dev_mode() and not os.environ.get("FOREVERAI_NO_UPDATE_CHECK"):
-            threading.Thread(target=self._check_update, daemon=True, name="update-check").start()
+        self.updater.start()  # the packaged app only (not from source, not with FOREVERAI_NO_UPDATE_CHECK)
         self.set_status("Running")
 
     def check_providers(self, prefer_claude: bool = False) -> str | None:
@@ -136,14 +136,6 @@ class Companion:
         self.claude_checked = True
         self.service._prewarm_safe()  # the first question then skips Claude Code's start-up
         return provider
-
-    def _check_update(self) -> None:
-        from .updates import newer_release
-        rel = newer_release()
-        if rel:
-            self.update = rel
-            activity.info("ForeverAI %s is available (you have %s): click Download update", rel["version"],
-                          __version__)
 
     def _sync(self, force: bool) -> None:
         if self.syncing:
@@ -177,6 +169,7 @@ class Companion:
 
     def stop(self) -> None:
         self._stop.set()
+        self.updater.stop()
         self.watcher.stop()
         self.service.close()
         activity.info("Stopped")
@@ -194,9 +187,12 @@ def _single_instance() -> socket.socket | None:
 def run_window() -> None:
     from tkinter import messagebox
 
+    from . import updates
     from .setup_game import find_game_dir, normalize_game_dir, prepare_game
     from .window import AppWindow, ask_game_dir
     lock = _single_instance()
+    if lock is not None and updates.install_at_start():
+        return  # the new version starts in a moment, once this process has ended
     win = AppWindow()
     if lock is None:
         messagebox.showinfo("ForeverAI", "ForeverAI is already running.")
@@ -242,6 +238,7 @@ def run_window() -> None:
         if messagebox.askyesno("ForeverAI", "Create a desktop shortcut?", parent=win.root):
             win._shortcut()
     win.run()
+    comp.updater.on_quit()  # the window is closed: a downloaded update is installed once this process has ended
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -249,8 +246,21 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--headless", action="store_true", help="no window (development)")
     ap.add_argument("--setup", action="store_true", help="prepare the files in the game folder and exit")
     ap.add_argument("--game-dir", help="WoW Forever folder (…/World of Warcraft/_forever_)")
+    ap.add_argument("--update", action="store_true",
+                    help="download a newer version from GitHub and install it once this command ends")
+    # the copy of a new version that installs it (updates.py) is started so by the version before it: every version
+    # keeps accepting these
+    ap.add_argument("--install-update", metavar="APP_DIR", help=argparse.SUPPRESS)
+    ap.add_argument("--pid", type=int, default=0, help=argparse.SUPPRESS)
+    ap.add_argument("--restart", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+    if args.install_update:  # before anything else: the installer touches no settings, logs or game files
+        from .updates import install
+        raise SystemExit(install(Path(args.install_update), args.pid, args.restart))
     logfile = setup_logging()
+    if args.update:
+        from .updates import update_now
+        raise SystemExit(update_now())
     if args.game_dir:
         os.environ["FOREVERAI_GAME_DIR"] = args.game_dir
         config.SettingsStore().update(game_dir=str(Path(args.game_dir)))
@@ -277,3 +287,4 @@ def main(argv: list[str] | None = None) -> None:
             time.sleep(1)
     except KeyboardInterrupt:
         comp.stop()
+        comp.updater.on_quit()
