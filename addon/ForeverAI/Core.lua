@@ -1,7 +1,7 @@
 -- ForeverAI: core (namespace, saved variables, events, conversations, requests)
 local ADDON, ns = ...
 ForeverAI = ns
-ns.version = "0.9.0"
+ns.version = "0.10.0"
 
 BINDING_HEADER_FOREVERAI = "ForeverAI"
 BINDING_NAME_FOREVERAI_TOGGLE = "Show/hide ForeverAI"
@@ -328,6 +328,12 @@ SlashCmdList.FOREVERAI = function(msg)
     if ns.Track then ns.Track.Stop() end
     if ns.Map then ns.Map.Clear("the player (/fai stop)") end
     ns.print("Tracking stopped and marks cleared.")
+  elseif msg == "share" then -- the route on the map to the party (their ForeverAI shows it), and its changes from now on
+    if ns.Share and ns.Share.Start() then
+      ns.print("Route shared with the party: its changes go to them too, until you plan a route of your own.")
+    else
+      ns.print("Nothing shared: you are not in a party, or there is no route on the map.")
+    end
   elseif msg == "track" then
     if ns.Track then ns.Track.Debug() end
   elseif msg == "log" then -- the last lines of what the add-on saw and decided
@@ -610,7 +616,11 @@ function ns.HandleRequests(list)
         if req.op == "addon_options" and ns.Addons then
           reply(ns.Addons.FindOptions(req.addon, req.query))
         elseif req.op == "zone_quests" and ns.Collect then
-          reply(ns.Collect.ZoneQuests(req.zone))
+          ns.Collect.ZoneQuestsAsync(req.zone, req.upTo, reply) -- (over several frames: a long route reads the whole database)
+        elseif req.op == "dungeon_plan" and ns.Dungeons then
+          reply(ns.Dungeons.Plan(req.dungeon))
+        elseif req.op == "quest_requirements" and ns.Collect then
+          ns.Collect.QuestRequirementsAsync(req, reply) -- (a title is looked for in the whole database, over several frames)
         elseif req.op == "gear_upgrades" and ns.Gear then
           reply(ns.Gear.Upgrades(req.slot))
         elseif req.op == "auction_search" and ns.Auction then

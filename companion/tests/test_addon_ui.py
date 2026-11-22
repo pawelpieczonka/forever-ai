@@ -305,7 +305,8 @@ def test_settings_list_the_add_ons_it_works_with_and_whether_each_is_loaded(tmp_
       end
       return table.concat(out, "\\n")
     """).decode().split("\n")
-    assert len(lines) == 8  # Questie, TomTom, Leatrix Maps, Auctionator, Pawn, GearQuest Forever, ForeverMapNotes, Tamed
+    # Questie, TomTom, Leatrix Maps, Auctionator, Pawn, GearQuest Forever, DungeonJournal, ForeverMapNotes, Tamed
+    assert len(lines) == 9
     questie = next(t for t in lines if "Questie" in t)
     tomtom = next(t for t in lines if "TomTom" in t)
     assert "ReadyCheck-Ready" in questie and "(not loaded)" not in questie  # a tick

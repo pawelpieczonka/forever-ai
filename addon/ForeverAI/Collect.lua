@@ -760,6 +760,18 @@ end
 
 -- Does the quest's event (an escort) start when the quest is taken? The game asks the whole party to accept such a
 -- quest (its quest flag 2), as it does for escorts: the event is then done right after the quest is taken.
+-- The XP a quest gives at its own level, from Questie's table of quest XP (QuestXP.db: { level, xp }, measured on
+-- this server): the app works out what it gives at the level the character turns it in (a long route). nil when
+-- Questie has no figure for it.
+local function questXP(qid)
+  if not (QuestieLoader and QuestieLoader.ImportModule and qid) then return nil end
+  local ok, QXP = pcall(QuestieLoader.ImportModule, QuestieLoader, "QuestXP")
+  local row = ok and type(QXP) == "table" and type(QXP.db) == "table" and QXP.db[qid]
+  local xp = type(row) == "table" and tonumber(row[2])
+  return xp and xp > 0 and xp or nil
+end
+C.QuestXP = questXP
+
 local function startsWhenTaken(QDB, qid)
   if not (QDB and QDB.QueryQuestSingle) then return nil end
   local okF, flags = pcall(QDB.QueryQuestSingle, qid, "questFlags")
@@ -767,6 +779,97 @@ local function startsWhenTaken(QDB, qid)
   return flags and math.floor(flags / 2) % 2 == 1 or nil
 end
 C.StartsWhenTaken = startsWhenTaken
+
+------------------------------------------------------------------------ what a quest needs before it can be taken
+-- From Questie's data, read the way its own check reads it: preQuestSingle (one of these done), preQuestGroup (all of
+-- these; one counts when a quest exclusive with it is done, a negative number is that quest alone), exclusiveTo (one of
+-- these done or in the log shuts it out), the race and the class.
+local function isDone(id)
+  return C_QuestLog.IsQuestFlaggedCompleted and safe(C_QuestLog.IsQuestFlaggedCompleted, id) and true or false
+end
+local function inLog(id)
+  return C_QuestLog.GetLogIndexForQuestID and safe(C_QuestLog.GetLogIndexForQuestID, id) and true or false
+end
+local function questName(QDB, id)
+  local name = safe(QDB.QueryQuestSingle, id, "name")
+  return type(name) == "string" and name or ("quest " .. tostring(id))
+end
+local function questieModule(name)
+  if not (QuestieLoader and QuestieLoader.ImportModule) then return nil end
+  local ok, m = pcall(QuestieLoader.ImportModule, QuestieLoader, name)
+  return ok and type(m) == "table" and m or nil
+end
+local ALLIANCE, HORDE = 77, 178 -- Questie's race keys of a whole faction
+
+-- why the race or the class keeps the character from a quest; nil when neither does
+local function wrongPlayer(QDB, id)
+  local P = questieModule("QuestiePlayer")
+  if not P then return nil end
+  local races, classes = safe(QDB.QueryQuestSingle, id, "requiredRaces"), safe(QDB.QueryQuestSingle, id, "requiredClasses")
+  if tonumber(races) and races ~= 0 and safe(P.HasRequiredRace, races) == false then
+    return races == ALLIANCE and "an Alliance quest" or races == HORDE and "a Horde quest" or "a quest of other races"
+  end
+  if tonumber(classes) and classes ~= 0 and safe(P.HasRequiredClass, classes) == false then
+    return "a quest of other classes"
+  end
+end
+
+-- The quests to be done before this one that are not done (as "[Title]"), leaving out ``after`` (the part of a chain
+-- a route turns in right before taking it); "one of" when any one of them would do. Second result: what keeps the
+-- character from it for good (a quest that shuts it out, the race, the class).
+local function stillNeeds(QDB, id, after)
+  if not (QDB and QDB.QueryQuestSingle) then return nil end
+  local exclusive = safe(QDB.QueryQuestSingle, id, "exclusiveTo")
+  for _, ex in ipairs(type(exclusive) == "table" and exclusive or {}) do
+    if ex ~= after and (isDone(ex) or inLog(ex)) then
+      return nil, "[" .. questName(QDB, ex) .. "] " .. (isDone(ex) and "is done" or "is in the quest log") .. ", and it shuts this one out"
+    end
+  end
+  local wrong = wrongPlayer(QDB, id)
+  if wrong then return nil, wrong end
+  local needs, kind = {}, "all of"
+  local single = safe(QDB.QueryQuestSingle, id, "preQuestSingle")
+  if type(single) == "table" and #single > 0 then
+    kind = "one of"
+    for _, pid in ipairs(single) do
+      if pid == after or isDone(pid) then return nil end
+    end
+    for _, pid in ipairs(single) do needs[#needs + 1] = pid end
+  else
+    local group = safe(QDB.QueryQuestSingle, id, "preQuestGroup")
+    for _, gid in ipairs(type(group) == "table" and group or {}) do
+      local pid = math.abs(tonumber(gid) or 0)
+      if pid > 0 and pid ~= after and not isDone(pid) then
+        local instead = false
+        if gid > 0 then -- (one of the quests exclusive with it done is as good)
+          local ex = safe(QDB.QueryQuestSingle, pid, "exclusiveTo")
+          for _, e in ipairs(type(ex) == "table" and ex or {}) do
+            if isDone(e) then instead = true break end
+          end
+        end
+        if not instead then needs[#needs + 1] = pid end
+      end
+    end
+  end
+  return #needs > 0 and needs or nil, nil, kind
+end
+
+-- What the next part of a chain needs besides the part before it: "[Title]" of the quests still to do first. A route
+-- plans the next part at the turn-in of the one before; one that needs another quest too is not there to take then.
+local function chainNeeds(QDB, nextId, after)
+  local needs, shut, kind = stillNeeds(QDB, nextId, after)
+  if shut then return nil, shut end
+  if not needs then return nil end
+  local out = {}
+  for i, pid in ipairs(needs) do
+    if i > 3 then break end
+    out[#out + 1] = "[" .. questName(QDB, pid) .. "]"
+  end
+  if kind == "one of" and #needs > 1 then return { table.concat(out, " or ") } end
+  return out
+end
+C.ChainNeeds = chainNeeds
+C.StillNeeds, C.QuestName, C.QuestieGivers, C.QuestieDB = stillNeeds, questName, function(...) return questieGivers(...) end, questieDB
 
 local function objectiveSources(QDB, qid)
   if not (QDB and QDB.QueryQuestSingle) then return nil end
@@ -779,17 +882,26 @@ local function objectiveSources(QDB, qid)
     objs = {}
   end
   local list = {}
+  -- An objective the database has no place for is still listed (nowhere): it is something to do. Left out, a quest
+  -- of WoW Forever's own whose objects the database does not have looked like one to turn in at once, and the route
+  -- sent the player to its NPC for the next part of the chain ("From the Ashes", then "Nek'rosh's Gambit").
   local function add(label, sources, credit)
-    if #sources > 0 then list[#list + 1] = { label = label, sources = sources, credit = credit } end
+    if #sources > 0 then
+      list[#list + 1] = { label = label, sources = sources, credit = credit }
+    elseif type(label) == "string" and label ~= "" then
+      list[#list + 1] = { label = label, sources = sources, credit = credit, nowhere = true }
+    end
   end
   local function id(o) return type(o) == "table" and o[1] or o end
+  -- the objective's own text in the database (its second field), for one whose creature or object it has no name for
+  local function said(o) return type(o) == "table" and type(o[2]) == "string" and o[2] ~= "" and o[2] or nil end
   for _, o in ipairs(type(objs[1]) == "table" and objs[1] or {}) do -- creatures to kill
     local s = npcSource(QDB, id(o), "kill")
-    if s then add(s.name, { s }) end
+    if s then add(s.name, { s }) else add(said(o) or "a creature the quest database has no name for", {}) end
   end
   for _, o in ipairs(type(objs[2]) == "table" and objs[2] or {}) do -- objects to use
     local s = objectSource(QDB, id(o), "use")
-    if s then add(s.name, { s }) end
+    if s then add(s.name, { s }) else add(said(o) or "an object the quest database has no name for", {}) end
   end
   for _, o in ipairs(type(objs[3]) == "table" and objs[3] or {}) do -- items to collect
     local itemId = id(o)
@@ -954,60 +1066,64 @@ local function whereToGet(list, mapID, px, py, area, objectives)
   end
   local out = {}
   for _, obj in ipairs(list) do
-    local ranked = {}
-    for _, s in ipairs(obj.sources) do
-      local best, here, mine = nil, 0, {}
-      for _, p in ipairs(s.pts) do
-        if area and p.area == area then
-          here = here + 1
-          mine[#mine + 1] = p
-          local d = px and ns.MapMeters(mapID, px, py, p.x, p.y)
-          if d and (not best or d < best.d) then best = { d = d, p = p } end
-        end
-      end
-      -- many spawn points: go where they stand together, not to the nearest lone one
-      local group, others
-      if best and here > 1 then
-        group, others = spawnGroups(mine, mapID, px, py, killsLeft(obj, s, objectives))
-        if group and group.d then best = group end
-      end
-      ranked[#ranked + 1] = { s = s, best = best or (s.pts[1] and { p = s.pts[1] }), here = here, others = others }
-    end
-    table.sort(ranked, function(a, b) return (a.best and a.best.d or 1e9) < (b.best and b.best.d or 1e9) end)
-    local parts = {}
-    for i = 1, math.min(5, #ranked) do
-      local r = ranked[i]
-      local where = r.s.inside and ("inside " .. r.s.inside .. " (no place on a zone map)") or "no known spawn point"
-      if r.best then
-        local zone = C_Map.GetAreaInfo and C_Map.GetAreaInfo(r.best.p.area) or ("zone " .. tostring(r.best.p.area))
-        where = string.format("%s %.1f, %.1f", tostring(zone), r.best.p.x, r.best.p.y)
-        if r.best.d then
-          local more = ""
-          if r.best.size and r.here > 1 then more = string.format(", %d of them around here", r.best.size) end
-          for n, o in ipairs(r.others or {}) do
-            more = more .. string.format("%s %d around %.1f, %.1f", n == 1 and ", others:" or " and", o.size, o.p.x, o.p.y)
+    if obj.nowhere then
+      out[#out + 1] = obj.label .. ": no known place"
+    else
+      local ranked = {}
+      for _, s in ipairs(obj.sources) do
+        local best, here, mine = nil, 0, {}
+        for _, p in ipairs(s.pts) do
+          if area and p.area == area then
+            here = here + 1
+            mine[#mine + 1] = p
+            local d = px and ns.MapMeters(mapID, px, py, p.x, p.y)
+            if d and (not best or d < best.d) then best = { d = d, p = p } end
           end
-          where = where .. string.format(" (%d m, %d spawn point%s in your zone%s)", r.best.d, r.here,
-            r.here == 1 and "" or "s", more)
-        else
-          -- asked for another zone (no distance to give): still, how many places it can be at there. One point of
-          -- several is somewhere to search around, not the spot.
-          local there = 0
-          for _, p in ipairs(r.s.pts) do
-            if p.area == r.best.p.area then there = there + 1 end
-          end
-          if there > 1 then where = where .. string.format(" (%d spawn points in that zone)", there) end
         end
+        -- many spawn points: go where they stand together, not to the nearest lone one
+        local group, others
+        if best and here > 1 then
+          group, others = spawnGroups(mine, mapID, px, py, killsLeft(obj, s, objectives))
+          if group and group.d then best = group end
+        end
+        ranked[#ranked + 1] = { s = s, best = best or (s.pts[1] and { p = s.pts[1] }), here = here, others = others }
       end
-      local how = r.s.how
-      if how == "kill" and slain and not obj.credit and not (slain[obj.label:lower()] or slain[r.s.name:lower()]) then
-        how = "find"
+      table.sort(ranked, function(a, b) return (a.best and a.best.d or 1e9) < (b.best and b.best.d or 1e9) end)
+      local parts = {}
+      for i = 1, math.min(5, #ranked) do
+        local r = ranked[i]
+        local where = r.s.inside and ("inside " .. r.s.inside .. " (no place on a zone map)") or "no known spawn point"
+        if r.best then
+          local zone = C_Map.GetAreaInfo and C_Map.GetAreaInfo(r.best.p.area) or ("zone " .. tostring(r.best.p.area))
+          where = string.format("%s %.1f, %.1f", tostring(zone), r.best.p.x, r.best.p.y)
+          if r.best.d then
+            local more = ""
+            if r.best.size and r.here > 1 then more = string.format(", %d of them around here", r.best.size) end
+            for n, o in ipairs(r.others or {}) do
+              more = more .. string.format("%s %d around %.1f, %.1f", n == 1 and ", others:" or " and", o.size, o.p.x, o.p.y)
+            end
+            where = where .. string.format(" (%d m, %d spawn point%s in your zone%s)", r.best.d, r.here,
+              r.here == 1 and "" or "s", more)
+          else
+            -- asked for another zone (no distance to give): still, how many places it can be at there. One point of
+            -- several is somewhere to search around, not the spot.
+            local there = 0
+            for _, p in ipairs(r.s.pts) do
+              if p.area == r.best.p.area then there = there + 1 end
+            end
+            if there > 1 then where = where .. string.format(" (%d spawn points in that zone)", there) end
+          end
+        end
+        local how = r.s.how
+        if how == "kill" and slain and not obj.credit and not (slain[obj.label:lower()] or slain[r.s.name:lower()]) then
+          how = "find"
+        end
+        local facts = r.s.facts or (r.s.level and ("level " .. r.s.level))
+        parts[#parts + 1] = string.format("%s %s%s — %s", how, r.s.name, facts and (" (" .. facts .. ")") or "", where)
       end
-      local facts = r.s.facts or (r.s.level and ("level " .. r.s.level))
-      parts[#parts + 1] = string.format("%s %s%s — %s", how, r.s.name, facts and (" (" .. facts .. ")") or "", where)
+      if #ranked > 5 then parts[#parts + 1] = string.format("and %d more", #ranked - 5) end
+      out[#out + 1] = obj.label .. ": " .. table.concat(parts, "; ")
     end
-    if #ranked > 5 then parts[#parts + 1] = string.format("and %d more", #ranked - 5) end
-    out[#out + 1] = obj.label .. ": " .. table.concat(parts, "; ")
   end
   return out
 end
@@ -1115,7 +1231,7 @@ local function questStatic(qid, questie)
         if not (okN and type(nq) == "table") then okN, nq = pcall(questie.GetQuest, questie, nextId) end
         local giver = okN and type(nq) == "table" and nq.name and questieGivers(questie, nq.startedBy)
         if giver then
-          s.next = { id = nextId, minLevel = tonumber(nq.requiredLevel) or 0,
+          s.next = { id = nextId, minLevel = tonumber(nq.requiredLevel) or 0, xp = questXP(nextId),
             text = string.format("[%s]%s from %s", nq.name, nq.questLevel and (" (level " .. nq.questLevel .. ")") or "", giver) }
         end
       end
@@ -1179,7 +1295,9 @@ function S.quests()
       e.objectiveText, e.description, e.rewards = st.objectiveText, st.description, st.rewards
       e.questGiver, e.turnIn = st.questGiver, st.turnIn
       if st.next and st.next.minLevel <= (UnitLevel("player") or 1) then -- one the character can take already
-        e.next, e.nextId = st.next.text, st.next.id
+        -- (and what else it needs; one that a quest done, the race or the class shuts out is no next part here)
+        local needs, shut = chainNeeds(questie, st.next.id, qid)
+        if not shut then e.next, e.nextId, e.nextXp, e.nextNeeds = st.next.text, st.next.id, st.next.xp, needs end
       end
       if e.status == "in progress" then e.whereToGet = whereToGet(st.sources, mapID, px, py, area, texts) end
       e.startsWhenTaken = st.startsWhenTaken
@@ -1235,7 +1353,7 @@ function S.nearbyQuests()
         -- no known quest giver (e.g. Craftsman's Writs): nothing to walk to
         if #givers > 0 then
           cands[#cands + 1] = { id = questId, title = q.name, level = q.questLevel, minLevel = q.requiredLevel, givers = givers,
-            objective = type(q.objectivesText) == "table" and table.concat(q.objectivesText, " ") or nil }
+            objective = type(q.objectivesText) == "table" and table.concat(q.objectivesText, " ") or nil, xp = questXP(questId) }
         end
       end
     end
@@ -1252,7 +1370,7 @@ function S.nearbyQuests()
     end
     local g = best.g
     local areaName = C_Map.GetAreaInfo and C_Map.GetAreaInfo(g.area) or ("zone " .. tostring(g.area))
-    list[#list + 1] = { id = c.id, title = c.title, level = c.level, minLevel = c.minLevel, objective = c.objective,
+    list[#list + 1] = { id = c.id, title = c.title, level = c.level, minLevel = c.minLevel, objective = c.objective, xp = c.xp,
       giver = g.npc, where = string.format("%s %.1f, %.1f", areaName, g.x, g.y), dist = best.dist,
       distance = best.dist and (meters and (math.floor(best.dist) .. " m") or (ns.round(best.dist, 1) .. "% of map")) or nil }
     if g.npc then C.npcCoords[g.npc] = { zone = areaName, x = g.x, y = g.y } end
@@ -1743,8 +1861,13 @@ end
 -- wherever the player stands: from Questie's own list of what is available to them, so quests that are done, another
 -- class's, or a step of a chain not reached yet are not in it. Asked for by the AI (its zone_quests tool) when the
 -- player plans to go somewhere: the "nearbyQuests" section only reaches around the player.
+-- With ``upTo`` (a long route to that level) the quests of the zone that open later, up to that level, are in it too
+-- (with minLevel, the level they open at): Questie lists only what the character can take now, so its whole quest
+-- database is gone through for them, with Questie's own check of everything but the level (the class, the race, the
+-- quests that come first, what is done). Every quest says the XP it gives at its own level (xp).
 local ZONE_QUESTS_MAX = 30
-function C.ZoneQuests(zone)
+local ZONE_QUESTS_LONG_MAX = 40 -- with upTo: the quests of more levels
+function C.ZoneQuests(zone, upTo)
   local want = tostring(zone or ""):lower():gsub("^the ", "")
   if want == "" then return { error = "no zone named" } end
   local QDB = questieDB()
@@ -1752,61 +1875,97 @@ function C.ZoneQuests(zone)
   if not (QDB and okA and type(AQ) == "table" and type(AQ.__availableQuests) == "table") then
     return { error = "Questie is not loaded or has not worked out the available quests yet" }
   end
+  local names = {}
   local function areaName(id)
-    local name = type(id) == "number" and id > 0 and C_Map.GetAreaInfo and C_Map.GetAreaInfo(id)
-    return type(name) == "string" and name or nil
+    if type(id) ~= "number" or id <= 0 then return nil end
+    if names[id] == nil then
+      local name = C_Map.GetAreaInfo and C_Map.GetAreaInfo(id)
+      names[id] = type(name) == "string" and name or false
+    end
+    return names[id] or nil
   end
   local function matches(name)
     name = name and name:lower():gsub("^the ", "")
     return name ~= nil and (name == want or name:find(want, 1, true) == 1 or want:find(name, 1, true) == 1)
   end
   local myLevel = UnitLevel("player") or 1
-  local found, later = {}, 0
-  for questId in pairs(AQ.__availableQuests) do
-    local q = safe(QDB.GetQuest, questId)
-    if type(q) == "table" and q.name then
-      local here, anywhere
-      for _, npcId in ipairs((type(q.startedBy) == "table" and q.startedBy[1]) or {}) do
-        local npc = safe(QDB.GetNPC, QDB, npcId)
-        for areaId, spawns in pairs(type(npc) == "table" and type(npc.spawns) == "table" and npc.spawns or {}) do
-          local s, name = type(spawns) == "table" and spawns[1], areaName(areaId)
-          if s and s[1] and name then
-            local at = { npc = npc.name, where = string.format("%s %.1f, %.1f", name, s[1], s[2]) }
-            anywhere = anywhere or at
-            if matches(name) then here = here or at end
-          end
+  upTo = tonumber(upTo)
+  if upTo and upTo <= myLevel then upTo = nil end
+  local found, later, listed = {}, 0, {}
+  -- the quest of this number as the AI gets it, when it belongs to the zone (nil otherwise)
+  local function entry(questId, q)
+    local here, anywhere
+    for _, npcId in ipairs((type(q.startedBy) == "table" and q.startedBy[1]) or {}) do
+      local npc = safe(QDB.GetNPC, QDB, npcId)
+      for areaId, spawns in pairs(type(npc) == "table" and type(npc.spawns) == "table" and npc.spawns or {}) do
+        local s, name = type(spawns) == "table" and spawns[1], areaName(areaId)
+        if s and s[1] and name then
+          local at = { npc = npc.name, where = string.format("%s %.1f, %.1f", name, s[1], s[2]) }
+          anywhere = anywhere or at
+          if matches(name) then here = here or at end
         end
       end
-      local about = areaName(tonumber(q.zoneOrSort)) -- the zone or dungeon the quest is filed under
-      if (here or matches(about)) and (here or anywhere) then
-        if (tonumber(q.requiredLevel) or 0) > myLevel then
+    end
+    local about = areaName(tonumber(q.zoneOrSort)) -- the zone or dungeon the quest is filed under
+    if not ((here or matches(about)) and (here or anywhere)) then return nil end
+    local giver = here or anywhere
+    local e = { id = questId, title = q.name, level = tonumber(q.questLevel), minLevel = tonumber(q.requiredLevel),
+      giver = giver.npc, where = giver.where, about = about, xp = questXP(questId),
+      objective = type(q.objectivesText) == "table" and ns.Cut(table.concat(q.objectivesText, " "), 220) or nil,
+      turnIn = questieGivers(QDB, q.finishedBy) }
+    -- the quest that follows it in its chain, as the quest log section says it: a route plans for it
+    local nextId = tonumber(q.nextQuestInChain)
+    local nq = nextId and nextId > 0 and safe(QDB.GetQuest, nextId)
+    local nextGiver = type(nq) == "table" and nq.name and questieGivers(QDB, nq.startedBy)
+    local needs, shut
+    if nextGiver then needs, shut = chainNeeds(QDB, nextId, questId) end
+    if nextGiver and not shut and (tonumber(nq.requiredLevel) or 0) <= (upTo or myLevel) then
+      e.next = string.format("[%s]%s from %s", nq.name, nq.questLevel and (" (level " .. nq.questLevel .. ")") or "", nextGiver)
+      e.nextId, e.nextXp, e.nextNeeds = nextId, questXP(nextId), needs
+    end
+    local _, tag = safe(QDB.GetQuestTagInfo, questId)
+    if type(tag) == "string" and tag ~= "" then e.type = tag end
+    local okS, sources = pcall(objectiveSources, QDB, questId)
+    -- how many objectives the database has for it (none: a letter to take, somebody to talk to; done when taken)
+    e.goals = okS and type(sources) == "table" and #sources or 0
+    e.startsWhenTaken = startsWhenTaken(QDB, questId)
+    local lines = okS and whereToGet(sources, nil, nil, nil, nil, nil) or nil
+    if lines then
+      for i = #lines, 4, -1 do lines[i] = nil end
+      for i, line in ipairs(lines) do lines[i] = ns.Cut(line, 240) end
+      e.whereToGet = lines
+    end
+    return e
+  end
+  for questId in pairs(AQ.__availableQuests) do
+    budget()
+    local q = safe(QDB.GetQuest, questId)
+    if type(q) == "table" and q.name then
+      local e = entry(questId, q)
+      if e then
+        listed[questId] = true
+        if (tonumber(q.requiredLevel) or 0) > (upTo or myLevel) then
           later = later + 1 -- not yet theirs to take
         else
-          local giver = here or anywhere
-          local e = { id = questId, title = q.name, level = tonumber(q.questLevel), minLevel = tonumber(q.requiredLevel),
-            giver = giver.npc, where = giver.where, about = about,
-            objective = type(q.objectivesText) == "table" and ns.Cut(table.concat(q.objectivesText, " "), 220) or nil,
-            turnIn = questieGivers(QDB, q.finishedBy) }
-          -- the quest that follows it in its chain, as the quest log section says it: a route plans for it
-          local nextId = tonumber(q.nextQuestInChain)
-          local nq = nextId and nextId > 0 and safe(QDB.GetQuest, nextId)
-          local nextGiver = type(nq) == "table" and nq.name and questieGivers(QDB, nq.startedBy)
-          if nextGiver and (tonumber(nq.requiredLevel) or 0) <= myLevel then
-            e.next = string.format("[%s]%s from %s", nq.name, nq.questLevel and (" (level " .. nq.questLevel .. ")") or "", nextGiver)
-            e.nextId = nextId
-          end
-          local _, tag = safe(QDB.GetQuestTagInfo, questId)
-          if type(tag) == "string" and tag ~= "" then e.type = tag end
-          local okS, sources = pcall(objectiveSources, QDB, questId)
-          e.startsWhenTaken = startsWhenTaken(QDB, questId)
-          local lines = okS and whereToGet(sources, nil, nil, nil, nil, nil) or nil
-          if lines then
-            for i = #lines, 4, -1 do lines[i] = nil end
-            for i, line in ipairs(lines) do lines[i] = ns.Cut(line, 240) end
-            e.whereToGet = lines
-          end
-          if giver.npc then C.npcCoords[giver.npc] = C.npcCoords[giver.npc] or nil end
           found[#found + 1] = e
+        end
+      end
+    end
+  end
+  if upTo and type(QDB.QuestPointers) == "table" and type(QDB.IsDoable) == "function" then
+    local inLog = {}
+    for i = 1, (C_QuestLog.GetNumQuestLogEntries and safe(C_QuestLog.GetNumQuestLogEntries)) or 0 do
+      local info = safe(C_QuestLog.GetInfo, i)
+      if type(info) == "table" and info.questID then inLog[info.questID] = true end
+    end
+    for questId in pairs(QDB.QuestPointers) do
+      budget()
+      if not listed[questId] and not inLog[questId] then
+        local need = tonumber((safe(QDB.QueryQuestSingle, questId, "requiredLevel"))) or 0
+        if need > myLevel then
+          local q = need <= upTo and safe(QDB.IsDoable, questId) == true and safe(QDB.GetQuest, questId)
+          local e = type(q) == "table" and q.name and entry(questId, q)
+          if e then found[#found + 1] = e end
         end
       end
     end
@@ -1815,18 +1974,187 @@ function C.ZoneQuests(zone)
     if (a.level or 0) ~= (b.level or 0) then return (a.level or 0) < (b.level or 0) end
     return a.title < b.title
   end
-  local more = math.max(0, #found - ZONE_QUESTS_MAX)
-  if more > 0 then -- too many to list: the ones furthest from the character's level go
+  local max = upTo and ZONE_QUESTS_LONG_MAX or ZONE_QUESTS_MAX
+  local more = math.max(0, #found - max)
+  if more > 0 then -- too many to list: the ones furthest from the levels asked for go
+    local mid = upTo and (myLevel + upTo) / 2 or myLevel
     table.sort(found, function(a, b)
-      local da, db = math.abs((a.level or myLevel) - myLevel), math.abs((b.level or myLevel) - myLevel)
+      local da, db = math.abs((a.level or mid) - mid), math.abs((b.level or mid) - mid)
       if da ~= db then return da < db end
       return byLevel(a, b)
     end)
-    for i = #found, ZONE_QUESTS_MAX + 1, -1 do found[i] = nil end
+    for i = #found, max + 1, -1 do found[i] = nil end
   end
   table.sort(found, byLevel)
   return { zone = zone, quests = found, more = more > 0 and more or nil, later = later > 0 and later or nil,
-           level = myLevel }
+           level = myLevel, upTo = upTo }
+end
+
+-- work(), over as many frames as it takes (it calls budget()), then done(its result)
+local function runAsync(work, done)
+  local co = coroutine.create(work)
+  local runner = CreateFrame("Frame")
+  local function step()
+    sliceStart = debugprofilestop()
+    local ok, res = coroutine.resume(co)
+    if not ok then
+      runner:SetScript("OnUpdate", nil)
+      done({ error = tostring(res) })
+    elseif coroutine.status(co) == "dead" then
+      runner:SetScript("OnUpdate", nil)
+      done(res)
+    end
+  end
+  runner:SetScript("OnUpdate", step)
+  step()
+end
+
+C.RunAsync = runAsync
+
+-- C.ZoneQuests over as many frames as it takes (Questie's whole quest database is gone through for upTo), then
+-- done(result). Outside the game's frames (tests) it runs at once.
+function C.ZoneQuestsAsync(zone, upTo, done)
+  runAsync(function() return C.ZoneQuests(zone, upTo) end, done)
+end
+
+------------------------------------------------------------------------ why a quest can or cannot be taken
+-- For the AI, when the player cannot take a quest at its NPC (or a route is to go round one): Questie's own verdict,
+-- and what stands behind it in words: the level, the quests before it (done, in the quest log or still to do, who gives
+-- each and where, and what each needs in turn), the quests that shut it out, the race, the class, the reputation, the
+-- profession, a breadcrumb whose quest is done; and whether its NPC did not offer it when the player talked to him.
+local STANDING = { { 42000, "Exalted" }, { 21000, "Revered" }, { 9000, "Honored" }, { 3000, "Friendly" },
+  { 0, "Neutral" }, { -3000, "Unfriendly" }, { -6000, "Hostile" } }
+local function standing(value)
+  for _, s in ipairs(STANDING) do
+    if (tonumber(value) or 0) >= s[1] then return s[2] end
+  end
+  return "Hated"
+end
+local SKILLS = { [129] = "First Aid", [164] = "Blacksmithing", [165] = "Leatherworking", [171] = "Alchemy",
+  [182] = "Herbalism", [185] = "Cooking", [186] = "Mining", [197] = "Tailoring", [202] = "Engineering",
+  [333] = "Enchanting", [356] = "Fishing", [393] = "Skinning", [633] = "Lockpicking" }
+
+local function stateOf(id)
+  if inLog(id) then return "in the quest log" end
+  if isDone(id) then return "done" end
+end
+
+local function factionName(rep)
+  local name = type(rep) == "table" and safe(GetFactionInfoByID, rep[1])
+  return type(name) == "string" and name or ("faction " .. tostring(type(rep) == "table" and rep[1] or "?"))
+end
+
+function C.QuestRequirements(id)
+  local QDB = questieDB()
+  if not QDB then return { error = "Questie is not loaded" } end
+  id = tonumber(id)
+  local q = id and safe(QDB.GetQuest, id)
+  if id and type(q) ~= "table" then q = safe(QDB.GetQuest, QDB, id) end
+  if type(q) ~= "table" or not q.name then return { id = id, error = "the quest database has no quest " .. tostring(id) } end
+  local myLevel = UnitLevel("player") or 1
+  local out = { id = id, title = q.name, level = tonumber(q.questLevel), minLevel = tonumber(q.requiredLevel),
+    giver = questieGivers(QDB, q.startedBy), turnIn = questieGivers(QDB, q.finishedBy), state = stateOf(id) }
+  local reasons = {}
+  if not out.state then
+    local verdict = safe(QDB.IsDoableVerbose, id, false, true, true) -- ("Available", "Unavailable: Incomplete pre-quest")
+    out.questie = type(verdict) == "string" and verdict or nil
+    local minL = tonumber(q.requiredLevel) or 0
+    if minL > myLevel then reasons[#reasons + 1] = string.format("it opens at level %d (the character is %d)", minL, myLevel) end
+    local maxL = tonumber((safe(QDB.QueryQuestSingle, id, "requiredMaxLevel"))) or 0
+    if maxL > 0 and myLevel > maxL then reasons[#reasons + 1] = string.format("it is for level %d at most", maxL) end
+    local needs, shut, kind = stillNeeds(QDB, id)
+    if shut then reasons[#reasons + 1] = shut end
+    if needs then
+      out.before, out.beforeKind = {}, kind
+      for i, pid in ipairs(needs) do
+        if i > 6 then break end
+        local p = { id = pid, title = questName(QDB, pid), state = stateOf(pid) or "not done" }
+        local pq = safe(QDB.GetQuest, pid)
+        if type(pq) == "table" then
+          p.giver, p.level, p.minLevel = questieGivers(QDB, pq.startedBy), tonumber(pq.questLevel), tonumber(pq.requiredLevel)
+          p.turnIn = questieGivers(QDB, pq.finishedBy)
+        end
+        if p.state == "not done" then -- and what it needs in turn: the way to this quest starts there
+          local more, shut2 = stillNeeds(QDB, pid)
+          p.blocked = shut2
+          if more then
+            local names = {}
+            for k, m in ipairs(more) do
+              if k <= 3 then names[#names + 1] = "[" .. questName(QDB, m) .. "]" end
+            end
+            p.needs = table.concat(names, ", ")
+          end
+        end
+        out.before[#out.before + 1] = p
+      end
+    end
+    local minRep = safe(QDB.QueryQuestSingle, id, "requiredMinRep")
+    local maxRep = safe(QDB.QueryQuestSingle, id, "requiredMaxRep")
+    local R = (type(minRep) == "table" or type(maxRep) == "table") and questieModule("QuestieReputation")
+    if R then
+      local aboveMin, hasMin, belowMax, hasMax = safe(R.HasFactionAndReputationLevel, R, minRep, maxRep)
+      if type(minRep) == "table" and not (aboveMin and hasMin) then
+        reasons[#reasons + 1] = string.format("it needs %s with %s", standing(minRep[2]), factionName(minRep))
+      end
+      if type(maxRep) == "table" and not (belowMax and hasMax) then
+        reasons[#reasons + 1] = string.format("it is only for characters below %s with %s", standing(maxRep[2]),
+          factionName(maxRep))
+      end
+    end
+    local skill = safe(QDB.QueryQuestSingle, id, "requiredSkill")
+    local Prof = type(skill) == "table" and questieModule("QuestieProfessions")
+    if Prof then
+      local has, enough = safe(Prof.HasProfessionAndSkillLevel, Prof, skill)
+      local name = SKILLS[tonumber(skill[1]) or 0] or ("the profession " .. tostring(skill[1]))
+      if not has then
+        reasons[#reasons + 1] = "it needs " .. name
+      elseif not enough then
+        reasons[#reasons + 1] = string.format("it needs %s at %d", name, tonumber(skill[2]) or 0)
+      end
+    end
+    local crumb = tonumber((safe(QDB.QueryQuestSingle, id, "breadcrumbForQuestId")))
+    if crumb and crumb > 0 and stateOf(crumb) then
+      reasons[#reasons + 1] = string.format("it only leads to [%s], which is %s", questName(QDB, crumb), stateOf(crumb))
+    end
+    local parent = tonumber((safe(QDB.QueryQuestSingle, id, "parentQuest")))
+    if parent and parent > 0 and not inLog(parent) then
+      reasons[#reasons + 1] = string.format("it belongs to [%s], which is to be in the quest log", questName(QDB, parent))
+    end
+  end
+  out.reasons = #reasons > 0 and reasons or nil
+  out.notOffered = ns.Map and ns.Map.Refused and ns.Map.Refused(id, q.name) or nil
+  return out
+end
+
+-- C.QuestRequirements of the quests of these numbers, or of this title (the database is gone through for it, over as
+-- many frames as it takes: the parts of a chain share titles), then done({ quests = {...} }).
+local REQ_MAX = 4
+function C.QuestRequirementsAsync(req, done)
+  runAsync(function()
+    local ids = {}
+    for _, n in ipairs(type(req.ids) == "table" and req.ids or { req.id }) do
+      if tonumber(n) then ids[#ids + 1] = tonumber(n) end
+    end
+    local want = type(req.title) == "string" and (req.title:lower():gsub("^%s+", ""):gsub("%s+$", "")) or ""
+    if #ids == 0 and want ~= "" then
+      local QDB = questieDB()
+      if not (QDB and type(QDB.QuestPointers) == "table") then return { error = "Questie is not loaded" } end
+      for qid in pairs(QDB.QuestPointers) do
+        budget()
+        local name = safe(QDB.QueryQuestSingle, qid, "name")
+        if type(name) == "string" and name:lower() == want then ids[#ids + 1] = qid end
+      end
+      table.sort(ids)
+    end
+    if #ids == 0 then return { error = "the quest database has no quest of that name", title = req.title } end
+    local out = {}
+    for i, qid in ipairs(ids) do
+      if i > REQ_MAX then break end
+      budget()
+      out[#out + 1] = C.QuestRequirements(qid)
+    end
+    return { quests = out, more = #ids > REQ_MAX and (#ids - REQ_MAX) or nil, level = UnitLevel("player") }
+  end, done)
 end
 
 function C.UnitInfo(unit)
@@ -1993,6 +2321,151 @@ function S.group()
   return out
 end
 
+------------------------------------------------------------------------ the party: a route for two or more
+-- The other players of a party (not a raid), for a route they go together: each with their level and class, how far
+-- away they are or the zone they are in, the player's quests they have too (and how far they are with them), their
+-- quests the player has not got (whether the player can take each, and from whom), and the player's quests they lack
+-- (whether the game lets the player share each). Questie in their game tells Questie in the player's game what is in
+-- their quest log (QuestieComms); without it the game says only which of the player's quests they have. ("Weź pod
+-- uwagę mojego teammate'a": the AI planned for a duo without seeing his quest log.)
+local PARTY_MAX = 15 -- quests of each list, per member
+
+-- what Questie got from this player, under the name the game sent it with ("Name", "Name-Realm" from another realm)
+local function remoteLog(byName, name, realm)
+  if type(byName) ~= "table" or not name then return nil end
+  if byName[name] then return byName[name] end
+  if realm and realm ~= "" and byName[name .. "-" .. realm] then return byName[name .. "-" .. realm] end
+  for who, objectives in pairs(byName) do
+    if type(who) == "string" and who:match("^[^%-]+") == name then return objectives end
+  end
+end
+
+-- "3/8, 1/1", and whether every objective is finished (a quest without objectives is: a letter, somebody to see)
+local function remoteProgress(objectives)
+  local parts, all = {}, true
+  for _, o in ipairs(type(objectives) == "table" and objectives or {}) do
+    if type(o) == "table" then
+      parts[#parts + 1] = string.format("%d/%d", tonumber(o.fulfilled) or 0, tonumber(o.required) or 1)
+      if not o.finished then all = false end
+    end
+  end
+  return #parts > 0 and table.concat(parts, ", ") or nil, all
+end
+
+local function questieQuest(QDB, id)
+  local ok, q = pcall(QDB.GetQuest, id)
+  if not (ok and type(q) == "table") then ok, q = pcall(QDB.GetQuest, QDB, id) end
+  return ok and type(q) == "table" and q or nil
+end
+
+-- the first of Questie's givers ("Name (Zone x, y); ..."): the name, and "Zone x, y" when it has a place
+local function firstGiver(text)
+  if type(text) ~= "string" then return nil end
+  local name, where = text:match("^([^;(]-) %(([^()]- %d+%.?%d*, %d+%.?%d*)%)")
+  return name or text:match("^[^;]+"), where
+end
+
+-- why the player cannot take a quest now (nil: they can), as quest_requirements would say it in short
+local function cannotTake(QDB, id, q, myLevel)
+  if isDone(id) then return "the player has done it" end
+  if q and (tonumber(q.requiredLevel) or 0) > myLevel then return "opens at level " .. q.requiredLevel end
+  local needs, shut = stillNeeds(QDB, id)
+  if shut then return shut end
+  if type(needs) == "table" and #needs > 0 then
+    local names = {}
+    for i, pid in ipairs(needs) do
+      if i <= 3 then names[#names + 1] = "[" .. questName(QDB, pid) .. "]" end
+    end
+    return "needs " .. table.concat(names, ", ") .. " first"
+  end
+end
+
+-- is the member on one of the player's quests, as the game itself says (without Questie in their game)
+local function unitOnQuest(unit, qid)
+  if C_QuestLog.IsUnitOnQuest then return safe(C_QuestLog.IsUnitOnQuest, unit, qid) and true or false end
+  local index = IsUnitOnQuest and C_QuestLog.GetLogIndexForQuestID and safe(C_QuestLog.GetLogIndexForQuestID, qid)
+  return index and safe(IsUnitOnQuest, index, unit) and true or false
+end
+
+function C.Party()
+  if (IsInRaid and IsInRaid()) or (GetNumGroupMembers() or 0) < 2 then return nil end
+  local comms = questieModule("QuestieComms")
+  local logs = comms and type(comms.remoteQuestLogs) == "table" and comms.remoteQuestLogs or {}
+  local QDB = questieDB()
+  local myLevel = UnitLevel("player") or 1
+  local mine, order = {}, {}
+  for i = 1, (C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetNumQuestLogEntries()) or 0 do
+    local q = C_QuestLog.GetInfo(i)
+    if q and not q.isHeader and q.questID then mine[q.questID], order[#order + 1] = q.title, q.questID end
+  end
+  local mapID, px, py = playerSpot()
+  local members = {}
+  for i = 1, GetNumGroupMembers() - 1 do
+    local unit = "party" .. i
+    if UnitExists(unit) then
+      local name, realm = safe(UnitName, unit)
+      local m = { name = name, level = safe(UnitLevel, unit), class = (safe(UnitClass, unit)) }
+      if not UnitIsConnected(unit) then m.offline = true end
+      if UnitIsDeadOrGhost(unit) then m.dead = true end
+      local theirMap = safe(C_Map.GetBestMapForUnit, unit)
+      local pos = theirMap and safe(C_Map.GetPlayerMapPosition, theirMap, unit)
+      if pos and theirMap == mapID and px then
+        m.meters = math.floor((ns.MapMeters(mapID, px, py, pos.x * 100, pos.y * 100) or 0) + 0.5)
+      elseif theirMap then
+        local info = safe(C_Map.GetMapInfo, theirMap)
+        m.zone = type(info) == "table" and info.name or nil
+      end
+      local both, theirs, has = {}, {}, {}
+      local known = false
+      for qid, byName in pairs(logs) do
+        local objectives = remoteLog(byName, name, realm)
+        if objectives then
+          known, has[qid] = true, true
+          local progress, done = remoteProgress(objectives)
+          if mine[qid] then
+            both[#both + 1] = { title = mine[qid], progress = not done and progress or nil, done = done or nil }
+          elseif #theirs < PARTY_MAX then
+            local q = QDB and questieQuest(QDB, qid)
+            local e = { id = qid, title = QDB and questName(QDB, qid) or ("quest " .. qid) }
+            if done then e.done = true elseif progress then e.progress = progress end
+            if q then
+              e.level, e.minLevel = tonumber(q.questLevel), tonumber(q.requiredLevel)
+              e.giver, e.where = firstGiver(questieGivers(QDB, q.startedBy))
+              e.why = cannotTake(QDB, qid, q, myLevel)
+              e.canTake = e.why == nil
+            end
+            theirs[#theirs + 1] = e
+          end
+        end
+      end
+      local lacks = {}
+      for _, qid in ipairs(order) do
+        if known and not has[qid] then
+          if #lacks < PARTY_MAX then
+            local q = QDB and questieQuest(QDB, qid)
+            local e = { title = mine[qid] }
+            if C_QuestLog.IsPushableQuest then e.share = safe(C_QuestLog.IsPushableQuest, qid) and true or false end
+            local minLevel = q and tonumber(q.requiredLevel)
+            if minLevel and m.level and minLevel > m.level then e.opensAt = minLevel end
+            lacks[#lacks + 1] = e
+          end
+        elseif not known and unitOnQuest(unit, qid) then
+          both[#both + 1] = { title = mine[qid] }
+        end
+      end
+      m.questie = known -- (false: their quest log is not known, only which of the player's quests they have)
+      m.both = #both > 0 and both or nil
+      table.sort(theirs, function(a, b) return (a.canTake and 0 or 1) < (b.canTake and 0 or 1) end)
+      m.theirs = #theirs > 0 and theirs or nil
+      m.lacks = #lacks > 0 and lacks or nil
+      members[#members + 1] = m
+    end
+  end
+  if #members == 0 then return nil end
+  return { members = members }
+end
+S.party = C.Party
+
 function S.nearby()
   return ns.Players and ns.Players.Nearby() or nil
 end
@@ -2155,8 +2628,8 @@ end
 
 ------------------------------------------------------------------------ snapshot
 S.sinceLastAnswer = function() return ns.SeenSection and ns.SeenSection() or nil end
-local ORDER = { "game", "sinceLastAnswer", "player", "progress", "stats", "gearTotals", "equipment", "talents", "quests", "marks", "doneLately", "detours", "routeDone", "tracked",
-  "nearbyQuests", "services", "zoneNPCs", "flightMasters", "mapSizes", "nearbyMobs", "around", "recentEvents", "actionBars", "target", "mouseover", "pet", "tooltip", "group",
+local ORDER = { "game", "sinceLastAnswer", "player", "progress", "stats", "gearTotals", "equipment", "talents", "quests", "marks", "doneLately", "detours", "routeDone", "longRoute", "notOffered", "tracked",
+  "nearbyQuests", "services", "zoneNPCs", "flightMasters", "mapSizes", "nearbyMobs", "around", "recentEvents", "actionBars", "target", "mouseover", "pet", "tooltip", "group", "party",
   "nearby", "auras", "windows", "bags", "bank", "spells", "skills", "professions", "reputations", "addons",
   "addonChanges", "chat" }
 local OPTIONAL = { bags = true, bank = "bags", spells = true, actionBars = "spells", around = "nearby", skills = true, reputations = true, nearby = true,

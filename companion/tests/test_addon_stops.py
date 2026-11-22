@@ -49,6 +49,22 @@ local zones = { GetAreaIdByUiMapId = function(_, mapID) return mapID == 1439 and
 QuestieLoader = { ImportModule = function(_, name) if name == "QuestieDB" then return db elseif name == "ZoneDB" then return zones end error("no module") end }
 local unitName = UnitName
 UnitName = function(u) if u == "npc" then return TEST_npc end return unitName(u) end
+-- the window of the NPC the player talks to offers the quests the route wants of him, but those in TEST_refuse
+TEST_refuse = {}
+local function offered()
+  local out = {}
+  for _, mk in ipairs(ForeverAI.char and ForeverAI.char.marks or {}) do
+    if TEST_npc and tostring(mk.npc or mk.title):gsub("^%d+[%.%)]%s*", "") == TEST_npc then
+      for _, t in ipairs(mk.tasks or {}) do
+        if t.kind == "pick_up" and not TEST_refuse[t.id or t.quest] then out[#out + 1] = { title = t.quest, questID = t.id } end
+      end
+    end
+  end
+  return out
+end
+C_GossipInfo.GetAvailableQuests = offered
+GetNumAvailableQuests = function() return #offered() end
+GetAvailableTitle = function(i) local q = offered()[i] return q and q.title end
 """
 SECTION = "local s = ForeverAI.Map.Section() return s and table.concat(s, ' | ') or 'nothing'"
 LIST = """

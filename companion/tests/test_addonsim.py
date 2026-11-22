@@ -1,6 +1,7 @@
 """The add-on simulator (companion/addonsim): the add-on runs in it without errors, its window is laid out and drawn
 the way the game does it, a question goes through the real ForeverAI app and back, and the command line works."""
 
+import random
 import json
 
 import re
@@ -126,6 +127,30 @@ def test_question_without_the_app(sim):
     sim.run(10)  # also long enough for the add-on's timers after login (spell index, block cells, tooltips)
     assert "No response. Is the ForeverAI app running?" in " ".join(sim.texts())
     assert sim.errors == [] and sim.warnings == []
+
+def test_a_large_question_goes_out_in_blocks_of_64_rows(sim):
+    """In the game, the frame that showed a full block of 128 rows (16384 cells) was drawn without any interface: its
+    screenshot had no block, the app got only the next block, and the question never arrived. A message larger than
+    one block goes out in blocks of at most 64 rows, and every one of them is in its screenshot."""
+    from PIL import Image
+
+    from foreverai.frames import decode_frame, frame_capacity
+    rnd = random.Random(5)
+    text = " ".join("".join(rnd.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(8)) for _ in range(5000))
+    sim.lua("ForeverAI.Ask(...)", text)
+    sim.run(12)
+    frames = []
+    for p in sorted(sim.screens_dir.glob("WoWScrnShot_*")):
+        with Image.open(p) as im:
+            frames.append(decode_frame(im.convert("RGB")))
+    assert len(frames) >= 3 and None not in frames
+    assert all(len(f.payload) <= frame_capacity(128, 64) for f in frames)
+    assert [f.index for f in frames] == list(range(len(frames))) and {f.count for f in frames} == {len(frames)}
+    rows = sim.lua("return ForeverAIDataFrame:GetHeight()")
+    assert rows <= 64 + 2
+    sent = sim.sent_messages()
+    assert [m["type"] for m in sent] == ["question"] and sent[0]["text"] == text
+    assert sim.errors == []
 
 def test_question_through_the_app(tmp_path):
     """End to end: the add-on, the screenshot with the data block, the app's watcher and service, the inbox

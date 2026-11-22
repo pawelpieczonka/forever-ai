@@ -216,7 +216,10 @@ C_QuestLog = namespace("C_QuestLog", {
   IsOnQuest = function() return false end,
   GetLogIndexForQuestID = function() return nil end,
   GetSelectedQuest = function() return 0 end,
+  IsPushableQuest = function() return false end, -- (can it be shared with the party: Share Quest)
+  IsUnitOnQuest = function() return false end, -- (is a party member on it too)
 })
+function IsUnitOnQuest() return nil end -- (is a party member on the quest at this index of the quest log)
 C_Item = namespace("C_Item", {
   GetItemInfo = function() return nil end,
   GetItemInfoInstant = function() return nil end,
@@ -257,7 +260,15 @@ C_SpecializationInfo = namespace("C_SpecializationInfo", { GetSpecialization = f
 C_ClassTalents = namespace("C_ClassTalents")
 C_Traits = namespace("C_Traits")
 C_FriendList = namespace("C_FriendList")
-C_ChatInfo = namespace("C_ChatInfo")
+-- add-on messages to the party: what was sent is kept for the tests (sim.addonMessages); one arrives as CHAT_MSG_ADDON
+sim.addonMessages = {}
+C_ChatInfo = namespace("C_ChatInfo", {
+  RegisterAddonMessagePrefix = function() return true end,
+  SendAddonMessage = function(prefix, text, channel, target)
+    sim.addonMessages[#sim.addonMessages + 1] = { prefix = prefix, text = text, channel = channel, target = target }
+    return true
+  end,
+})
 C_BattleNet = namespace("C_BattleNet")
 C_CurrencyInfo = namespace("C_CurrencyInfo")
 C_TradeSkillUI = namespace("C_TradeSkillUI")
@@ -309,6 +320,9 @@ for _, name in ipairs({
   "GetInventoryItemCount", "GetInventoryItemID", "GetInventorySlotInfo",
   "GetActionText", "GetFlyoutInfo", "GetMacroItem", "UnitCreatureFamily", "GetTaxiMapID", "GetTrainerServiceDescription",
   "UnitOnTaxi", "GetItemCooldown",
+  -- the window of an NPC with quests only (what he offers, what he takes back) and the names of factions
+  "GetNumAvailableQuests", "GetAvailableTitle", "GetAvailableQuestInfo", "GetNumActiveQuests", "GetActiveTitle",
+  "GetFactionInfoByID",
 }) do
   if _G[name] == nil then _G[name] = empty(name) end
 end

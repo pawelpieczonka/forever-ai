@@ -7,10 +7,11 @@ local ADDON, ns = ...
 local T = {}
 ns.Transport = T
 
--- A block holds up to 24 KB: a question with all the game data is 13-17 KB packed, so it goes out as one block. With
--- half the rows it took two, and the second one waits for the next second (screenshots are named to the second):
--- half a second on average, up to a whole one, on every question.
-local GRID_W, MAX_ROWS, CELL = 128, 128, 1
+-- A block holds up to 12 KB (8192 cells); a larger message goes out as several blocks, each a second after the one
+-- before (screenshots are named to the second). Blocks of 128 rows (16384 cells) held a whole question, but the game
+-- drew none of its interface in the frame a full one was shown: the screenshot had no block, the app got the second
+-- block only, and the question never arrived (0.9.0 and earlier). 64 rows went through every time.
+local GRID_W, MAX_ROWS, CELL = 128, 64, 1
 local HEADER = 18
 local CAPACITY = GRID_W * MAX_ROWS * 3 / 2 - HEADER -- 12 bits per cell
 

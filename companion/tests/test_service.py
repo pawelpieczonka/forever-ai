@@ -293,7 +293,9 @@ def test_mcp_server_protocol():
     assert init["result"]["capabilities"] == {"tools": {}}
     names = [t["name"] for t in srv.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]]
     assert names == ["search_knowledge_base", "propose_addon_change", "save_memory", "delete_memory", "fetch_url",
-                     "mark_on_map", "edit_route", "plan_route", "addon_options", "zone_quests", "gear_upgrades",
+                     "mark_on_map", "edit_route", "plan_route", "addon_options", "zone_quests", "quest_requirements",
+                     "dungeon_plan", "long_route",
+                     "gear_upgrades",
                      "map_notes", "pet_abilities", "way_to", "propose_auctions", "my_auctions",
                      "propose_auction_cancel", "propose_quest_abandon", "propose_vendor_action", "search_auction_house",
                      "auctionator_list", "compare_sell_prices"]

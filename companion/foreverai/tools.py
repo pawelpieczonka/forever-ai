@@ -281,6 +281,13 @@ TOOLS.append({
                                               "itself: the ones the player asked for by name or kind, and a "
                                               "dungeon's quests. The quests that cost no way are taken along without "
                                               "being named here; 'take what you can on the way' is those, nothing more"},
+                "party": {"type": "boolean",
+                          "description": "true when the player plays this route with the party (a duo, \"with my "
+                                         "teammate\"): the quests of the party members the player can take come on "
+                                         "the route (a member can share each instead), and the result says, member "
+                                         "by member, the quests both have, theirs the player cannot take and why, "
+                                         "and the player's quests they lack, which can be shared and which they "
+                                         "pick up at the giver. Needs the party section"},
                 "propose": {"type": "boolean",
                             "description": "true when the player did not ask for a route and you think the one on the "
                                            "map no longer fits: the new route goes to the player as a card to accept, "
@@ -337,8 +344,139 @@ TOOLS.append({
             "type": "object",
             "properties": {
                 "zone": {"type": "string", "description": "English name of the zone or dungeon"},
+                "up_to_level": {"type": "integer",
+                                "description": "For a long route: also the quests of the zone that open later, up to "
+                                               "this level (each with the level it opens at), not only the ones the "
+                                               "character can take now. Give the goal level of the long route"},
             },
             "required": ["zone"],
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "quest_requirements",
+        "description": "Why the character can or cannot take a quest, read from the game's quest database: Questie's "
+                       "own verdict and what stands behind it — the level it opens at, the quests to be done before it "
+                       "(each done, in the quest log or still to do, with who gives it and where, and what it needs in "
+                       "turn), a quest that shuts it out, the race or the class, the reputation, the profession — and "
+                       "whether its NPC did not offer it when the player talked to him. Call it whenever the player "
+                       "cannot take a quest or does not see it at its NPC, and before sending them to a quest you are "
+                       "not sure they can take. Never guess the reason (range, clicking, a bug of the server) without it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "quest": {"type": "string", "description": "The quest's title, in English as the game names it"},
+                "id": {"type": "integer", "description": "The quest's number when the data gives it (the parts of a "
+                                                         "chain share a title)"},
+            },
+            "required": ["quest"],
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "dungeon_plan",
+        "description": "A dungeon from the player's DungeonJournal add-on (WoW Forever's own dungeons too): its levels, "
+                       "where its entrance is and how to get there, its quests for this character (each with who gives "
+                       "it and where, what it needs, what to bring, and whether the character can take it now, it opens "
+                       "later or other quests come first) and its bosses. Without a dungeon: the dungeons for about the "
+                       "character's level, with how many of their quests are open now. Call it when the player asks "
+                       "about a dungeon or which one to do, and before a dungeon part of long_route (it needs the "
+                       "entrance from here). Works only when the addons section lists ForeverDungeonJournal as loaded.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "dungeon": {"type": "string", "description": "The dungeon's English name (\"Gnomeregan\", \"Scarlet "
+                                                             "Monastery: Library\"); leave out for the list of "
+                                                             "dungeons for the character's level"},
+            },
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "long_route",
+        "description": "A long route the player follows over hours or days, kept by the app in a file for this "
+                       "character: parts in order, each the quests of one place (a town and its surroundings, a "
+                       "zone, a dungeon run) with the way there, and the level the character is expected to have "
+                       "after each part (the quests' real XP at the level they are turned in, plus the creatures on the "
+                       "way at the player's own pace). Use it when the player wants a route to a level (\"from 25 to "
+                       "29\", \"until 30\"), a long route to follow, or where to level next with a route; plan_route "
+                       "is for the quest log. Build it in steps: op=new with the goal level, then op=add with the "
+                       "parts (all at once or a few per call), reading the zones first with zone_quests (up_to_level "
+                       "= the goal). Every result says the level the route ends at: add parts until it reaches the "
+                       "goal. The app puts the current part on the map as plan_route would, and the next part when one "
+                       "is done, by itself. The player sees the parts in the add-on's window. A dungeon run is a part "
+                       "of its own (dungeon: its name, after reading it with dungeon_plan): its quests are picked up "
+                       "on the way, the entrance is its last stop, the creatures of a run in a group of five are "
+                       "counted, and the next part waits until the player is out of the dungeon; put a part with the "
+                       "turn-ins of its quests after it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "op": {"type": "string", "enum": ["new", "add", "change", "remove", "go", "show", "end"],
+                       "description": "new: start a long route (replaces the one this character has); add: parts at "
+                                      "the end; change: replace part number `part`; remove: take part `part` off; go: "
+                                      "put part `part` on the map now (the player skips ahead or goes back); show: the "
+                                      "route with its levels; end: drop the long route (the stops on the map stay)"},
+                "goal_level": {"type": "integer", "description": "new: the level the route is to reach"},
+                "title": {"type": "string", "description": "new: a short name, in English like the add-on's window "
+                                                           "(\"Level 25 to 29\")"},
+                "summary": {"type": "string", "description": "new: what the route is about in a sentence, in English "
+                                                             "(the zones, a dungeon at the end)"},
+                "skip": {"type": "array", "items": {"type": "string"},
+                         "description": "new: quests of the log to leave out of the whole route (elite or group quests "
+                                        "for a player alone, far above their level, ones you advised against)"},
+                "part": {"type": "integer", "description": "change, remove, go: the part's number (1 = the first)"},
+                "parts": {"type": "array", "description": "add, change: the parts, in the order the player goes. A part "
+                                                          "is what one stay somewhere holds, about 15 to 20 stops: its "
+                                                          "quests to pick up, do and turn in there",
+                          "items": {"type": "object", "properties": {
+                              "title": {"type": "string", "description": "Where it is, in English (\"Menethil Harbor\", "
+                                                                         "\"Dun Modr and the Thandol Span\")"},
+                              "zone": {"type": "string", "description": "English name of the zone it is in"},
+                              "dungeon": {"type": "string",
+                                          "description": "For a dungeon run: the dungeon's name, as dungeon_plan gives "
+                                                         "it. quests: the dungeon's quests (picked up in this part, "
+                                                         "done inside); zone: where the part starts (their givers); "
+                                                         "the entrance is its last stop"},
+                              "then": {"type": "array", "items": {"type": "string"},
+                                       "description": "Other zones this part goes into, in order, when its quests "
+                                                      "lead there"},
+                              "quests": {"type": "array", "items": {"type": "string"},
+                                         "description": "The titles of the quests done in this part: ones to pick up "
+                                                        "(from zone_quests, nearbyQuests, the next part of a chain) and "
+                                                        "ones of the quest log finished here. A quest of the log no part "
+                                                        "names is done where the route passes it, without being counted"},
+                              "skip": {"type": "array", "items": {"type": "string"},
+                                       "description": "Quests of the log not to do in this part"},
+                              "first": {"type": "array", "items": {"type": "string"}},
+                              "last": {"type": "array", "items": {"type": "string"}},
+                              "extra": {"type": "array",
+                                        "description": "Stops that are not quests, as in plan_route (a trainer when a "
+                                                       "level brings new spells, a flight master to open, a vendor: "
+                                                       "service and zone, or title, zone, x, y, note)",
+                                        "items": {"type": "object", "properties": {
+                                            "service": {"type": "string", "description": "A kind of NPC (repair, "
+                                                                                         "vendor, hunter trainer)"},
+                                            "title": {"type": "string"}, "zone": {"type": "string"},
+                                            "x": {"type": "number"}, "y": {"type": "number"},
+                                            "note": {"type": "string"}}, "required": ["zone"]}},
+                              "note": {"type": "string", "description": "What the part is for, in a few English words "
+                                                                        "(shown under it in the add-on)"}},
+                              "required": ["zone", "quests"]}},
+            },
+            "required": ["op"],
         },
     },
 })
@@ -547,8 +685,10 @@ def format_gear_upgrades(res: dict | None) -> str:
     return "\n".join(lines)
 
 
-def format_zone_quests(zone: str, res: dict | None, entrances: list[str]) -> str:
-    """Game result of zone_quests -> text for the model."""
+def format_zone_quests(zone: str, res: dict | None, entrances: list[str], snapshot: dict | None = None) -> str:
+    """Game result of zone_quests -> text for the model. ``snapshot``: the game data of the question, for the quests
+    an NPC did not offer when the player talked to him (notOffered)."""
+    from .route import refusal
     if not res:
         return "The game did not respond in time; the quests of the zone could not be read."
     if res.get("error"):
@@ -558,22 +698,170 @@ def format_zone_quests(zone: str, res: dict | None, entrances: list[str]) -> str
     lines = [f"Quests the character{f' (level {level})' if level else ''} can pick up for {zone}: {len(quests)}"
              + (f" (and {res['more']} more, not listed)" if res.get("more") else "") + "."]
     for q in quests:
-        kind = ", ".join(str(x) for x in (f"level {q['level']}" if q.get("level") else "", q.get("type") or "") if x)
+        opens = q.get("minLevel") if isinstance(q.get("minLevel"), (int, float)) and level and q["minLevel"] > level else None
+        kind = ", ".join(str(x) for x in (f"level {q['level']}" if q.get("level") else "", q.get("type") or "",
+                                          f"{int(q['xp']):,} XP at its level" if isinstance(q.get("xp"), (int, float)) and q["xp"] > 0 else "",
+                                          f"opens at level {int(opens)}" if opens else "") if x)
         about = f" [belongs to {q['about']}]" if q.get("about") and str(q["about"]).lower() != zone.lower() else ""
+        refused = refusal(snapshot or {}, q)
         lines.append(f"- [{q['title']}]{f' ({kind})' if kind else ''}{about} from {q.get('giver') or '?'} ({q.get('where') or '?'})"
-                     + (f": {q['objective']}" if q.get("objective") else ""))
+                     + (f": {q['objective']}" if q.get("objective") else "")
+                     + (f" — NOT OFFERED: {refused}; do not plan it" if refused else ""))
         for where in q.get("whereToGet") or []:
             lines.append(f"    {where}")
         if q.get("turnIn"):
             lines.append(f"    turn in: {q['turnIn']}")
+        if q.get("next") and q.get("nextNeeds"):
+            lines.append(f"    next: {q['next']}, which needs {' and '.join(str(n) for n in q['nextNeeds'])} done too")
     if res.get("later"):
-        lines.append(f"{res['later']} more open at a higher level than the character has.")
+        lines.append(f"{res['later']} more open at a higher level than the character has"
+                     + (" (give up_to_level to list them)." if not res.get("upTo") else "."))
     if entrances:
         lines.append("Entrances in this zone: " + "; ".join(entrances) + ".")
     if quests:
-        lines.append("To put some on the route, name their titles in plan_route's new_quests (and the zone in then): "
-                     "the route then picks each up at its giver. Quests already in the log are not listed here.")
+        lines.append("To put some on the route, name their titles in plan_route's new_quests (and the zone in then), or "
+                     "in a part of long_route: the route then picks each up at its giver. Quests already in the log are "
+                     "not listed here.")
     return "\n".join(lines)
+
+
+def format_quest_requirements(title: str, res: dict | None) -> str:
+    """Game result of quest_requirements -> text for the model: for each quest of that title (the parts of a chain
+    share one), whether the character can take it now and what stands in the way."""
+    if not res:
+        return "The game did not respond in time; what the quest needs could not be read."
+    if res.get("error"):
+        return f"Looking up [{title}] failed: {res['error']}."
+    level = res.get("level")
+    out = []
+    for q in res.get("quests") or []:
+        if not isinstance(q, dict):
+            continue
+        if q.get("error"):
+            out.append(f"Quest {q.get('id')}: {q['error']}.")
+            continue
+        head = f"[{q.get('title')}] (quest {q.get('id')}" + (f", level {q['level']}" if q.get("level") else "") \
+            + (f", opens at level {q['minLevel']}" if q.get("minLevel") else "") + ")"
+        state = q.get("state")
+        reasons = [str(r) for r in q.get("reasons") or []]
+        before = [b for b in q.get("before") or [] if isinstance(b, dict)]
+        open_before = [b for b in before if b.get("state") != "done"]
+        if state:
+            out.append(f"{head}: {state}.")
+        elif reasons or open_before:
+            out.append(f"{head}: the character cannot take it now.")
+        else:
+            out.append(f"{head}: the game data says the character can take it now.")
+        if q.get("giver"):
+            out.append(f"- Given by {q['giver']}" + (f"; turned in to {q['turnIn']}" if q.get("turnIn") else "") + ".")
+        for r in reasons:
+            out.append(f"- {r[0].upper() + r[1:]}.")
+        if open_before:
+            kind = "one of these" if q.get("beforeKind") == "one of" and len(before) > 1 else \
+                "this" if len(open_before) == 1 else "these"
+            out.append(f"- It needs {kind} done first:")
+            for b in open_before:
+                bits = [f"[{b.get('title')}] (quest {b.get('id')}" + (f", level {b['level']}" if b.get("level") else "")
+                        + (f", opens at level {b['minLevel']}" if b.get("minLevel") and level and b["minLevel"] > level else "")
+                        + f"): {b.get('state')}"]
+                if b.get("giver") and b.get("state") == "not done":
+                    bits.append(f"given by {b['giver']}")
+                if b.get("turnIn") and b.get("state") == "in the quest log":
+                    bits.append(f"turned in to {b['turnIn']}")
+                if b.get("needs"):
+                    bits.append(f"it needs {b['needs']} first")
+                if b.get("blocked"):
+                    bits.append(f"which the character cannot take: {b['blocked']}")
+                out.append("    " + "; ".join(bits))
+        if q.get("questie") and not state:
+            out.append(f"- Questie's own check: {q['questie']}.")
+        refused = q.get("notOffered")
+        if isinstance(refused, dict):
+            at = f" at level {refused['level']}" if refused.get("level") else ""
+            out.append(f"- {refused.get('npc') or 'Its NPC'} did not offer it when the player talked to him{at}"
+                       + (", although the game data says the character can take it: this server does not give it to "
+                          "this character now (WoW Forever differs here, or it needs something the data does not "
+                          "know). The route leaves it out; it is tried again once the character gains a level"
+                          if not reasons and not open_before and not state else "") + ".")
+    if res.get("more"):
+        out.append(f"{res['more']} more quests have this title (not shown).")
+    if not out:
+        return f"The quest database has no quest [{title}]."
+    out.append("Tell the player the reason in a sentence. When quests are to be done first, offer to put them on the "
+               "route (plan_route new_quests, or a part of the long route) in that order.")
+    return "\n".join(out)
+
+
+def format_dungeon_plan(name: str, res: dict | None) -> str:
+    """Game result of dungeon_plan -> text for the model: one dungeon with its entrance, quests and bosses, or the
+    dungeons for the character's level."""
+    if not res:
+        return "The game did not respond in time; the dungeon journal could not be read."
+    if res.get("error"):
+        return f"The dungeon journal could not be read: {res['error']}."
+    if isinstance(res.get("dungeons"), list):
+        rows = [d for d in res["dungeons"] if isinstance(d, dict) and d.get("name")]
+        if not rows:
+            return f"The dungeon journal has no dungeon for about level {res.get('level')}."
+        out = [f"Dungeons for about level {res.get('level')} (the DungeonJournal add-on):"]
+        for d in rows:
+            out.append(f"- {d['name']} (levels {d.get('level')}" + (f", {d['location']}" if d.get("location") else "")
+                       + f"): {d.get('quests', 0)} quests for this character, {d.get('open', 0)} of them open now"
+                       + (f"; entrance {d['entrance']}" if d.get("entrance") else ""))
+        out.append("dungeon_plan with a dungeon's name gives its quests, entrance and bosses.")
+        return "\n".join(out)
+    me = res.get("character")
+    head = f"{res.get('name') or name}" + (f", levels {res['level']}" if res.get("level") else "") \
+        + (f" (the character is {me})" if me else "") + (f", in {res['location']}" if res.get("location") else "") + "."
+    out = [head + (f" {res['about']}" if res.get("about") else "")]
+    e = res.get("entrance") if isinstance(res.get("entrance"), dict) else None
+    if e and e.get("zone"):
+        out.append(f"Entrance: {e['zone']} {e.get('x')}, {e.get('y')}" + (f" — {e['detail']}" if e.get("detail") else ""))
+    else:
+        out.append("The journal has no entrance on a zone map for it: it cannot be a part of a long route.")
+    quests = [q for q in res.get("quests") or [] if isinstance(q, dict) and q.get("title")]
+    if quests:
+        out.append("Its quests for this character:")
+    for q in quests:
+        head = f"- [{q['title']}]" + (f" (level {q['level']}" if q.get("level") else " (") \
+            + (f", opens at {q['minLevel']})" if q.get("minLevel") else ")") + f": {q.get('state') or '?'}"
+        bits = [head]
+        if q.get("giver"):
+            bits.append(f"given by {q['giver']}" + (f" ({q['where']})" if q.get("where") else "")
+                        + (" inside the dungeon" if q.get("givenInside") else ""))
+        if q.get("turnIn"):
+            bits.append(f"turned in to {q['turnIn']}" + (" (inside: no turn-in part needed)" if q.get("turnedInside") else ""))
+        if q.get("objective"):
+            bits.append(str(q["objective"]))
+        if q.get("needs"):
+            bits.append("needs " + ", ".join(str(n) for n in q["needs"]) + " first")
+        if q.get("blocked"):
+            bits.append(f"not for this character: {q['blocked']}")
+        if q.get("bring"):
+            bits.append(f"bring {q['bring']}")
+        if q.get("provided"):
+            bits.append(f"its giver hands over {q['provided']}")
+        if q.get("xp"):
+            bits.append(f"{int(q['xp']):,} XP")
+        if q.get("repeatable"):
+            bits.append("repeatable")
+        if q.get("warning"):
+            bits.append(f"warning: {q['warning']}")
+        if q.get("note"):
+            bits.append(f"note: {q['note']}")
+        out.append("; ".join(bits))
+    if not quests:
+        out.append("The journal has no quest of it for this character.")
+    bosses = [b for b in res.get("bosses") or [] if isinstance(b, dict) and b.get("name")]
+    if bosses:
+        out.append("Bosses: " + "; ".join(b["name"] + (" (rare)" if b.get("rare") else "")
+                                         + (f": {b['about']}" if b.get("about") else "") for b in bosses))
+    if e and e.get("zone"):
+        out.append(f"For a long route: a part with dungeon=\"{res.get('name') or name}\" and the quests the character "
+                   "can take (picked up in that part on the way, done inside; the entrance is its last stop), then a "
+                   "part with their turn-ins (the same titles) after it. A quest given inside the dungeon is not "
+                   "picked up before. A group of five: the world chat, or /lfg when the addons section lists LFGForever.")
+    return "\n".join(out)
 
 
 def format_addon_options(addon: str, res: dict | None) -> str:
@@ -760,6 +1048,7 @@ AH_EXACT_MAX = 40
 # runs such calls at once may do so. The ones that ask the game then go to it together, and it answers them together,
 # instead of a round trip through the screenshot channel for each.
 READ_ONLY_TOOLS = frozenset({"search_knowledge_base", "fetch_url", "addon_options", "zone_quests", "gear_upgrades",
+                             "quest_requirements", "dungeon_plan",
                              "map_notes", "pet_abilities", "way_to", "my_auctions", "search_auction_house",
                              "compare_sell_prices"})
 

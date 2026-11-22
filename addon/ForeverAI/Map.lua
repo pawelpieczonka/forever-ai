@@ -72,6 +72,7 @@ local function usesTomTom() return TomTom and TomTom.AddWaypoint end
 -- the window shows how many stops are marked
 local function changed()
   if ns.UI and ns.UI.UpdateStrip then pcall(ns.UI.UpdateStrip) end
+  if M.OnChange then pcall(M.OnChange) end -- (a route shared with the party goes to it again: Share.lua)
 end
 
 function M.Count()
@@ -201,6 +202,10 @@ local function entry(mk)
         e.tasks = e.tasks or {}
         e.tasks[#e.tasks + 1] = { kind = "travel", zone = toInfo.name }
       end
+    elseif type(t) == "table" and t.kind == "dungeon" and type(t.zone) == "string" then
+      -- the entrance of a dungeon of a long route: done once the player is inside it (with the group)
+      e.tasks = e.tasks or {}
+      e.tasks[#e.tasks + 1] = { kind = "dungeon", zone = t.zone }
     elseif type(t) == "table" and type(t.quest) == "string" and (t.kind == "objective" or t.kind == "turn_in" or t.kind == "pick_up") then
       e.tasks = e.tasks or {}
       -- id: the quest itself; the parts of a chain often share one title
@@ -210,7 +215,7 @@ local function entry(mk)
       end
       e.tasks[#e.tasks + 1] = { kind = t.kind, quest = t.quest, id = tonumber(t.id),
         label = type(t.label) == "string" and t.label or nil, at = type(t.at) == "string" and t.at or nil,
-        spots = tonumber(t.spots) }
+        spots = tonumber(t.spots), after = tonumber(t.after) }
     end
   end
   return e
@@ -722,7 +727,24 @@ function M.Tell(done)
     nextStop = string.format("%d. %s", cur, (tostring(saved[cur].title):gsub("^%d+[%.%)]%s*", "")))
     meters = metersTo(saved[cur], mapID, px, py)
   end
-  pcall(ns.UI.RouteProgress, done, nextStop, meters)
+  local long = M.Long()
+  local part = long and long.parts and long.parts[long.current]
+  if not cur and part and part.dungeon and M.DungeonHolds() then
+    -- in the dungeon of the part (its entrance was the last stop): the next part waits until the player comes out
+    nextStop = string.format("%s, then the next part of the long route once you are out", tostring(part.dungeon))
+  elseif not cur and long then
+    if long.current < #long.parts then
+      nextStop = string.format("part %d of the long route, %s", long.current + 1, tostring(long.parts[long.current + 1].title))
+    end
+    if M.NextPart then M.NextPart() end -- (after the last part: the app finishes the long route)
+  end
+  -- (a stop done because its NPC did not give its quest says so: "done" alone read as if the quest were taken)
+  local named = {}
+  for i, title in ipairs(done) do
+    local why = M.refusing and M.refusing[tostring(title):gsub("%s*%b()%s*$", ""):lower()]
+    named[i] = why and string.format("%s (does not give %s)", title, why) or title
+  end
+  pcall(ns.UI.RouteProgress, named, nextStop, meters)
 end
 
 -- Stop i is done: it stays on the list, marked done, until the route is updated (or the player takes it off), and
@@ -1279,6 +1301,8 @@ local function whatToDo(mk)
       parts[#parts + 1] = "the crossing is here: go through"
     elseif t.kind == "travel" then
       add("go on to", t.zone)
+    elseif t.kind == "dungeon" then
+      parts[#parts + 1] = "go into " .. tostring(t.zone) .. " with your group" -- (done once inside)
     elseif t.kind == "turn_in" then
       add("turn in", quest)
     elseif t.kind == "pick_up" then
@@ -1318,7 +1342,8 @@ function M.List()
     local waits
     for n, t in ipairs(mk.tasks or {}) do -- what the stop waits for, in words
       local what = t.kind == "turn_in" and "turning in" or t.kind == "pick_up" and "picking up" or (t.label or "an objective") .. " for"
-      what = t.kind == "travel" and ("arriving in " .. t.zone) or (what .. " [" .. t.quest .. "]")
+      what = t.kind == "travel" and ("arriving in " .. t.zone) or t.kind == "dungeon" and ("going into " .. tostring(t.zone))
+        or (what .. " [" .. tostring(t.quest) .. "]")
       waits = (waits and (waits .. ", ") or "") .. what
     end
     if not waits and mk.npc and not mk.done then waits = "dealing with " .. tostring(mk.npc) end
@@ -1477,11 +1502,100 @@ end
 -- The quests the route still has a stop to pick up (that stop not done, the quest not in the log, not through with it):
 -- a route is planned with the whole of such a quest, and what is to be done for it further on is not done because
 -- the quest log does not hold it yet.
+------------------------------------------------------------------------ dungeons
+-- The dungeon the player is in (the game's name for the instance), or nil outside one.
+local function key(name) return (tostring(name or ""):lower():gsub("^the ", ""):gsub("[^%w]", "")) end
+function M.Instance()
+  if not (IsInInstance and IsInInstance()) then return nil end
+  local name = GetInstanceInfo and ns.safe(GetInstanceInfo)
+  return type(name) == "string" and name ~= "" and name or (GetRealZoneText and ns.safe(GetRealZoneText)) or "a dungeon"
+end
+-- is the player inside this dungeon? ("Gnomeregan"; the journal's "Scarlet Monastery: Library" is the game's
+-- "Scarlet Monastery", and one name may hold the other: "The Stockade", "Stormwind Stockade")
+function M.InDungeon(name)
+  local inside = M.Instance()
+  if not inside then return false end
+  local a, b = key(inside), key(name)
+  if a == "" or b == "" then return false end
+  return a == b or (#a >= 4 and b:find(a, 1, true) ~= nil) or (#b >= 4 and a:find(b, 1, true) ~= nil)
+end
+
+-- The player is in the dungeon of a stop (its entrance): the stop is done. The game gives no position inside an
+-- instance, so the check of the route (M.Check) does not run there: this does it for the dungeon's stops, and the
+-- player is told what comes next.
+function M.EnterDungeon()
+  local saved = ns.char and ns.char.marks
+  if type(saved) ~= "table" then return end
+  local done = {}
+  for i, mk in ipairs(saved) do
+    if not mk.done then
+      for _, t in ipairs(mk.tasks or {}) do
+        if t.kind == "dungeon" and M.InDungeon(t.zone) then
+          local title = (tostring(mk.title):gsub("^%d+[%.%)]%s*", ""))
+          if ns.Log then ns.Log("route", string.format("stop done: %d. %s (inside the dungeon)", i, title)) end
+          if M.NoteDone then M.NoteDone(mk, "inside the dungeon") end
+          M.Finish(saved, i)
+          done[#done + 1] = title
+          break
+        end
+      end
+    end
+  end
+  if #done > 0 then
+    M.Restore()
+    changed()
+    M.Tell(done)
+  end
+end
+
+------------------------------------------------------------------------ quests an NPC does not give
+-- The game data says the character can take a quest, and its NPC does not offer it when the player talks to him (it
+-- needs more than the data knows, or this server does not give it: "Stoję przed Harlo Barnaby i chyba nie mogę od niego
+-- podnieść questa"). Seen in the NPC's own window, it is noted for the character: the pick-up counts as done (the stop
+-- is not waited at for ever), the route is updated without it, and the planner and the AI leave it out. It is tried
+-- again once the character has gained a level, or as soon as an NPC offers it after all.
+local function refusedList()
+  if not ns.char then return {} end
+  ns.char.notOffered = ns.char.notOffered or {}
+  local level = UnitLevel("player") or 0
+  for key, r in pairs(ns.char.notOffered) do
+    if (r.level or 0) < level then ns.char.notOffered[key] = nil end -- a level gained: worth a try again
+  end
+  return ns.char.notOffered
+end
+
+-- the note of a quest its NPC did not offer, { id, title, npc, level }, or nil (by number when both have one: the
+-- parts of a chain share a title)
+function M.Refused(id, title)
+  local low = type(title) == "string" and title:lower() or nil
+  for _, r in pairs(refusedList()) do
+    if id and r.id then
+      if r.id == id then return r end
+    elseif low and type(r.title) == "string" and r.title:lower() == low then
+      return r
+    end
+  end
+end
+
+local function refused(t)
+  return t.kind == "pick_up" and t.quest ~= nil and M.Refused(t.id, t.quest) ~= nil
+end
+
+-- for the AI and the planner (section "notOffered")
+function M.RefusedSection()
+  local out = {}
+  for _, r in pairs(refusedList()) do
+    out[#out + 1] = { id = r.id, title = r.title, npc = r.npc, level = r.level }
+  end
+  table.sort(out, function(a, b) return tostring(a.title) < tostring(b.title) end)
+  return #out > 0 and out or nil
+end
+
 local function awaited(log, byTitle)
   local out = {}
   for _, mk in ipairs(list()) do
     for _, t in ipairs(not mk.done and mk.tasks or {}) do
-      if t.kind == "pick_up" and t.quest then
+      if t.kind == "pick_up" and t.quest and not refused(t) then
         local has
         if t.id then has = log.quests[t.id] ~= nil else has = byTitle[t.quest] ~= nil end
         local through = t.id and C_QuestLog.IsQuestFlaggedCompleted and C_QuestLog.IsQuestFlaggedCompleted(t.id)
@@ -1515,8 +1629,12 @@ function M.TasksDone(mk, log)
     local done
     if t.kind == "travel" then
       done = inZone(t.zone) -- where the player is does not depend on the quest log
+    elseif t.kind == "dungeon" then
+      done = M.InDungeon(t.zone) or (M.wasInside and M.wasInside == key(t.zone)) or false
     elseif t.kind == "pick_up" and t.id and C_QuestLog.IsQuestFlaggedCompleted and C_QuestLog.IsQuestFlaggedCompleted(t.id) then
       done = true -- through with it already (picked up and turned in at once: it never shows in the log again)
+    elseif q == nil and refused(t) then
+      done = true -- its NPC does not offer it: nothing to wait for here
     elseif unsure then
       done = false
     elseif t.kind == "pick_up" then
@@ -1769,6 +1887,123 @@ function M.Strayed(mapID, saved)
     { auto = true, news = "Updating the route", fast = true })
 end
 
+-- The player talks to the NPC of a stop where quests are to be picked up: what his window offers (and lists as taken)
+-- is what he gives. A quest of the stop that is not there is noted (see refusedList), and the route is updated
+-- without it. kind: "gossip" (his gossip window) or "greeting" (the window of an NPC with quests only).
+local OFFER_M = 60 -- the NPC of a stop stands about where the stop is
+local refusedSaid, refusedFor
+
+local function offeredNow(kind)
+  local seen = {}
+  local function add(title, id)
+    if type(title) == "string" and title ~= "" then seen[title:lower()] = true end
+    if tonumber(id) and tonumber(id) > 0 then seen[tonumber(id)] = true end
+  end
+  if kind == "gossip" then
+    for _, q in ipairs(ns.safe(C_GossipInfo and C_GossipInfo.GetAvailableQuests) or {}) do add(q.title, q.questID) end
+    for _, q in ipairs(ns.safe(C_GossipInfo and C_GossipInfo.GetActiveQuests) or {}) do add(q.title, q.questID) end
+  else
+    for i = 1, tonumber((ns.safe(GetNumAvailableQuests))) or 0 do
+      add(ns.safe(GetAvailableTitle, i), select(5, ns.safe(GetAvailableQuestInfo, i))) -- (WoW Forever: its number 5th)
+    end
+    for i = 1, tonumber((ns.safe(GetNumActiveQuests))) or 0 do add(ns.safe(GetActiveTitle, i)) end
+  end
+  return seen
+end
+
+-- Does the game data say this quest is not open to the character yet (its level, a quest before it)? Then its NPC
+-- not offering it is no news: a route plans quests that open on the way.
+local function notOpen(id)
+  if not (id and QuestieLoader and QuestieLoader.ImportModule) then return false end
+  local ok, QDB = pcall(QuestieLoader.ImportModule, QuestieLoader, "QuestieDB")
+  if not (ok and type(QDB) == "table") then return false end
+  local need = tonumber((ns.safe(QDB.QueryQuestSingle, id, "requiredLevel")))
+  if need and need > (UnitLevel("player") or 0) then return true end
+  return ns.safe(QDB.IsDoable, id) == false
+end
+
+-- Is this pick-up of a stop one that waits for something before its NPC can offer it: the quest that opens it (its
+-- turn-in is on the route), a turn-in at this very stop (the next part of a chain), or the game data's own check?
+local function waitsToOpen(mk, t, log, byTitle)
+  if t.after and (log.quests[t.after] or not (C_QuestLog.IsQuestFlaggedCompleted
+      and C_QuestLog.IsQuestFlaggedCompleted(t.after))) then
+    return true
+  end
+  for _, o in ipairs(mk.tasks or {}) do
+    if o.kind == "turn_in" and ((o.id and log.quests[o.id]) or (not o.id and byTitle[o.quest])) then return true end
+  end
+  return notOpen(t.id)
+end
+
+local function askRefused()
+  if not refusedSaid then return end
+  -- an update went out since (a quest taken there, too): it was planned with the note, nothing more to ask
+  if not wanted() or M.updateMsgId ~= refusedFor then
+    refusedSaid = nil
+    return
+  end
+  if settle or not base or not ns.CanSend() then
+    C_Timer.After(2, askRefused)
+    return
+  end
+  local said = refusedSaid
+  refusedSaid = nil
+  asked, sentLog = base, questLog()
+  sentMap = playerSpot() -- (the zone it is planned from)
+  if ns.Log then ns.Log("route", "update asked: " .. said) end
+  checkSaid = checkSaid and (checkSaid .. "; " .. said) or said
+  M.updateMsgId = ns.Ask("[Quest log changed] " .. said .. ". Update the route on the map.",
+    { auto = true, news = "Updating the route", fast = true })
+end
+
+function M.CheckOffers(kind)
+  if not ns.char then return end
+  local npc = UnitName("npc")
+  if type(npc) ~= "string" or npc == "" then return end
+  local seen = offeredNow(kind)
+  local notes = refusedList()
+  for key, r in pairs(notes) do -- offered after all (by him or anybody): not refused any more
+    if (r.id and seen[r.id]) or (type(r.title) == "string" and seen[r.title:lower()]) then notes[key] = nil end
+  end
+  local mapID, px, py = playerSpot()
+  local log = questLog()
+  local byTitle = {}
+  for _, id in ipairs(log.order) do byTitle[log.quests[id].title] = true end
+  local who = npc:lower()
+  local new = {}
+  for _, mk in ipairs(list()) do
+    local d = not mk.done and metersTo(mk, mapID, px, py)
+    local name = (type(mk.npc) == "string" and mk.npc or bare(mk.title):gsub("%s*%b()%s*$", "")):lower()
+    if d and d <= OFFER_M and name == who then
+      for _, t in ipairs(mk.tasks or {}) do
+        local has = t.id and (log.quests[t.id] or (C_QuestLog.IsQuestFlaggedCompleted
+          and C_QuestLog.IsQuestFlaggedCompleted(t.id))) or (not t.id and byTitle[t.quest])
+        if t.kind == "pick_up" and type(t.quest) == "string" and not has and not refused(t)
+            and not (t.id and seen[t.id]) and not seen[t.quest:lower()] and not waitsToOpen(mk, t, log, byTitle) then
+          notes[tostring(t.id or t.quest:lower())] = { id = t.id, title = t.quest, npc = npc,
+            level = UnitLevel("player"), at = time() }
+          new[#new + 1] = "[" .. t.quest .. "]"
+        end
+      end
+    end
+  end
+  if #new == 0 then return end
+  local said = npc .. " does not offer " .. table.concat(new, ", ")
+  if ns.Log then ns.Log("route", said .. " (noted: the route goes on without it)") end
+  M.refusing = { [who] = table.concat(new, ", ") } -- (what the line of the stop ticked off says)
+  pcall(M.Check) -- its pick-up is done with: the stop is ticked off when nothing else waits there
+  M.refusing = nil
+  changed()
+  if wanted() then
+    refusedSaid = refusedSaid and (refusedSaid .. "; " .. said) or said
+    refusedFor = M.updateMsgId
+    askRefused()
+  end
+end
+
+ns.On("GOSSIP_SHOW", function() M.CheckOffers("gossip") end)
+ns.On("QUEST_GREETING", function() M.CheckOffers("greeting") end)
+
 -- The update got its answer: the change in the quest log is dealt with.
 function M.UpdateAnswered()
   asked, retried, sentLog, sentMap = nil, nil, nil, nil
@@ -1892,7 +2127,109 @@ function M.RouteDone()
   return #out > 0 and out or nil
 end
 
+------------------------------------------------------------------------ the long route
+-- A long route (the AI's long_route) is kept by the app, part after part; the add-on keeps what it shows of it
+-- (ns.char.longRoute: { id, title, goal, current = the part on the map (1 = the first), end = the level it ends at,
+-- parts = { { title, zone, from, to, quests, xp, mins, note, done } } }) and tells the app when the player ended it.
+function M.Long()
+  local lr = ns.char and ns.char.longRoute
+  if type(lr) == "table" and not lr.ended and type(lr.parts) == "table" and #lr.parts > 0 then return lr end
+end
+
+-- what an answer says of the long route: the route to show from now on, or that it ended
+function M.SetLong(lr)
+  if not ns.char or type(lr) ~= "table" then return end
+  if lr.ended then
+    local had = ns.char.longRoute
+    if type(had) == "table" and (lr.id == nil or had.id == lr.id) then ns.char.longRoute = nil end
+  else
+    lr.card = nil
+    ns.char.longRoute = lr
+  end
+  changed()
+end
+
+-- the player ends the long route (the x of its strip): the app drops it with the next message
+function M.EndLong(by)
+  local lr = M.Long()
+  if not lr then return end
+  ns.char.longRoute = { id = lr.id, ended = true }
+  if ns.Seen then ns.Seen("the long route " .. tostring(lr.title) .. " was ended by " .. tostring(by or "the player")) end
+  changed()
+end
+
+function M.LongSection()
+  local lr = ns.char and ns.char.longRoute
+  if type(lr) ~= "table" or not lr.id then return nil end
+  if lr.ended then return { id = lr.id, ended = true } end
+  -- (inside the dungeon of the part: its turn-ins are not planned until the player is out)
+  return { id = lr.id, part = lr.current, inside = M.DungeonHolds and M.DungeonHolds() or nil }
+end
+
+-- The stops of the part on the map are all done: the app puts the next part on the map (its planner answers at once,
+-- without the AI). An update the quest log asks for anyway (the route's switch is on) does it as well: then nothing
+-- is asked twice.
+local NEXT_S = 2.5 -- after the last stop: the turn-in has reached the quest log by then
+local nextAsked
+-- A dungeon part of the long route: the player is in its dungeon, or was in it and has not come out since (a
+-- /reload inside keeps it). The next part (its turn-ins) is asked for once they are out.
+function M.DungeonHolds()
+  local long = M.Long()
+  local part = long and long.parts and long.parts[long.current]
+  if not (part and part.dungeon) then return false end
+  return M.InDungeon(part.dungeon) or (ns.char and ns.char.longInside == long.current) or false
+end
+
+local function dungeonWatch()
+  if M.Instance() then M.EnterDungeon() end -- (a dungeon's stop, also of a route that is not the long route's)
+  local long = M.Long()
+  local part = long and long.parts and long.parts[long.current]
+  if not (part and part.dungeon and ns.char) then
+    M.wasInside = nil
+    return
+  end
+  if M.InDungeon(part.dungeon) then
+    M.wasInside, ns.char.longInside = key(part.dungeon), long.current
+  elseif ns.char.longInside == long.current and not (UnitIsDeadOrGhost and UnitIsDeadOrGhost("player")) then
+    -- (a ghost on its way back from the graveyard has not left: the player is out once alive outside)
+    ns.char.longInside, M.wasInside = nil, nil
+    if ns.Log then ns.Log("route", "out of " .. tostring(part.dungeon) .. ": the next part of the long route") end
+    if M.Left() == 0 then M.NextPart(part.dungeon) end
+  end
+end
+M.DungeonWatch = dungeonWatch
+ns.On("ZONE_CHANGED_NEW_AREA", function() C_Timer.After(1, dungeonWatch) end)
+ns.On("PLAYER_ENTERING_WORLD", function() C_Timer.After(2, dungeonWatch) end)
+ns.On("PLAYER_UNGHOST", function() C_Timer.After(1, dungeonWatch) end)
+
+function M.NextPart(outOf)
+  local long = M.Long()
+  if not long or nextAsked == long.current then return end
+  nextAsked = long.current
+  C_Timer.After(NEXT_S, function()
+    local now = M.Long()
+    if not now or now.current ~= long.current or M.Left() > 0 then nextAsked = nil return end
+    if wanted() and (settle or asked) then return end -- the update of the quest log brings the next part
+    if not ns.CanSend() then -- an answer is being written: once more in a moment
+      nextAsked = nil
+      C_Timer.After(NEXT_S, function() if M.Left() == 0 then M.NextPart() end end)
+      return
+    end
+    asked, sentLog = base, questLog()
+    sentMap = playerSpot()
+    local last = long.current >= #long.parts
+    if ns.Log then ns.Log("route", last and "the end of the long route told" or "the next part of the long route asked for") end
+    local said = outOf and string.format("the player came out of %s, the dungeon of part %d of the long route", outOf,
+      long.current) or string.format("the stops of part %d%s are done", long.current, last and ", the last of the long route,"
+      or " of the long route")
+    M.updateMsgId = ns.Ask("[Quest log changed] " .. said .. (last and "." or ". Put the next part on the map."),
+      { auto = true, news = last and "Finishing the long route" or "Next part of the long route", fast = true })
+  end)
+end
+
 if ns.Collect and ns.Collect.sections then
+  ns.Collect.sections.longRoute = M.LongSection
+  ns.Collect.sections.notOffered = M.RefusedSection
   ns.Collect.sections.marks = M.Section
   ns.Collect.sections.detours = M.Detours
   ns.Collect.sections.routeDone = M.RouteDone
