@@ -611,6 +611,8 @@ function ns.HandleRequests(list)
           reply(ns.Addons.FindOptions(req.addon, req.query))
         elseif req.op == "zone_quests" and ns.Collect then
           ns.Collect.ZoneQuestsAsync(req.zone, req.upTo, reply) -- (over several frames: a long route reads the whole database)
+        elseif req.op == "quest_requirements" and ns.Collect then
+          ns.Collect.QuestRequirementsAsync(req, reply) -- (a title is looked for in the whole database, over several frames)
         elseif req.op == "gear_upgrades" and ns.Gear then
           reply(ns.Gear.Upgrades(req.slot))
         elseif req.op == "auction_search" and ns.Auction then

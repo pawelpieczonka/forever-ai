@@ -351,6 +351,30 @@ TOOLS.append({
 TOOLS.append({
     "type": "function",
     "function": {
+        "name": "quest_requirements",
+        "description": "Why the character can or cannot take a quest, read from the game's quest database: Questie's "
+                       "own verdict and what stands behind it — the level it opens at, the quests to be done before it "
+                       "(each done, in the quest log or still to do, with who gives it and where, and what it needs in "
+                       "turn), a quest that shuts it out, the race or the class, the reputation, the profession — and "
+                       "whether its NPC did not offer it when the player talked to him. Call it whenever the player "
+                       "cannot take a quest or does not see it at its NPC, and before sending them to a quest you are "
+                       "not sure they can take. Never guess the reason (range, clicking, a bug of the server) without it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "quest": {"type": "string", "description": "The quest's title, in English as the game names it"},
+                "id": {"type": "integer", "description": "The quest's number when the data gives it (the parts of a "
+                                                         "chain share a title)"},
+            },
+            "required": ["quest"],
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
         "name": "long_route",
         "description": "A long route the player follows over hours or days, kept by the app in a file for this "
                        "character: parts in order, each the quests of one place (a town and its surroundings, a "
@@ -622,8 +646,10 @@ def format_gear_upgrades(res: dict | None) -> str:
     return "\n".join(lines)
 
 
-def format_zone_quests(zone: str, res: dict | None, entrances: list[str]) -> str:
-    """Game result of zone_quests -> text for the model."""
+def format_zone_quests(zone: str, res: dict | None, entrances: list[str], snapshot: dict | None = None) -> str:
+    """Game result of zone_quests -> text for the model. ``snapshot``: the game data of the question, for the quests
+    an NPC did not offer when the player talked to him (notOffered)."""
+    from .route import refusal
     if not res:
         return "The game did not respond in time; the quests of the zone could not be read."
     if res.get("error"):
@@ -638,12 +664,16 @@ def format_zone_quests(zone: str, res: dict | None, entrances: list[str]) -> str
                                           f"{int(q['xp']):,} XP at its level" if isinstance(q.get("xp"), (int, float)) and q["xp"] > 0 else "",
                                           f"opens at level {int(opens)}" if opens else "") if x)
         about = f" [belongs to {q['about']}]" if q.get("about") and str(q["about"]).lower() != zone.lower() else ""
+        refused = refusal(snapshot or {}, q)
         lines.append(f"- [{q['title']}]{f' ({kind})' if kind else ''}{about} from {q.get('giver') or '?'} ({q.get('where') or '?'})"
-                     + (f": {q['objective']}" if q.get("objective") else ""))
+                     + (f": {q['objective']}" if q.get("objective") else "")
+                     + (f" — NOT OFFERED: {refused}; do not plan it" if refused else ""))
         for where in q.get("whereToGet") or []:
             lines.append(f"    {where}")
         if q.get("turnIn"):
             lines.append(f"    turn in: {q['turnIn']}")
+        if q.get("next") and q.get("nextNeeds"):
+            lines.append(f"    next: {q['next']}, which needs {' and '.join(str(n) for n in q['nextNeeds'])} done too")
     if res.get("later"):
         lines.append(f"{res['later']} more open at a higher level than the character has"
                      + (" (give up_to_level to list them)." if not res.get("upTo") else "."))
@@ -654,6 +684,73 @@ def format_zone_quests(zone: str, res: dict | None, entrances: list[str]) -> str
                      "in a part of long_route: the route then picks each up at its giver. Quests already in the log are "
                      "not listed here.")
     return "\n".join(lines)
+
+
+def format_quest_requirements(title: str, res: dict | None) -> str:
+    """Game result of quest_requirements -> text for the model: for each quest of that title (the parts of a chain
+    share one), whether the character can take it now and what stands in the way."""
+    if not res:
+        return "The game did not respond in time; what the quest needs could not be read."
+    if res.get("error"):
+        return f"Looking up [{title}] failed: {res['error']}."
+    level = res.get("level")
+    out = []
+    for q in res.get("quests") or []:
+        if not isinstance(q, dict):
+            continue
+        if q.get("error"):
+            out.append(f"Quest {q.get('id')}: {q['error']}.")
+            continue
+        head = f"[{q.get('title')}] (quest {q.get('id')}" + (f", level {q['level']}" if q.get("level") else "") \
+            + (f", opens at level {q['minLevel']}" if q.get("minLevel") else "") + ")"
+        state = q.get("state")
+        reasons = [str(r) for r in q.get("reasons") or []]
+        before = [b for b in q.get("before") or [] if isinstance(b, dict)]
+        open_before = [b for b in before if b.get("state") != "done"]
+        if state:
+            out.append(f"{head}: {state}.")
+        elif reasons or open_before:
+            out.append(f"{head}: the character cannot take it now.")
+        else:
+            out.append(f"{head}: the game data says the character can take it now.")
+        if q.get("giver"):
+            out.append(f"- Given by {q['giver']}" + (f"; turned in to {q['turnIn']}" if q.get("turnIn") else "") + ".")
+        for r in reasons:
+            out.append(f"- {r[0].upper() + r[1:]}.")
+        if open_before:
+            kind = "one of these" if q.get("beforeKind") == "one of" and len(before) > 1 else \
+                "this" if len(open_before) == 1 else "these"
+            out.append(f"- It needs {kind} done first:")
+            for b in open_before:
+                bits = [f"[{b.get('title')}] (quest {b.get('id')}" + (f", level {b['level']}" if b.get("level") else "")
+                        + (f", opens at level {b['minLevel']}" if b.get("minLevel") and level and b["minLevel"] > level else "")
+                        + f"): {b.get('state')}"]
+                if b.get("giver") and b.get("state") == "not done":
+                    bits.append(f"given by {b['giver']}")
+                if b.get("turnIn") and b.get("state") == "in the quest log":
+                    bits.append(f"turned in to {b['turnIn']}")
+                if b.get("needs"):
+                    bits.append(f"it needs {b['needs']} first")
+                if b.get("blocked"):
+                    bits.append(f"which the character cannot take: {b['blocked']}")
+                out.append("    " + "; ".join(bits))
+        if q.get("questie") and not state:
+            out.append(f"- Questie's own check: {q['questie']}.")
+        refused = q.get("notOffered")
+        if isinstance(refused, dict):
+            at = f" at level {refused['level']}" if refused.get("level") else ""
+            out.append(f"- {refused.get('npc') or 'Its NPC'} did not offer it when the player talked to him{at}"
+                       + (", although the game data says the character can take it: this server does not give it to "
+                          "this character now (WoW Forever differs here, or it needs something the data does not "
+                          "know). The route leaves it out; it is tried again once the character gains a level"
+                          if not reasons and not open_before and not state else "") + ".")
+    if res.get("more"):
+        out.append(f"{res['more']} more quests have this title (not shown).")
+    if not out:
+        return f"The quest database has no quest [{title}]."
+    out.append("Tell the player the reason in a sentence. When quests are to be done first, offer to put them on the "
+               "route (plan_route new_quests, or a part of the long route) in that order.")
+    return "\n".join(out)
 
 
 def format_addon_options(addon: str, res: dict | None) -> str:
@@ -840,6 +937,7 @@ AH_EXACT_MAX = 40
 # runs such calls at once may do so. The ones that ask the game then go to it together, and it answers them together,
 # instead of a round trip through the screenshot channel for each.
 READ_ONLY_TOOLS = frozenset({"search_knowledge_base", "fetch_url", "addon_options", "zone_quests", "gear_upgrades",
+                             "quest_requirements",
                              "map_notes", "pet_abilities", "way_to", "my_auctions", "search_auction_house",
                              "compare_sell_prices"})
 

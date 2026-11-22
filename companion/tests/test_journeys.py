@@ -75,6 +75,33 @@ def test_the_evening_in_lakeshire(start):
     assert [u["new"] for u in j.updates if u["new"]] == [["Defias Trapper", "Gryan Stoutmantle"]], (j.updates, j.story())
 
 
+@pytest.mark.parametrize("auto", [True, False], ids=["updates on", "updates off"])
+def test_an_npc_who_does_not_give_his_quest(start, auto):
+    """The player's own case in the Wetlands ("Stoję przed Harlo Barnaby i chyba nie mogę od niego podnieść questa"),
+    in Lakeshire: Shawn does not give [Hilary's Necklace] on this server, though the game data has it open. The add-on
+    sees his window without it: his stop is done with, and so are the mud and the turn-in of the necklace; with the
+    route's updates on the route is planned again without it. The route is walked to its end, nothing is stuck."""
+    world, _ = lakeshire()
+    j = start(world, ("Redridge Mountains", 21.8, 44.8))
+    j.take(132)
+    j.pump(3)
+    j.refuse(3741)
+    route = j.plan({"then": [{"zone": "Westfall"}]})
+    assert any("Shawn" in t for t in route), (route, j.plan_text)
+    if not auto:
+        j.sim.lua("ForeverAI.Map.SetAuto(false)")
+    j.follow()
+    assert j.problems == [], j.story()
+    assert 3741 not in j.done and {129, 132} <= j.done, j.story()
+    note = j.sim.to_py(j.sim.lua("return ForeverAI.Map.Refused(3741)"))
+    assert note and note["npc"] == "Shawn", j.story()
+    assert not [s for s in j.stops() if not s["done"]], j.story()
+    asked = [u["asked"] for u in j.updates]
+    assert any("Shawn does not offer [Hilary's Necklace]" in str(a) for a in asked) == auto, (asked, j.story())
+    # and no update puts it back
+    assert not any("Hilary" in t or "Shawn" in t for u in j.updates for t in u["new"]), (j.updates, j.story())
+
+
 def test_a_quest_of_my_own_on_the_way(start):
     """The player takes a quest the route did not have (Redridge Goulash: boars south, condors east). The update puts
     its stops on the route and leaves the rest of the route as it is; nothing else of the town comes with it."""

@@ -309,6 +309,9 @@ for _, name in ipairs({
   "GetInventoryItemCount", "GetInventoryItemID", "GetInventorySlotInfo",
   "GetActionText", "GetFlyoutInfo", "GetMacroItem", "UnitCreatureFamily", "GetTaxiMapID", "GetTrainerServiceDescription",
   "UnitOnTaxi", "GetItemCooldown",
+  -- the window of an NPC with quests only (what he offers, what he takes back) and the names of factions
+  "GetNumAvailableQuests", "GetAvailableTitle", "GetAvailableQuestInfo", "GetNumActiveQuests", "GetActiveTitle",
+  "GetFactionInfoByID",
 }) do
   if _G[name] == nil then _G[name] = empty(name) end
 end

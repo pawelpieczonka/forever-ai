@@ -367,10 +367,11 @@ def test_the_quest_that_follows_a_turn_in_is_on_the_route():
     assert titles(route) == ["Giver", "Fandral", "Postman", "Scribe"]
     fandral, scribe = route["stops"][1], route["stops"][3]
     assert fandral["what"] == "turn in [Teldrassil], then pick up [Grove of the Ancients]"
+    # (the pick-up says which quest opens it: its NPC does not offer it before that is turned in)
     assert fandral["tasks"] == [{"kind": "turn_in", "quest": "Teldrassil", "id": 1},
-                                {"kind": "pick_up", "quest": "Grove of the Ancients", "id": 952}]
+                                {"kind": "pick_up", "quest": "Grove of the Ancients", "id": 952, "after": 1}]
     assert scribe["what"] == "pick up [The Reply], which follows [Letter]" and scribe["note"] == "quest level 9"
-    assert scribe["tasks"] == [{"kind": "pick_up", "quest": "The Reply", "id": 77}]
+    assert scribe["tasks"] == [{"kind": "pick_up", "quest": "The Reply", "id": 77, "after": 2}]
     assert "[Farther]: follows [Far], from Keeper in Moonglade (50.0, 50.0), another zone" in route["left_out"]
     assert "2. Fandral (60, 50)" in route["text"] and "then pick up [Grove of the Ancients]" in route["text"]
     # the model leaves one out by its title; one the player already has is not taken again

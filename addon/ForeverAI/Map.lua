@@ -210,7 +210,7 @@ local function entry(mk)
       end
       e.tasks[#e.tasks + 1] = { kind = t.kind, quest = t.quest, id = tonumber(t.id),
         label = type(t.label) == "string" and t.label or nil, at = type(t.at) == "string" and t.at or nil,
-        spots = tonumber(t.spots) }
+        spots = tonumber(t.spots), after = tonumber(t.after) }
     end
   end
   return e
@@ -729,7 +729,13 @@ function M.Tell(done)
     end
     if M.NextPart then M.NextPart() end -- (after the last part: the app finishes the long route)
   end
-  pcall(ns.UI.RouteProgress, done, nextStop, meters)
+  -- (a stop done because its NPC did not give its quest says so: "done" alone read as if the quest were taken)
+  local named = {}
+  for i, title in ipairs(done) do
+    local why = M.refusing and M.refusing[tostring(title):gsub("%s*%b()%s*$", ""):lower()]
+    named[i] = why and string.format("%s (does not give %s)", title, why) or title
+  end
+  pcall(ns.UI.RouteProgress, named, nextStop, meters)
 end
 
 -- Stop i is done: it stays on the list, marked done, until the route is updated (or the player takes it off), and
@@ -1484,11 +1490,54 @@ end
 -- The quests the route still has a stop to pick up (that stop not done, the quest not in the log, not through with it):
 -- a route is planned with the whole of such a quest, and what is to be done for it further on is not done because
 -- the quest log does not hold it yet.
+------------------------------------------------------------------------ quests an NPC does not give
+-- The game data says the character can take a quest, and its NPC does not offer it when the player talks to him (it
+-- needs more than the data knows, or this server does not give it: "Stoję przed Harlo Barnaby i chyba nie mogę od niego
+-- podnieść questa"). Seen in the NPC's own window, it is noted for the character: the pick-up counts as done (the stop
+-- is not waited at for ever), the route is updated without it, and the planner and the AI leave it out. It is tried
+-- again once the character has gained a level, or as soon as an NPC offers it after all.
+local function refusedList()
+  if not ns.char then return {} end
+  ns.char.notOffered = ns.char.notOffered or {}
+  local level = UnitLevel("player") or 0
+  for key, r in pairs(ns.char.notOffered) do
+    if (r.level or 0) < level then ns.char.notOffered[key] = nil end -- a level gained: worth a try again
+  end
+  return ns.char.notOffered
+end
+
+-- the note of a quest its NPC did not offer, { id, title, npc, level }, or nil (by number when both have one: the
+-- parts of a chain share a title)
+function M.Refused(id, title)
+  local low = type(title) == "string" and title:lower() or nil
+  for _, r in pairs(refusedList()) do
+    if id and r.id then
+      if r.id == id then return r end
+    elseif low and type(r.title) == "string" and r.title:lower() == low then
+      return r
+    end
+  end
+end
+
+local function refused(t)
+  return t.kind == "pick_up" and t.quest ~= nil and M.Refused(t.id, t.quest) ~= nil
+end
+
+-- for the AI and the planner (section "notOffered")
+function M.RefusedSection()
+  local out = {}
+  for _, r in pairs(refusedList()) do
+    out[#out + 1] = { id = r.id, title = r.title, npc = r.npc, level = r.level }
+  end
+  table.sort(out, function(a, b) return tostring(a.title) < tostring(b.title) end)
+  return #out > 0 and out or nil
+end
+
 local function awaited(log, byTitle)
   local out = {}
   for _, mk in ipairs(list()) do
     for _, t in ipairs(not mk.done and mk.tasks or {}) do
-      if t.kind == "pick_up" and t.quest then
+      if t.kind == "pick_up" and t.quest and not refused(t) then
         local has
         if t.id then has = log.quests[t.id] ~= nil else has = byTitle[t.quest] ~= nil end
         local through = t.id and C_QuestLog.IsQuestFlaggedCompleted and C_QuestLog.IsQuestFlaggedCompleted(t.id)
@@ -1524,6 +1573,8 @@ function M.TasksDone(mk, log)
       done = inZone(t.zone) -- where the player is does not depend on the quest log
     elseif t.kind == "pick_up" and t.id and C_QuestLog.IsQuestFlaggedCompleted and C_QuestLog.IsQuestFlaggedCompleted(t.id) then
       done = true -- through with it already (picked up and turned in at once: it never shows in the log again)
+    elseif q == nil and refused(t) then
+      done = true -- its NPC does not offer it: nothing to wait for here
     elseif unsure then
       done = false
     elseif t.kind == "pick_up" then
@@ -1776,6 +1827,123 @@ function M.Strayed(mapID, saved)
     { auto = true, news = "Updating the route", fast = true })
 end
 
+-- The player talks to the NPC of a stop where quests are to be picked up: what his window offers (and lists as taken)
+-- is what he gives. A quest of the stop that is not there is noted (see refusedList), and the route is updated
+-- without it. kind: "gossip" (his gossip window) or "greeting" (the window of an NPC with quests only).
+local OFFER_M = 60 -- the NPC of a stop stands about where the stop is
+local refusedSaid, refusedFor
+
+local function offeredNow(kind)
+  local seen = {}
+  local function add(title, id)
+    if type(title) == "string" and title ~= "" then seen[title:lower()] = true end
+    if tonumber(id) and tonumber(id) > 0 then seen[tonumber(id)] = true end
+  end
+  if kind == "gossip" then
+    for _, q in ipairs(ns.safe(C_GossipInfo and C_GossipInfo.GetAvailableQuests) or {}) do add(q.title, q.questID) end
+    for _, q in ipairs(ns.safe(C_GossipInfo and C_GossipInfo.GetActiveQuests) or {}) do add(q.title, q.questID) end
+  else
+    for i = 1, tonumber((ns.safe(GetNumAvailableQuests))) or 0 do
+      add(ns.safe(GetAvailableTitle, i), select(5, ns.safe(GetAvailableQuestInfo, i))) -- (WoW Forever: its number 5th)
+    end
+    for i = 1, tonumber((ns.safe(GetNumActiveQuests))) or 0 do add(ns.safe(GetActiveTitle, i)) end
+  end
+  return seen
+end
+
+-- Does the game data say this quest is not open to the character yet (its level, a quest before it)? Then its NPC
+-- not offering it is no news: a route plans quests that open on the way.
+local function notOpen(id)
+  if not (id and QuestieLoader and QuestieLoader.ImportModule) then return false end
+  local ok, QDB = pcall(QuestieLoader.ImportModule, QuestieLoader, "QuestieDB")
+  if not (ok and type(QDB) == "table") then return false end
+  local need = tonumber((ns.safe(QDB.QueryQuestSingle, id, "requiredLevel")))
+  if need and need > (UnitLevel("player") or 0) then return true end
+  return ns.safe(QDB.IsDoable, id) == false
+end
+
+-- Is this pick-up of a stop one that waits for something before its NPC can offer it: the quest that opens it (its
+-- turn-in is on the route), a turn-in at this very stop (the next part of a chain), or the game data's own check?
+local function waitsToOpen(mk, t, log, byTitle)
+  if t.after and (log.quests[t.after] or not (C_QuestLog.IsQuestFlaggedCompleted
+      and C_QuestLog.IsQuestFlaggedCompleted(t.after))) then
+    return true
+  end
+  for _, o in ipairs(mk.tasks or {}) do
+    if o.kind == "turn_in" and ((o.id and log.quests[o.id]) or (not o.id and byTitle[o.quest])) then return true end
+  end
+  return notOpen(t.id)
+end
+
+local function askRefused()
+  if not refusedSaid then return end
+  -- an update went out since (a quest taken there, too): it was planned with the note, nothing more to ask
+  if not wanted() or M.updateMsgId ~= refusedFor then
+    refusedSaid = nil
+    return
+  end
+  if settle or not base or not ns.CanSend() then
+    C_Timer.After(2, askRefused)
+    return
+  end
+  local said = refusedSaid
+  refusedSaid = nil
+  asked, sentLog = base, questLog()
+  sentMap = playerSpot() -- (the zone it is planned from)
+  if ns.Log then ns.Log("route", "update asked: " .. said) end
+  checkSaid = checkSaid and (checkSaid .. "; " .. said) or said
+  M.updateMsgId = ns.Ask("[Quest log changed] " .. said .. ". Update the route on the map.",
+    { auto = true, news = "Updating the route", fast = true })
+end
+
+function M.CheckOffers(kind)
+  if not ns.char then return end
+  local npc = UnitName("npc")
+  if type(npc) ~= "string" or npc == "" then return end
+  local seen = offeredNow(kind)
+  local notes = refusedList()
+  for key, r in pairs(notes) do -- offered after all (by him or anybody): not refused any more
+    if (r.id and seen[r.id]) or (type(r.title) == "string" and seen[r.title:lower()]) then notes[key] = nil end
+  end
+  local mapID, px, py = playerSpot()
+  local log = questLog()
+  local byTitle = {}
+  for _, id in ipairs(log.order) do byTitle[log.quests[id].title] = true end
+  local who = npc:lower()
+  local new = {}
+  for _, mk in ipairs(list()) do
+    local d = not mk.done and metersTo(mk, mapID, px, py)
+    local name = (type(mk.npc) == "string" and mk.npc or bare(mk.title):gsub("%s*%b()%s*$", "")):lower()
+    if d and d <= OFFER_M and name == who then
+      for _, t in ipairs(mk.tasks or {}) do
+        local has = t.id and (log.quests[t.id] or (C_QuestLog.IsQuestFlaggedCompleted
+          and C_QuestLog.IsQuestFlaggedCompleted(t.id))) or (not t.id and byTitle[t.quest])
+        if t.kind == "pick_up" and type(t.quest) == "string" and not has and not refused(t)
+            and not (t.id and seen[t.id]) and not seen[t.quest:lower()] and not waitsToOpen(mk, t, log, byTitle) then
+          notes[tostring(t.id or t.quest:lower())] = { id = t.id, title = t.quest, npc = npc,
+            level = UnitLevel("player"), at = time() }
+          new[#new + 1] = "[" .. t.quest .. "]"
+        end
+      end
+    end
+  end
+  if #new == 0 then return end
+  local said = npc .. " does not offer " .. table.concat(new, ", ")
+  if ns.Log then ns.Log("route", said .. " (noted: the route goes on without it)") end
+  M.refusing = { [who] = table.concat(new, ", ") } -- (what the line of the stop ticked off says)
+  pcall(M.Check) -- its pick-up is done with: the stop is ticked off when nothing else waits there
+  M.refusing = nil
+  changed()
+  if wanted() then
+    refusedSaid = refusedSaid and (refusedSaid .. "; " .. said) or said
+    refusedFor = M.updateMsgId
+    askRefused()
+  end
+end
+
+ns.On("GOSSIP_SHOW", function() M.CheckOffers("gossip") end)
+ns.On("QUEST_GREETING", function() M.CheckOffers("greeting") end)
+
 -- The update got its answer: the change in the quest log is dealt with.
 function M.UpdateAnswered()
   asked, retried, sentLog, sentMap = nil, nil, nil, nil
@@ -1969,6 +2137,7 @@ end
 
 if ns.Collect and ns.Collect.sections then
   ns.Collect.sections.longRoute = M.LongSection
+  ns.Collect.sections.notOffered = M.RefusedSection
   ns.Collect.sections.marks = M.Section
   ns.Collect.sections.detours = M.Detours
   ns.Collect.sections.routeDone = M.RouteDone

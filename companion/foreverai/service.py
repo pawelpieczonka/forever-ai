@@ -25,7 +25,7 @@ from .prompt import NOTES_SYSTEM, build_messages, entity_names, notes_prompt
 from .mapnotes import MapNotes, format_map_notes
 from .petskills import PetSkills, format_pet_abilities
 from .tools import (TOOLS, auction_request, format_addon_options, format_auction, format_gear_upgrades, format_sell_prices,
-                    format_zone_quests, next_action_id, remember_options, run_fetch, run_kb_search, sell_price_request,
+                    format_quest_requirements, format_zone_quests, next_action_id, remember_options, run_fetch, run_kb_search, sell_price_request,
                     validate_abandon, validate_mark, validate_proposal, validate_vendor)
 from .wowformat import bracket_names, md_to_wow
 
@@ -144,9 +144,10 @@ class InboxWriter:
 # a line of the "marks" section: "2. Sentinel Arynia Cloudsbreak — Teldrassil 38.3, 34.4 (115 m)"
 # what the app keeps of a quest the game offers (zone_quests): enough to plan all of it
 _QUEST_KEYS = ("id", "title", "level", "minLevel", "xp", "type", "giver", "where", "objective", "whereToGet", "turnIn",
-               "next", "nextId", "nextXp", "startsWhenTaken")
+               "next", "nextId", "nextXp", "nextNeeds", "goals", "startsWhenTaken")
 ZONE_QUESTS_KEEP_S = 300.0  # the quests of a zone read for a route are good for this long
 ZONE_QUESTS_WAIT_S = 15.0  # how long a route waits for the game to list a zone's quests
+QUEST_REQUIREMENTS_WAIT_S = 30.0  # a title the app has no number for is looked for in the game's whole quest database
 ZONE_QUESTS_RETRY_S = 60.0  # after the game did not answer, it is not asked again for this long
 def _quest_key(q: dict):
     """How a quest the game offers is known: its number (the parts of a chain, and some quests, share a title)."""
@@ -1830,7 +1831,7 @@ class Service:
                 ctx.marks.append({"title": f"{n}. {stop['title']}"[:60], "x": round(stop["x"], 1),
                                   "y": round(stop["y"], 1), "zone": stop["zone"],
                                   **({"mob": stop["mob"]} if stop.get("mob") else {}),
-                                  **({"tasks": [{k: v for k, v in t.items() if k in ("kind", "quest", "id", "label", "zone", "spots", "at")}
+                                  **({"tasks": [{k: v for k, v in t.items() if k in ("kind", "quest", "id", "label", "zone", "spots", "at", "after")}
                                                 for t in stop["tasks"]]} if stop.get("tasks") else {}),
                                   # what the stop is for, when the player asked for it: its own words. A quest's
                                   # stop says it by its tasks (the note asked for along with it goes too, when it
@@ -1867,6 +1868,28 @@ class Service:
         had = {i for i in (self._plans().get(ctx.conv) or {}).get("taken") or [] if isinstance(i, int)}
         had |= {int(i) for i in ctx.snapshot.get("routeDone") or [] if isinstance(i, (int, float))}
         return dict(ctx.snapshot, through=sorted(had - in_log))
+
+    def _quest_ids(self, ctx: TurnContext, title: str) -> list[int]:
+        """The numbers of the quests of this title in what the app has seen of the game (the quest log, the quests
+        around the player, the zones read, the route's quests, the quests an NPC did not offer): the add-on then needs
+        no search of its whole database. The parts of a chain share a title: all of them."""
+        want = longroute.norm(title)
+        found: list[int] = []
+        snap = ctx.snapshot or {}
+        pools = [snap.get("quests") or [], snap.get("nearbyQuests") or [], snap.get("notOffered") or [],
+                 list(ctx.offered.values()), list(self._long_quests.get(self._char, {}).values())]
+        for pool in pools:
+            for q in pool:
+                if isinstance(q, dict) and isinstance(q.get("id"), int) and longroute.norm(q.get("title")) == want:
+                    if q["id"] not in found:
+                        found.append(q["id"])
+        # the next part of a chain, as the quest log and the zones read name it
+        for pool in pools[:2] + pools[3:]:
+            for q in pool:
+                m = isinstance(q, dict) and re.match(r"^\[(.+?)\]", str(q.get("next") or ""))
+                if m and longroute.norm(m.group(1)) == want and isinstance(q.get("nextId"), int) and q["nextId"] not in found:
+                    found.append(q["nextId"])
+        return found[:4]
 
     def _long_offered(self, ctx: TurnContext) -> dict:
         """The quests the game listed for this character with zone_quests (in this answer or earlier, also the ones
@@ -2871,7 +2894,20 @@ class Service:
                             and q["minLevel"] > level):
                         ctx.offered[_quest_key(q)] = kept
             ctx.zones_read.add(zone.lower())
-            return format_zone_quests(zone, res, ways.dungeons(zone=zone)), not res or bool(res.get("error"))
+            return format_zone_quests(zone, res, ways.dungeons(zone=zone), ctx.snapshot), not res or bool(res.get("error"))
+        if name == "quest_requirements":
+            title = str(args.get("quest") or "").strip("[] ")[:80]
+            try:
+                qid = int(args["id"]) if args.get("id") is not None else None
+            except (TypeError, ValueError):
+                qid = None
+            if not title and not qid:
+                return "Give the quest's title (in English, as the game names it).", True
+            ctx.phase_cb("Checking what the quest needs…")
+            ids = [qid] if qid else self._quest_ids(ctx, title)
+            res = self.game_call(ctx, "quest_requirements", {"ids": ids} if ids else {"title": title},
+                                 timeout=QUEST_REQUIREMENTS_WAIT_S)
+            return format_quest_requirements(title or str(qid), res), not res or bool(res.get("error"))
         if name == "long_route":
             return self._long_route(ctx, args)
         if name == "gear_upgrades":

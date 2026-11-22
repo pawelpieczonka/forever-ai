@@ -645,7 +645,7 @@ def _wanted(snapshot: dict, home: str, skip, use, new_quests, extras, along=None
                 add(m.group("zone"), m.group("x"), m.group("y"))
         follow = _FOLLOW.match(str(q.get("next") or ""))
         giver = follow and _PLACE.match(follow.group("places").split(";")[0].strip())
-        if giver:
+        if giver and not q.get("nextNeeds") and not refusal(snapshot, title=follow.group("title"), qid=q.get("nextId")):
             add(giver.group("zone"), giver.group("x"), giver.group("y"))
         if str(q.get("status") or "").startswith("READY"):
             continue
@@ -660,8 +660,8 @@ def _wanted(snapshot: dict, home: str, skip, use, new_quests, extras, along=None
     for q in snapshot.get("nearbyQuests") or []:
         m = isinstance(q, dict) and _WHERE.match(str(q.get("where") or ""))
         title = str(q.get("title") or "") if isinstance(q, dict) else ""
-        if m and (new_quests is True or _named(title, new_quests if isinstance(new_quests, list) else [])
-                  or _along(q, title, along)):
+        if m and not refusal(snapshot, q) and (new_quests is True or _named(title, new_quests if isinstance(new_quests, list) else [])
+                                              or _along(q, title, along)):
             add(m.group(1), m.group(2), m.group(3))
             # ... and where it is done and turned in, when the game data says so: a city the route passes only to
             # hand a letter in is a zone with something to do
@@ -724,14 +724,68 @@ def _surest(options: list[str], level) -> str:
     return min(options, key=lambda o: (risk(o), options.index(o)))
 
 
+# What the text of a quest asks for when it is more than taking it somewhere: something to kill, destroy or collect,
+# or a number of things ("destroy the 4 sets of Attack Plans"). A letter to take or somebody to talk to is not.
+_TASK_VERB = re.compile(r"\b(kill|slay|destroy|defeat|slaughter|exterminate|burn|free|rescue|collect|gather|recover|"
+                        r"retrieve|loot|cleanse|purify)\b", re.I)
+_TASK_COUNT = re.compile(r"\b([2-9]|[1-9]\d)\s+(?!(?:gold|silver|copper|yards?|levels?|minutes?|seconds?|hours?)\b)"
+                         r"[a-z]", re.I)
+
+
+def has_goals(q: dict) -> bool:
+    """Does a quest that is not taken yet ask for more than its turn-in? The database's objectives say (goals: how many
+    it has); a quest the database knows none for (WoW Forever's own quests often) is judged by its text."""
+    if q.get("whereToGet"):
+        return True
+    goals = q.get("goals")
+    if isinstance(goals, int) and not isinstance(goals, bool) and goals > 0:
+        return True
+    text = str(q.get("objective") or "")
+    return bool(_TASK_VERB.search(text) or _TASK_COUNT.search(text))
+
+
 def _as_taken(q: dict) -> dict:
-    """A quest still to be picked up, as the quest log shows it once it is taken: everything of it to do."""
+    """A quest still to be picked up, as the quest log shows it once it is taken: everything of it to do. One with
+    objectives the data has no place for is not done when it is taken (its turn-in waits for the quest log)."""
     lines = [str(line) for line in q.get("whereToGet") or []]
+    if not lines and has_goals(q):
+        lines = [f"{_what_it_asks(q)}: no known place"]
     return {"id": q.get("id"), "title": q.get("title"), "level": q.get("level"), "type": q.get("type"),
             "status": "in progress" if lines else "READY TO TURN IN",
             "objectives": "; ".join(f"{split_line(line)[0]} [TO DO]" for line in lines), "whereToGet": lines,
             "turnIn": q.get("turnIn") or "", "next": q.get("next"), "nextId": q.get("nextId"),
+            **({"nextNeeds": q["nextNeeds"]} if q.get("nextNeeds") else {}),
             **({"startsWhenTaken": True} if q.get("startsWhenTaken") else {})}
+
+
+def _what_it_asks(q: dict) -> str:
+    """What a quest asks for in a few words, for the line that says the data has no place for it."""
+    text = re.sub(r"\s+", " ", str(q.get("objective") or "")).strip()
+    text = re.sub(r"^.*?\bwants you to\s+", "", text, flags=re.I)
+    text = text.split(". ")[0].rstrip(".")
+    return (text[:80].rsplit(" ", 1)[0] + "…") if len(text) > 80 else (text or "what it asks for")
+
+
+def refusals(snapshot: dict) -> list[dict]:
+    """The quests whose NPC did not offer them when the player talked to him (the add-on's notOffered)."""
+    return [r for r in snapshot.get("notOffered") or [] if isinstance(r, dict) and r.get("title")]
+
+
+def refusal(snapshot: dict, q: dict | None = None, title: str | None = None, qid=None) -> str | None:
+    """"Harlo Barnaby did not offer it when the player talked to him (at level 25)" for a quest its NPC refused, by
+    number when both have one (the parts of a chain share a title), else by title; None for any other quest."""
+    if q is not None:
+        title, qid = str(q.get("title") or ""), q.get("id")
+    low = str(title or "").strip("[] ").lower()
+    for r in refusals(snapshot):
+        if isinstance(qid, int) and isinstance(r.get("id"), int):
+            hit = r["id"] == qid
+        else:
+            hit = bool(low) and str(r["title"]).lower() == low
+        if hit:
+            at = f" (at level {r['level']})" if isinstance(r.get("level"), int) else ""
+            return f"{r.get('npc') or 'its NPC'} did not offer it when the player talked to him{at}"
+    return None
 
 
 def _named(title: str, names) -> bool:
@@ -919,6 +973,7 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
             left_out.append(f"[{title}]: needs a skill, not a place ({skill.group(0).strip()})")
             return
         objectives, followers, blocked = [], [], False
+        unplaced = []  # what it asks for that the data has no place for: the turn-in waits until the log says done
         # what the quest log calls the open objectives, for the ones the database only knows as "Credit"
         every = [(re.sub(r"^\d+/\d+\s+", "", re.sub(r"\[(TO DO|DONE)\]", "", p).strip()), "[DONE]" in p)
                  for p in str(q.get("objectives") or "").split(";") if p.strip()]
@@ -957,8 +1012,7 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
                 z = region_of(m.group("zone"), xy) if m else ""
                 leg = _leg_of(legs, z, xy, floor, early=wanted_first) if m else None
                 if not m:
-                    left_out.append(f"[{title}]: no known place for {label}")
-                    blocked = True
+                    unplaced.append(label.strip())
                 elif leg is None and z in zones:
                     left_out.append(f"[{title}]: {label} in {z} ({m.group('x')}, {m.group('y')}), "
                                     f"not where the route passes through {z}")
@@ -999,7 +1053,15 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
                                        "mob": name if creature else None, "quest": title,
                                        **({"at_once": True} if event and q.get("startsWhenTaken") else {}),
                                        "tasks": [{"kind": "objective", "quest": title, **qid, "label": label, **around[0]}]})
-            if not objectives and not blocked:  # still to do, and nothing says where: the turn-in is not a stop yet
+            if unplaced and not blocked:
+                # Something it asks for has no known place (the database lacks it, it is made or bought somewhere
+                # unsaid): what has a place is on the route, the turn-in is not. Planned at once, the turn-in sent the
+                # player to the NPC with the quest unfinished, and the next part of its chain was "picked up" there.
+                left_out.append(f"[{title}]: no known place for {', '.join(unplaced)}"
+                                + ("; its other objectives are on the route, its turn-in is not (it comes once the "
+                                   "quest log says it is done)" if objectives else ""))
+                blocked = not objectives
+            elif not objectives and not blocked:  # still to do, and nothing says where: the turn-in is not a stop yet
                 left_out.append(f"[{title}]: no known place for what is left to do" + (f" ({todo})" if todo else ""))
                 blocked = True
         if blocked:
@@ -1008,7 +1070,8 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
         # the first place is the quest's own NPC, others are stand-ins; a turn-in comes after the quest's objectives,
         # so not in a part of the route that lies before one of them
         since = max((o["leg"] for o in objectives), default=floor)
-        places = [m for m in (_PLACE.match(p.strip()) for p in str(q.get("turnIn") or "").split(";")) if m]
+        places = [m for m in (_PLACE.match(p.strip()) for p in str(q.get("turnIn") or "").split(";")) if m] \
+            if not unplaced else []
         spots = [(m, _leg_of(legs, region_of(m.group("zone"), (float(m.group("x")), float(m.group("y")))),
                              (float(m.group("x")), float(m.group("y"))), since, early=wanted_first)) for m in places]
         on_route = [(m, leg) for m, leg in spots if leg is not None]
@@ -1023,15 +1086,26 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
             # the turn-in (which then stays until it is taken), elsewhere on the route it is a stop after it.
             follow = _FOLLOW.match(str(q.get("next") or ""))
             giver = follow and _PLACE.match(follow.group("places").split(";")[0].strip())
+            needs = [str(n) for n in q.get("nextNeeds") or [] if n]
+            refused = giver and refusal(snapshot, title=follow.group("title"), qid=q.get("nextId"))
             if giver and _named(follow.group("title"), skip):
                 left_out.append(f"[{follow.group('title')}]: left out as asked")
+            elif refused:
+                left_out.append(f"[{follow.group('title')}]: follows [{title}]; {refused}")
+            elif giver and needs and q.get("nextId") not in have:
+                # (another quest is to be done before it too: it is not offered at the turn-in, and a stop for it there
+                # sends the player to an NPC with nothing to give)
+                left_out.append(f"[{follow.group('title')}]: follows [{title}], and needs {' and '.join(needs)} done "
+                                "first too, which the character has not done")
             elif giver and q.get("nextId") in offered_now:
                 pass  # offered now and to be picked up as it is (named, or taken along): one stop for it, not two
             elif giver and q.get("nextId") not in have:
                 then, gxy = follow.group("title"), (float(giver.group("x")), float(giver.group("y")))
                 gzone = region_of(giver.group("zone"), gxy)
                 task = {"kind": "pick_up", "quest": then,
-                        **({"id": q["nextId"]} if isinstance(q.get("nextId"), int) else {})}
+                        **({"id": q["nextId"]} if isinstance(q.get("nextId"), int) else {}),
+                        # (the quest whose turn-in opens it: its NPC does not offer it before that)
+                        **({"after": q["id"]} if isinstance(q.get("id"), int) else {})}
                 gleg = _leg_of(legs, gzone, gxy, leg)
                 if (gleg == leg and giver.group("name").lower() == m.group("name").lower()
                         and abs(gxy[0] - turn_in["xy"][0]) <= 1.0 and abs(gxy[1] - turn_in["xy"][1]) <= 1.0):
@@ -1173,6 +1247,11 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
         m = isinstance(q, dict) and _WHERE.match(str(q.get("where") or ""))
         title = str(q.get("title") or "") if isinstance(q, dict) else ""
         if not m or not title or _named(title, skip) or q.get("id") in have:
+            continue
+        refused = refusal(snapshot, q)
+        if refused:  # (its NPC did not give it: no stop for it, and not one of the quests offered either)
+            if new_quests is True or _named(title, new_quests):
+                left_out.append(f"[{title}]: {refused}")
             continue
         xy = (float(m.group(2)), float(m.group(3)))
         leg = _leg_of(legs, region_of(m.group(1), xy), xy, early=True)  # a quest is taken at the first chance

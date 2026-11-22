@@ -339,6 +339,25 @@ QuestieLoader = {{ ImportModule = function(_, name)
 C_Map.GetAreaInfo = function(id) return areas[id] end
 local unitName = UnitName
 UnitName = function(u) if u == "npc" then return TEST_npc end return unitName(u) end
+-- the window of a quest NPC offers his quests that are open to the character (the quest before done, the level),
+-- but those in TEST_refuse (a server that does not give a quest its data has)
+TEST_refuse = {{}}
+local function offers()
+  local out = {{}}
+  for id, q in pairs(quests) do
+    for _, nid in ipairs(q.startedBy and q.startedBy[1] or {{}}) do
+      if TEST_npc and npcs[nid] and npcs[nid].name == TEST_npc and not entry(id) and not TEST_done[id]
+          and (not q.after or TEST_done[q.after]) and (q.requiredLevel or 0) <= UnitLevel("player") and not TEST_refuse[id] then
+        out[#out + 1] = {{ title = q.name, questID = id }}
+      end
+    end
+  end
+  table.sort(out, function(a, b) return a.questID < b.questID end)
+  return out
+end
+C_GossipInfo.GetAvailableQuests = offers
+GetNumAvailableQuests = function() return #offers() end
+GetAvailableTitle = function(i) local o = offers()[i] return o and o.title end
 TEST_trace = {{}}
 ForeverAI.Log = function(kind, line) TEST_trace[#TEST_trace + 1] = tostring(kind) .. ": " .. tostring(line) end
 """
@@ -396,6 +415,7 @@ class Journey:
         self.world, self.problems, self.trace, self.updates, self.walked = world, [], [], [], 0.0
         self.log: dict[int, list[bool]] = {}  # the quests in the quest log: which objectives are done
         self.done: set[int] = set(world.done)
+        self.refused: set[int] = set()  # quests the server does not give (their NPC's window lacks them)
         game = tmp_path / "game"
         install_game(game, pool=120)
         addons = game / "Interface" / "AddOns"
@@ -495,6 +515,11 @@ class Journey:
         self.sim.lua(f"TEST_log = {_lua(rows)} TEST_done = {_lua({q: True for q in self.done})} TEST_offer()")
         for event in events:
             self.sim._wow.fire(event)
+
+    def refuse(self, qid: int) -> None:
+        """The server does not give this quest, though the game data has it open: its NPC's window lacks it."""
+        self.refused.add(qid)
+        self.sim.lua(f"TEST_refuse[{qid}] = true")
 
     def take(self, qid: int) -> None:
         self.log[qid] = [False] * len(self.world.objectives(qid))
@@ -944,6 +969,9 @@ class Journey:
                 giver = self.world.npcs[q["giver"]]
                 if qid in self.log or qid in self.done or (q["after"] and q["after"] not in self.done):
                     continue  # nothing to take (the check says so when that is wrong)
+                if qid in self.refused:
+                    self.note(f"{self.world.npcs[q['giver']]['name']} does not offer [{q['title']}]")
+                    continue
                 if giver["zone"] != self.zone or self.meters(self.zone, self.at, giver["at"][0]) > 40:
                     self.problem(f"{stop['title']} is to pick up [{q['title']}], and {giver['name']} is not there")
                     continue

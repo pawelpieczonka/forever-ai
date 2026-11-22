@@ -24,6 +24,7 @@ from typing import Any
 
 from . import config
 from .progress import MIN_PACE_S, duration, level_xp, recent, table_scale
+from .route import refusal
 
 FILE_NAME = "long_routes.json"
 MAX_PARTS = 12
@@ -41,7 +42,7 @@ TYPICAL_XP_PER_LEVEL = 80  # a quest whose XP the data does not have: about this
 ABOVE_RED = 3  # a quest this many levels above the character when its part comes is hard alone
 # what the app keeps of each quest of a part, as the game listed it: enough to plan it when the part's turn comes
 QUEST_KEYS = ("id", "title", "level", "minLevel", "xp", "type", "giver", "where", "objective", "whereToGet", "turnIn",
-              "next", "nextId", "nextXp", "startsWhenTaken")
+              "next", "nextId", "nextXp", "nextNeeds", "goals", "startsWhenTaken")
 _FOLLOW = re.compile(r"^\[(?P<title>.+?)\](?: \(level (?P<level>\d+)\))? from (?P<giver>.+?) \((?P<where>[^()]+)\)$")
 _ZONE_AT = re.compile(r"(?:—|\() *(?P<zone>[A-Z][^—(),:]*?) \d+(?:\.\d+)?, \d+(?:\.\d+)?")
 _REWARD_XP = re.compile(r"(\d[\d,]*) XP")
@@ -216,6 +217,7 @@ def lookup(title: str, snapshot: dict, offered: dict) -> tuple[dict | None, str]
                      **({"id": q["nextId"]} if isinstance(q.get("nextId"), int) else {}),
                      **({"level": int(m.group("level"))} if m.group("level") else {}),
                      **({"xp": q["nextXp"]} if _num(q.get("nextXp")) > 0 else {}),
+                     **({"needs": [str(n) for n in q["nextNeeds"]]} if q.get("nextNeeds") else {}),
                      "after": str(q.get("title"))}, f"the chain of [{q.get('title')}]")
     return None, ""
 
@@ -252,6 +254,16 @@ def make_part(raw: dict, snapshot: dict, offered: dict, taken: set[str]) -> tupl
         if key in taken:
             problems.append(f"[{q['title']}] is left out of part \"{title}\": an earlier part has it already.")
             continue
+        refused = None if q.get("inLog") else refusal(snapshot, q)
+        if refused:  # (the game data says it can be taken; its NPC did not give it)
+            problems.append(f"[{q['title']}] is left out of part \"{title}\": {refused}. quest_requirements says "
+                            "what stands in its way; do not plan it again.")
+            continue
+        # the next part of a chain that needs another quest done too: that one comes first, in this part or before
+        missing = [n for n in q.get("needs") or [] if not any(norm(x) in taken | seen for x in re.findall(r"\[(.+?)\]", n))]
+        if missing:
+            problems.append(f"[{q['title']}] needs {' and '.join(missing)} done first: put that quest into this part "
+                            "(before it) or an earlier one, or the part goes past an NPC who has nothing to give.")
         if len(quests) >= MAX_QUESTS:
             problems.append(f"[{q['title']}] is left out: a part holds at most {MAX_QUESTS} quests. Put the rest into "
                             "a part of their own.")
