@@ -92,13 +92,14 @@ class World:
 
     def quest(self, qid: int, title: str, level: int, giver: int, end: int | None = None, kill=(), use=(), items=(),
               min_level: int = 1, after: int | None = None, then: int | None = None, text: str | None = None,
-              event: tuple | None = None) -> int:
+              event: tuple | None = None, xp: int | None = None) -> int:
         """kill / use / items: [(creature, object or item number, how many)]; after: the quest that has to be turned in
         first; then: the quest that follows this one; event: (what the quest log calls it, zone, (x, y) where it ends,
-        whether it starts when the quest is taken), an escort or a place to reach."""
+        whether it starts when the quest is taken), an escort or a place to reach; xp: what it gives at its own level
+        (Questie's table of quest XP; a typical quest of its level when not given)."""
         self.quests[qid] = {"title": title, "level": level, "min": min_level, "giver": giver, "end": end or giver,
                             "kill": list(kill), "use": list(use), "items": list(items), "after": after, "then": then,
-                            "text": text, "event": event}
+                            "text": text, "event": event, "xp": xp or 80 * level}
         return qid
 
     def objectives(self, qid: int) -> list[tuple[str, int]]:
@@ -289,8 +290,10 @@ class World:
                 quests[qid]["questFlags"] = 2 if at_once else 0
         areas = {area: zone for zone, (_, area, _) in ZONES.items()}
         maps = {mid: area for _, (mid, area, _) in ZONES.items()}
+        xp = {qid: [q["level"], q["xp"]] for qid, q in self.quests.items()}
         return f"""
 TEST_log, TEST_done = {{}}, {_lua({q: True for q in self.done})}
+local questXP = {{ db = {_lua(xp)} }}
 local quests, npcs, objects, items = {_lua(quests)}, {_lua(npcs)}, {_lua(objects)}, {_lua(items)}
 local areas, areaOfMap = {_lua(areas)}, {_lua(maps)}
 local function entry(id) for _, q in ipairs(TEST_log) do if q.id == id then return q end end end
@@ -311,6 +314,13 @@ function db.QueryNPCSingle(id, field) local n = npcs[id] return n and n[field] e
 function db.QueryObjectSingle(id, field) local o = objects[id] return o and o[field] end
 function db.QueryItemSingle(id, field) local i = items[id] return i and i[field] end
 function db.QueryQuestSingle(id, field) local q = quests[id] return q and q[field] end
+db.QuestPointers = {{}}
+for id in pairs(quests) do db.QuestPointers[id] = true end
+-- (Questie's check of everything but the level: done, in the log, the quest before it)
+function db.IsDoable(id)
+  local q = quests[id]
+  return q ~= nil and not entry(id) and not TEST_done[id] and (not q.after or TEST_done[q.after] == true)
+end
 local available = {{ __availableQuests = {{}} }}
 function TEST_offer()
   local out = {{}}
@@ -324,7 +334,7 @@ local zones = {{ GetAreaIdByUiMapId = function(_, mapID) return areaOfMap[mapID]
                 GetUiMapIdByAreaId = function(_, area) for m, a in pairs(areaOfMap) do if a == area then return m end end end }}
 QuestieLoader = {{ ImportModule = function(_, name)
   if name == "QuestieDB" then return db elseif name == "AvailableQuests" then return available
-  elseif name == "ZoneDB" then return zones end
+  elseif name == "ZoneDB" then return zones elseif name == "QuestXP" then return questXP end
   error("no module") end }}
 C_Map.GetAreaInfo = function(id) return areas[id] end
 local unitName = UnitName
@@ -539,7 +549,8 @@ class Journey:
     def _game(self, ctx, op, args, timeout=45.0):
         if op != "zone_quests":
             return None
-        return _plain(self.sim.to_py(self.sim.lua("return ForeverAI.Collect.ZoneQuests(...)", str(args.get("zone") or ""))))
+        return _plain(self.sim.to_py(self.sim.lua("return ForeverAI.Collect.ZoneQuests(...)", str(args.get("zone") or ""),
+                                                  args.get("upTo"))))
 
     def _questions(self) -> list[dict]:
         """What the add-on asked the app and is not answered yet (the ones seen while the player walked first)."""
@@ -616,6 +627,34 @@ class Journey:
         self.check("after planning")
         return self.titles()
 
+    def long(self, calls: list[tuple[str, dict]], text: str = "Make me a route to the next levels.") -> list[str]:
+        """The player asks for a long route, and the AI calls ``calls`` (zone_quests, long_route; scripted: what a model
+        would call), in one answer."""
+        from foreverai.service import TurnContext
+        self.sim.ask(text)
+        msg = None
+        for _ in range(60):
+            self.sim.run(0.5)
+            msg = next(iter(self._questions()), None)
+            if msg:
+                break
+        assert msg, "the add-on sent no question"
+        ctx = TurnContext(msg, _Writer(), msg.get("snapshot") or {}, threading.Event(), [])
+        ctx.conv = str(msg.get("conv") or "default")
+        self.svc._char = str(msg.get("char") or self.svc._char)
+        self.long_texts = []
+        for name, args in calls:
+            out, err = self.svc.run_tool(ctx, name, dict(args))
+            assert not err, out
+            self.long_texts.append(out)
+        self.sim.deliver({"kind": "answer", "final": True, "msgId": msg["msgId"], "text": "The long route is ready.",
+                          "marks": ctx.marks, "marksReplace": True, "track": ctx.track, "routePlanned": bool(ctx.marks),
+                          **ctx.long_route_payload()})
+        self.sim.run(4)
+        self.note("long route: " + ", ".join(self.titles()))
+        self.check("after planning")
+        return self.titles()
+
     def pump(self, seconds: float = 8.0) -> None:
         """Time passes; what the add-on asks the app (an update of the route, its check) is answered."""
         left = seconds
@@ -652,7 +691,8 @@ class Journey:
                                      "new": [s["title"] for s in after if not any(self._same(s, o) for o in before)],
                                      "gone": [s["title"] for s in before if not s["done"] and not any(self._same(s, o) for o in after)]})
                 self.note(f"update ({msg.get('text')}): {answer.get('text')}")
-                self._judge_update(before, after)
+                # (the next part of a long route brings its own quests to pick up: they were planned, not added)
+                self._judge_update(before, after, part=str(answer.get("text") or "").startswith("Long route: part"))
                 for s in after:
                     old = next((o for o in before if not o["done"] and self._same(s, o)), None)
                     if old and not s["done"] and (abs(old["x"] - s["x"]) > 0.35 or abs(old["y"] - s["y"]) > 0.35):
@@ -740,7 +780,7 @@ class Journey:
                         self.problem(f"{when}: {s['title']} ({t['kind']} [{t['quest']}]) comes after a later step of that quest")
                     order[qid] = max(order.get(qid, 0), rank[t["kind"]])
 
-    def _judge_update(self, before: list[dict], after: list[dict]) -> None:
+    def _judge_update(self, before: list[dict], after: list[dict], part: bool = False) -> None:
         """An update of the route may add what a quest in the log needs (and the next part of a chain), and may take
         off what is done. Compared task by task: a stop that stays may get a task more (the next part of a quest
         turned in there) or lose one."""
@@ -754,7 +794,7 @@ class Journey:
         for k, (s, t) in has.items():
             if k in had:
                 continue
-            if t["kind"] == "pick_up" and t["id"] not in chain and t["id"] not in self._planned(before):
+            if t["kind"] == "pick_up" and t["id"] not in chain and t["id"] not in self._planned(before) and not part:
                 self.problem(f"the update put {s['title']} on the route to pick up [{t['quest']}], which the route did not have")
             if t["kind"] in ("objective", "turn_in") and t["id"] not in self.log and t["id"] not in planned:
                 self.problem(f"the update put {s['title']} on the route for [{t['quest']}], which the player does not have")

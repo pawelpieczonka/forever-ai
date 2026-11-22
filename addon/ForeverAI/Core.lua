@@ -1,7 +1,7 @@
 -- ForeverAI: core (namespace, saved variables, events, conversations, requests)
 local ADDON, ns = ...
 ForeverAI = ns
-ns.version = "0.9.1"
+ns.version = "0.10.0"
 
 BINDING_HEADER_FOREVERAI = "ForeverAI"
 BINDING_NAME_FOREVERAI_TOGGLE = "Show/hide ForeverAI"
@@ -610,7 +610,7 @@ function ns.HandleRequests(list)
         if req.op == "addon_options" and ns.Addons then
           reply(ns.Addons.FindOptions(req.addon, req.query))
         elseif req.op == "zone_quests" and ns.Collect then
-          reply(ns.Collect.ZoneQuests(req.zone))
+          ns.Collect.ZoneQuestsAsync(req.zone, req.upTo, reply) -- (over several frames: a long route reads the whole database)
         elseif req.op == "gear_upgrades" and ns.Gear then
           reply(ns.Gear.Upgrades(req.slot))
         elseif req.op == "auction_search" and ns.Auction then

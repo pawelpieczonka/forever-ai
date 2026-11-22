@@ -79,6 +79,21 @@ A stop is done when the quest is taken, the objective is finished or the quest i
 </td>
 </tr>
 <tr>
+<td><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/long-route.png?raw=true" alt="A long route from level 25 to 29: six parts, each a town with its quests and the levels it takes you through, the first on the map" width="400"></td>
+<td>
+
+### "Make me a route from level 25 to 29"
+
+A long route for the evening, or for the week: parts in order, each the quests of one town and its surroundings (Auberdine, then Astranaar, then Stonetalon Peak…), with the level you will have after each. The first part is on your map; when it is done, the next one goes on the map by itself, the way into its zone first.
+
+- The levels are counted, not guessed: the real XP of every quest at the level you turn it in, plus the creatures on the way at your own pace (how much of your XP came from creatures in your last sessions), so the route ends at the level you asked for.
+- The route is kept by the app for your character: it survives a `/reload`, a new conversation and a restart. **Long route 2/6 -> 29** on the strip above the text field shows where you are; **parts** shows the whole route again, and two clicks on its **x** end it.
+- "I don't want the Stonetalon part." "Skip to Menethil Harbor." "Add a part for the Deadmines at the end." The route changes, and the levels after it are counted again.
+- A quest that opens at a higher level waits for that level, and comes on the route when you have it.
+
+</td>
+</tr>
+<tr>
 <td><img src="https://github.com/pawelpieczonka/forever-ai/blob/screenshots/readme/travel.png?raw=true" alt="The way to a trainer in another city: a boat, a portal, the trainer" width="400"></td>
 <td>
 
@@ -160,7 +175,7 @@ At a vendor you get a list with the reason for each item and one **Accept**. Hov
 | Rares and chests | "Which rares are in this zone, and what do they drop?" | with ForeverMapNotes |
 | Hunter pets | "Which abilities can my cat learn now, and which beast teaches Bite 4?" | with Tamed: the easiest beast to reach comes first |
 | Dungeons | "I want to do the Deadmines. Which quests do I need, and where do I get them?" | the quests of other zones are looked up, and their givers go on the route |
-| Zones | "Where do I level from 24 to 30?" | with ForeverMapNotes: the level range of each zone, and the way there |
+| Zones | "Where do I level from 24 to 30?" | with ForeverMapNotes: the level range of each zone, and the way there; ask for a route and you get a long route to that level |
 | What Forever changed | "What did the latest hotfixes change for hunters?" | from the knowledge base, with the sources under the answer |
 | Other add-ons | "Turn off the Questie arrows on the minimap." | a proposal you accept; ForeverAI never changes another add-on's files |
 | Memory | "Remember that I play Beast Mastery and level with a friend who plays a mage." | kept for later conversations; the **Memory** tab shows it |

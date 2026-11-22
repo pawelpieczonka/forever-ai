@@ -263,7 +263,8 @@ local function card(text, edge, buttons)
     status:ClearAllPoints()
     status:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -h - 4)
     status:SetWidth(width - 22)
-    return width - 2, h + 30
+    -- (a card with no buttons and nothing said under it ends with its text)
+    return width - 2, h + ((#e.buttons > 0 or (status:GetText() or "") ~= "") and 30 or 2)
   end
   function e:Done(msg)
     for _, b in ipairs(self.buttons) do b:Hide() end
@@ -455,6 +456,14 @@ function UI.UpdateAnswer(data)
       local metaText = table.concat({ meta or "", src or "" }, (meta and src) and "\n" or "")
       if metaText ~= "" then bubble("meta", metaText) end
       ns.RecordEntry({ k = "a", t = data.text or "", links = data.links, meta = metaText ~= "" and metaText or nil })
+    end
+    -- the long route the app keeps: shown as a card when the AI built or changed it (the parts first, the stops of the
+    -- part on the map in the card after it), on the strip always
+    if type(data.longRoute) == "table" and ns.Map and ns.Map.SetLong then
+      local card = data.longRoute.card and not data.longRoute.ended
+      ns.Map.SetLong(data.longRoute)
+      if card then UI.LongRouteCard(ns.Map.Long()) end
+      UI.UpdateStrip()
     end
     for _, a in ipairs(data.actions or {}) do UI.ActionCard(a) end
     -- the AI's changes to the route that is on the map come first; marks of the same answer are added to the result
@@ -1271,6 +1280,45 @@ function UI.MarksCard(marks, replace, track, quiet, more)
   relayout()
 end
 
+-- The long route (the AI's long_route): its parts in order with the levels they lead through, the one on the map lit.
+-- The app puts the next part on the map by itself when one is done.
+local LONG_COLOR = { 0.62, 0.5, 0.95, 0.75 }
+local function levels(p)
+  if p.from and p.to then return string.format("level %.1f -> %.1f", p.from, p.to) end
+  return nil
+end
+function UI.LongRouteCard(lr)
+  if type(lr) ~= "table" then return end
+  local lines = {}
+  for i, p in ipairs(lr.parts or {}) do
+    local more = p["then"] -- the other zones the part goes into
+    local where = esc(p.zone or "") .. (type(more) == "table" and #more > 0 and (", " .. esc(table.concat(more, ", "))) or "")
+    if p.done then
+      lines[#lines + 1] = string.format("|cff6a7380%d. %s (%s) · done|r", i, esc(p.title or "?"), where)
+    else
+      local bits = { levels(p) }
+      if p.quests and p.quests > 0 then bits[#bits + 1] = p.quests == 1 and "1 quest" or (p.quests .. " quests") end
+      if p.mins and p.mins > 0 then
+        bits[#bits + 1] = p.mins >= 60 and string.format("about %d h %02d min", math.floor(p.mins / 60), p.mins % 60)
+          or string.format("about %d min", p.mins)
+      end
+      local now = i == lr.current and not lr.offMap
+      lines[#lines + 1] = string.format("|cff%s%d. %s|r |cff9aa3ad(%s)|r%s%s", now and "ffffff" or "c3cad3", i,
+        esc(p.title or "?"), where, #bits > 0 and ("  |cffffd27a" .. esc(table.concat(bits, " · ")) .. "|r") or "",
+        now and "  |cff5dff9don the map|r" or "")
+      if p.note and p.note ~= "" then lines[#lines + 1] = "    |cff8a93a0" .. esc(p.note) .. "|r" end
+    end
+  end
+  local foot = lr["end"] and lr.goal and string.format(
+    "Expected: level %.1f at the end (goal %s). The next part goes on the map by itself when one is done.", lr["end"],
+    tostring(lr.goal)) or "The next part goes on the map by itself when one is done."
+  lines[#lines + 1] = "|cff9aa3ad" .. esc(foot) .. "|r"
+  -- (the map of the part's stops is one click away on the card of the marks below it)
+  card("|cffc7b3ffLong route|r |cff6a7380(" .. esc(lr.title or "") .. ", saved)|r\n" .. table.concat(lines, "\n"),
+    LONG_COLOR, {})
+  relayout()
+end
+
 -- items the answer recommends: one click shows them in Auctionator's Shopping tab, or saves them as a shopping list
 function UI.AuctionCard(items, listName)
   local lines, names = {}, {}
@@ -1838,6 +1886,8 @@ end
 -- Opened from the route's chip: every stop in order with its distance, a button that takes it off the route and one
 -- that makes it the next stop.
 local routeList, routeOpen
+local longEndAt -- the first click on the x of the long route's chip (a second one ends it)
+local LONG_END_S = 4
 local routeRows = {}
 local ROUTE_ROW = 20
 
@@ -1944,6 +1994,29 @@ function UI.UpdateStrip()
           or string.format("(%d)", t.alive)),
       tip = "Stop tracking " .. t.label,
       close = function() ns.Track.Stop(t.name) end,
+    }
+  end
+  local long = ns.Map and ns.Map.Long and ns.Map.Long()
+  if long then
+    -- the part on the map out of all of them, and the goal: "Long route 2/5 -> 29"; its x ends it after a second click
+    local sure = longEndAt and GetTime() - longEndAt < LONG_END_S
+    items[#items + 1] = {
+      color = { 0.62, 0.5, 0.95, 1 },
+      text = sure and "|cffff9a9aClick x again to end the long route|r"
+        or string.format("|cff9aa3adLong route|r |cffc7b3ff%d/%d -> %s|r", long.current or 1, #long.parts, tostring(long.goal or "?")),
+      tip = sure and "End the long route" or "End the long route (click twice)",
+      close = function()
+        if longEndAt and GetTime() - longEndAt < LONG_END_S then
+          longEndAt = nil
+          ns.Map.EndLong("the player (the x of the long route strip)")
+        else
+          longEndAt = GetTime()
+          C_Timer.After(LONG_END_S, function() UI.UpdateStrip() end)
+        end
+        UI.UpdateStrip()
+      end,
+      action = { label = "parts", tip = "Show the parts of the long route in the chat",
+                 fn = function() UI.LongRouteCard(ns.Map.Long()) end },
     }
   end
   local all = ns.Map and ns.Map.Count and ns.Map.Count() or 0

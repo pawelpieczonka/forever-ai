@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from . import claude_code, config, gemini, keystore
+from . import claude_code, config, gemini, keystore, longroute
 from .frames import Frame, FrameAssembler
 from .inbox import encode_inbox, pool_size, write_inbox
 from .kb.store import KB
@@ -143,8 +143,8 @@ class InboxWriter:
 
 # a line of the "marks" section: "2. Sentinel Arynia Cloudsbreak — Teldrassil 38.3, 34.4 (115 m)"
 # what the app keeps of a quest the game offers (zone_quests): enough to plan all of it
-_QUEST_KEYS = ("id", "title", "level", "minLevel", "type", "giver", "where", "objective", "whereToGet", "turnIn",
-               "next", "nextId", "startsWhenTaken")
+_QUEST_KEYS = ("id", "title", "level", "minLevel", "xp", "type", "giver", "where", "objective", "whereToGet", "turnIn",
+               "next", "nextId", "nextXp", "startsWhenTaken")
 ZONE_QUESTS_KEEP_S = 300.0  # the quests of a zone read for a route are good for this long
 ZONE_QUESTS_WAIT_S = 15.0  # how long a route waits for the game to list a zone's quests
 ZONE_QUESTS_RETRY_S = 60.0  # after the game did not answer, it is not asked again for this long
@@ -673,6 +673,19 @@ class TurnContext:
         self.conv = str(msg.get("conv") or "default")
         self.tool_calls = 0  # calls of the app's tools that reached the app in this answer (Claude Code)
         self.notes: list[str] = []  # what the answer did that neither marks nor actions show (memory)
+        self.long_route: dict | None = None  # the long route as the add-on is to show it after this answer
+        self.long_card = False  # ... as a card in the chat (the model built or changed it), not only on the strip
+        self.long_ended: str | None = None  # the id of the long route this answer ended
+        self.long_news: str | None = None  # the part the route went on to, in a few words (an update's news line)
+
+    def long_route_payload(self) -> dict:
+        """What the answer tells the add-on of the long route: the route to show (and whether as a card), or that it
+        ended."""
+        if self.long_route is not None:
+            return {"longRoute": dict(self.long_route, **({"card": True} if self.long_card else {}))}
+        if self.long_ended:
+            return {"longRoute": {"id": self.long_ended, "ended": True}}
+        return {}
 
     def did(self) -> list[str]:
         """What this answer did besides its text, in words the model reads in the following turns."""
@@ -823,6 +836,8 @@ class Service:
         # a second session for the updates of a route, when the player chose another model for them
         self._claude_route: claude_code.ClaudeSession | None = None
         self._route_plans: dict | None = None  # conversation -> how its route was planned (see _plans)
+        self.long_routes = longroute.Store()  # character -> the long route they follow (see longroute.py)
+        self._long_quests: dict[str, dict] = {}  # character -> the quests zone_quests listed (also later ones), by key
         self._claude_lock = threading.Lock()
         self.screen_for: Callable[[int], bytes | None] = lambda msg_id: None  # set by the app (screenshot watcher)
 
@@ -1303,16 +1318,17 @@ class Service:
         sources: list[dict] = [{"title": h.title, "url": h.url, "date": h.ts[:10]} for h in pre_hits]
         ctx = TurnContext(msg, writer, snapshot, cancel, sources)
         ctx.pre_urls = {x["url"] for x in sources}  # guessed from names in the game, not chosen by the model
+        self._long_reconcile(ctx)
         planned = self.plan_again(ctx) if update else None
-        if planned and msg.get("fast") and not self._same_route(ctx):
+        if planned and msg.get("fast") and (ctx.long_news or not self._same_route(ctx)):
             # at once: the route planned again the way the model planned it; the model checks it after (the add-on
             # asks for that a moment later), so that the player sees the change without waiting for a model
-            writer.send({"kind": "answer", "final": True, "msgId": msg_id, "text": self._route_news(ctx),
+            writer.send({"kind": "answer", "final": True, "msgId": msg_id, "text": ctx.long_news or self._route_news(ctx),
                          "marks": ctx.marks, "marksReplace": True, "track": ctx.track, "routePlanned": True,
                          **({"marksMore": True} if getattr(ctx, "route_more", False) else {}),
-                         **({"route": ctx.route_edit} if ctx.route_edit else {}),
-                         "check": True, "status": self.status()})
-            activity.info(self._route_news(ctx))
+                         **({"route": ctx.route_edit} if ctx.route_edit else {}), **ctx.long_route_payload(),
+                         "check": bool(ctx.marks), "status": self.status()})
+            activity.info(ctx.long_news or self._route_news(ctx))
             return
         if planned and self._same_route(ctx) and not msg.get("check"):
             # the route planned again is the route on the map: nothing for a model to check, and nothing to say
@@ -1333,7 +1349,8 @@ class Service:
                                   memory=memory, auto=bool(msg.get("auto")), route_update=update, planned=planned,
                                   notes=self.convs.notes(conv),
                                   route_plan=self._plans().get(conv) if snapshot.get("marks") else None,
-                                  language=self._language(conv, history) if msg.get("auto") else None)
+                                  language=self._language(conv, history) if msg.get("auto") else None,
+                                  long_route=self._long_text(ctx))
         self._turn = ctx
         try:
             if s.provider == "claude_code":
@@ -1544,6 +1561,7 @@ class Service:
                      "track": ctx.track, "route": ctx.route_edit, "untrack": ctx.untrack, "goTo": ctx.go_to, "routeUnchanged": self._checked_unchanged(msg, ctx),
                      "routePlanned": ctx.route_marked and bool(ctx.marks),
                      **({"marksMore": True} if getattr(ctx, "route_more", False) and ctx.route_marked else {}),
+                     **ctx.long_route_payload(),
                      "cost": None if no_cost else self.last_cost, "model": model,
                      **({"costNote": "Gemini API"} if is_gemini else {"costNote": "no cost"} if no_cost else {}),
                      "links": self.links(text, ctx), "auction": ctx.auction_card(text), **ctx.auction_list(),
@@ -1840,6 +1858,230 @@ class Service:
             text += (f"\n{which} marked on the map in this order (the marks of earlier answers are off the map); "
                      "do not mark them again. To mark other stops instead, call mark_on_map for each of them.")
         return text, False
+
+    # ---------------------------------------------------------------- the long route (longroute.py)
+    def _long_snapshot(self, ctx: TurnContext) -> dict:
+        """The game data with the quests the character is through with as the app knows them: what the game says is
+        turned in, and what this conversation saw in the quest log that is not there any more."""
+        in_log = {q["id"] for q in ctx.snapshot.get("quests") or [] if isinstance(q, dict) and isinstance(q.get("id"), int)}
+        had = {i for i in (self._plans().get(ctx.conv) or {}).get("taken") or [] if isinstance(i, int)}
+        had |= {int(i) for i in ctx.snapshot.get("routeDone") or [] if isinstance(i, (int, float))}
+        return dict(ctx.snapshot, through=sorted(had - in_log))
+
+    def _long_offered(self, ctx: TurnContext) -> dict:
+        """The quests the game listed for this character with zone_quests (in this answer or earlier, also the ones
+        that open later) and for routes in the last minutes: what a part of a long route can name."""
+        out: dict = {}
+        for (char, _zone), (_when, quests) in list(self._zone_quests.items()):
+            if char == self._char:
+                for q in quests:
+                    out.setdefault(_quest_key(q), q)
+        out.update(self._long_quests.get(self._char) or {})
+        out.update(ctx.offered)
+        return out
+
+    def _show_long(self, ctx: TurnContext, route: dict, card: bool = False) -> None:
+        """The long route goes to the add-on with this answer (as a card when the model built or changed it)."""
+        ctx.long_route = longroute.summary(route, self._long_snapshot(ctx))
+        ctx.long_card = ctx.long_card or card
+
+    def _plan_part(self, ctx: TurnContext, route: dict, i: int) -> str:
+        """Part ``i`` of the long route on the map, planned as plan_route plans a route: its quests to pick up, the
+        quests of the log it passes, the way into its zones. Returns the planner's text."""
+        args = longroute.part_args(route, i, ctx.snapshot)
+        text, _ = self._plan_route(ctx, args)
+        route["mapped"], route["current"] = i, i
+        later = longroute.waiting(route, i, ctx.snapshot)
+        route["waits"] = [w for w in later]
+        if later:
+            text += ("\nNot on the map yet, because the character's level does not open them: " + ", ".join(later)
+                     + ". They come on the route when an update finds the level reached.")
+        return text
+
+    def _part_opened(self, ctx: TurnContext, route: dict) -> bool:
+        """Has the character reached the level a quest of the part on the map waited for?"""
+        if route.get("mapped") is None or not route.get("waits"):
+            return False
+        return len(longroute.waiting(route, int(route["mapped"]), ctx.snapshot)) < len(route["waits"])
+
+    def _long_route(self, ctx: TurnContext, args: dict) -> tuple[str, bool]:
+        """The long_route tool: build, change, show or end the long route of this character, and keep its current
+        part on the map."""
+        op = str(args.get("op") or "").strip().lower()
+        player = ctx.snapshot.get("player") or {}
+        level = int(player["level"]) if isinstance(player.get("level"), (int, float)) else 0
+        route = self.long_routes.get(self._char)
+        snap = self._long_snapshot(ctx)
+        offered = self._long_offered(ctx)
+        ctx.phase_cb("Building the long route…")
+        if op == "end":
+            if not route:
+                return "This character has no long route.", False
+            self.long_routes.drop(self._char)
+            ctx.long_ended = str(route.get("id"))
+            ctx.long_route, ctx.long_card = None, False  # (what this answer showed of it before does not go)
+            ctx.notes.append("ended the long route " + str(route.get("title")))
+            return ("The long route is ended and gone from the add-on's window. The stops on the map stay: take them "
+                    "off with edit_route clear if the player wants that too."), False
+        if op == "show":
+            if not route:
+                return "This character has no long route. Make one with op=new.", False
+            return longroute.render(route, snap), False
+        mapped = (route or {}).get("mapped")  # the part on the map now (None: none of the long route)
+        replan = False  # the current part goes on the map in this call
+        problems: list[str] = []
+        if op == "new":
+            try:
+                goal = int(args.get("goal_level") or 0)
+            except (TypeError, ValueError):
+                goal = 0
+            if goal <= level:
+                return f"Give goal_level, the level the route is to reach: above {level}, the character's level.", True
+            goal = min(goal, level + 15 if level else goal, longroute.MAX_LEVEL)
+            skip = longroute._titles(args.get("skip"))
+            route = longroute.new_route(goal, str(args.get("title") or ""), str(args.get("summary") or ""), snap,
+                                        ctx.conv, skip)
+            mapped, replan = None, True
+        elif not route:
+            return "This character has no long route yet: start one with op=new and goal_level.", True
+        parts = route["parts"]
+        raw = args.get("parts") if isinstance(args.get("parts"), list) else []
+        try:
+            n = int(args.get("part") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if op in ("new", "add"):
+            if op == "add" and not raw:
+                return "Give the parts to add (parts: [{title, zone, quests}]).", True
+            # (parts added to a route that has some: the part on the map stays as it is)
+            replan = replan or not parts
+            for r in raw:
+                if len(parts) >= longroute.MAX_PARTS:
+                    problems.append(f"A long route holds at most {longroute.MAX_PARTS} parts: the rest is not added.")
+                    break
+                part, why = longroute.make_part(r, snap, offered, longroute.taken_titles(route))
+                problems += why
+                if part:
+                    parts.append(part)
+        elif op == "change":
+            if not 1 <= n <= len(parts) or not raw:
+                return f"Give part (1 to {len(parts)}) and the new part in parts.", True
+            part, why = longroute.make_part(raw[0], snap, offered,
+                                            longroute.taken_titles(route) - {longroute.norm(q.get("title")) for q in
+                                                                            parts[n - 1].get("quests") or []})
+            problems += why
+            if not part:
+                return "Nothing changed. " + " ".join(problems), True
+            parts[n - 1] = part
+            replan = n - 1 == mapped  # the part on the map changed: it is planned again
+        elif op == "remove":
+            if not 1 <= n <= len(parts):
+                return f"Give part, 1 to {len(parts)}.", True
+            parts.pop(n - 1)
+            cur = int(route.get("current") or 0)
+            if n - 1 < cur:
+                route["current"] = cur - 1
+                if mapped == cur:
+                    route["mapped"] = cur - 1
+            elif n - 1 == cur:
+                # the part after it is the current one now, and goes on the map when the removed one was there
+                replan, route["mapped"] = mapped == cur, None
+        elif op == "go":
+            if not 1 <= n <= len(parts):
+                return f"Give part, 1 to {len(parts)}.", True
+            for k, p in enumerate(parts):
+                if k < n - 1:
+                    p["done"] = True
+                else:
+                    p.pop("done", None)
+            route["current"], route["mapped"], replan = n - 1, None, True
+        else:
+            return "op is one of new, add, change, remove, go, show, end.", True
+        if not parts:
+            self.long_routes.put(self._char, route)
+            self._show_long(ctx, route, card=True)
+            return "\n".join([longroute.render(route, snap)] + problems), bool(problems) and op != "new"
+        cur = min(int(route.get("current") or 0), len(parts) - 1)
+        route["current"] = cur
+        planned = ""
+        if replan:
+            # the current part goes on the map; a part with nothing left to do is skipped
+            while True:
+                planned = self._plan_part(ctx, route, cur)
+                if ctx.marks or cur + 1 >= len(parts):
+                    break
+                parts[cur]["done"] = True
+                cur += 1
+            ctx.notes.append(f"put part {cur + 1} of the long route on the map: {parts[cur]['title']}")
+        self.long_routes.put(self._char, route)
+        self._show_long(ctx, route, card=True)
+        ctx.notes.append(f"long route {op}: " + ", ".join(p["title"] for p in parts))
+        text = longroute.render(route, self._long_snapshot(ctx))
+        if problems:
+            text += "\n" + "\n".join(problems)
+        if planned:
+            text += f"\n\nPart {cur + 1} on the map now:\n{planned}"
+        text += ("\nThe player sees the parts with their levels in the add-on's window. In the answer say in a few "
+                 "sentences where the route leads, why these places, what is left out and why, and the level it ends at; "
+                 "the window lists the parts and the map the stops.")
+        return text, False
+
+    def _next_part(self, ctx: TurnContext) -> str | None:
+        """The part of the long route on the map has nothing left to do: the next part goes on the map (a part with
+        nothing to do is skipped). Returns the planner's text, None when there is no long route or this was not its
+        part; when it was the last part, the long route is finished."""
+        route = self.long_routes.get(self._char)
+        if not route or route.get("mapped") is None or route.get("mapped") != route.get("current"):
+            return None
+        parts = route["parts"]
+        i = int(route["current"])
+        if i < len(parts):
+            parts[i]["done"] = True
+        while i + 1 < len(parts):
+            i += 1
+            text = self._plan_part(ctx, route, i)
+            if ctx.marks:
+                self.long_routes.put(self._char, route)
+                ctx.long_news = f"Long route: part {i + 1} of {len(parts)}, {parts[i]['title']}."
+                ctx.notes.append(f"the long route went on to part {i + 1}: {parts[i]['title']}")
+                self._show_long(ctx, route)
+                return (f"Part {i} of the long route is done: part {i + 1} ({parts[i]['title']}) is on the map now.\n"
+                        + text)
+            parts[i]["done"] = True
+        self.long_routes.drop(self._char)
+        ctx.long_ended = str(route.get("id"))
+        ctx.long_news = f"Long route finished: {route.get('title')}."
+        ctx.notes.append("the long route is finished")
+        return None
+
+    def _long_text(self, ctx: TurnContext) -> str | None:
+        """The long route of the character for the model's prompt (short: the parts and their levels)."""
+        route = self.long_routes.get(self._char)
+        return longroute.render(route, self._long_snapshot(ctx), detail=False) if route and route.get("parts") else None
+
+    def _long_off_map(self, ctx: TurnContext) -> str:
+        """Another route took the place of the long route's part on the map (the model planned one for something else,
+        or cleared the map): when that route is done, the part is not done with it. Returns a word for the model."""
+        route = self.long_routes.get(self._char)
+        if not route or route.get("mapped") is None:
+            return ""
+        n = int(route["mapped"]) + 1
+        title = route["parts"][n - 1]["title"] if n - 1 < len(route["parts"]) else "?"
+        route["mapped"] = None
+        self.long_routes.put(self._char, route)
+        self._show_long(ctx, route)
+        return (f"\nThe long route's part {n} ({title}) is off the map now: this took its place. When the player "
+                f"wants to go on with the long route, put it back with long_route go part={n}.")
+
+    def _long_reconcile(self, ctx: TurnContext) -> None:
+        """The add-on's view of the long route (its longRoute section): the player ended it in the window."""
+        seen = ctx.snapshot.get("longRoute")
+        route = self.long_routes.get(self._char)
+        if isinstance(seen, dict) and seen.get("ended"):
+            if route and str(seen.get("id")) == str(route.get("id")):
+                self.long_routes.drop(self._char)
+                ctx.notes.append("the player ended the long route " + str(route.get("title")))
+            ctx.long_ended = str(seen.get("id"))  # (the add-on forgets it once the app says so)
 
     @staticmethod
     def _still_wanted(plan: dict, snapshot: dict) -> list[dict]:
@@ -2312,8 +2554,24 @@ class Service:
         model planned it last in this conversation, and set as this answer's marks (the model can still change it).
         Returns the planner's text for the model; None when no plan is remembered or nothing is left to route."""
         plan = self._plans().get(ctx.conv)
+        long = self.long_routes.get(self._char)
+        if plan is None and long and long.get("mapped") is not None and ctx.snapshot.get("marks"):
+            # another conversation than the one that put the part on the map: the part is planned again from the long
+            # route (and remembered for this conversation from now on)
+            i = int(long["mapped"])
+            text = self._plan_part(ctx, long, i)
+            if not ctx.marks:
+                return self._next_part(ctx)
+            self.long_routes.put(self._char, long)
+            return text
         if plan is None or not ctx.snapshot.get("marks"):
             return None
+        if long and self._part_opened(ctx, long):
+            # a quest of the part on the map opened with the level just reached: the part is planned again with it
+            text = self._plan_part(ctx, long, int(long["mapped"]))
+            self.long_routes.put(self._char, long)
+            if ctx.marks:
+                return text
         # a stop the player asked for that the route held is done once the map shows it done or no longer has it
         plan = dict(plan, extra=self._still_wanted(plan, ctx.snapshot))
         # The zones where stops of the route on the map still wait go on the route too: a player who left a zone
@@ -2323,6 +2581,17 @@ class Service:
             plan = dict(plan, then=list(plan.get("then") or []) + [{"zone": z} for z in waiting])
         # (an update adds no quest to pick up that the route was not planned with)
         text, _ = self._plan_route(ctx, dict(plan), along=[t if isinstance(t, int) else str(t) for t in plan.get("along") or []])
+        if not ctx.marks and long:
+            # the part of the long route on the map is done: the next part goes on the map
+            nxt = self._next_part(ctx)
+            if nxt:
+                return nxt
+            if ctx.long_ended:
+                # the last part was done: the long route is finished (a stop still waiting on the map goes)
+                if any(_MARK_LINE.match(str(line)) and not str(line).endswith("(done)")
+                       for line in ctx.snapshot.get("marks") or []):
+                    ctx.route_edit = {"clear": True}
+                return text + "\nThe long route is finished: its last part is done. Say what the player can do next."
         if not ctx.marks:
             # nothing of the route is left to do (its quests are done, dropped, or wanted in zones it does not go to):
             # the stops still on the map go (a stop the player locked stays)
@@ -2453,6 +2722,8 @@ class Service:
             text, err = edit_route(ctx, args)
             if not err and args.get("propose") is not True:
                 self._amend_plan(ctx)  # an update of the route keeps the change
+                if args.get("clear") is True and not getattr(ctx, "route_update", False):
+                    text += self._long_off_map(ctx)
             return text, err
         if name == "plan_route":
             args, kept = self._keep_asked(ctx, args)
@@ -2462,6 +2733,8 @@ class Service:
             else:
                 args, zones = self._keep_zones(ctx, args)
                 text, err = self._plan_route(ctx, args)
+                if not err and ctx.route_marked and ctx.marks:
+                    text += self._long_off_map(ctx)
             if zones and not err:
                 text += ("\nKept on the route, because it still has stops there for quests of the quest log: "
                          + ", ".join(zones) + ". Leave a quest out by its name in skip only when the player no longer "
@@ -2582,12 +2855,25 @@ class Service:
             if not zone:
                 return "Give the zone (its English name).", True
             ctx.phase_cb(f"Reading the quests of {zone}…")
-            res = self.game_call(ctx, "zone_quests", {"zone": zone})
+            try:
+                up_to = int(args.get("up_to_level") or 0)
+            except (TypeError, ValueError):
+                up_to = 0
+            level = (ctx.snapshot.get("player") or {}).get("level")
+            up_to = min(up_to, int(level) + 10) if isinstance(level, (int, float)) and up_to > level else 0
+            res = self.game_call(ctx, "zone_quests", {"zone": zone, **({"upTo": up_to} if up_to else {})})
             for q in (res or {}).get("quests") or []:
                 if isinstance(q, dict) and q.get("title") and q.get("where"):
-                    ctx.offered[_quest_key(q)] = {k: q[k] for k in _QUEST_KEYS if q.get(k) is not None}
+                    kept = {k: q[k] for k in _QUEST_KEYS if q.get(k) is not None}
+                    # (a long route can name it in a later answer; plan_route only what the character can take now)
+                    self._long_quests.setdefault(self._char, {})[_quest_key(q)] = kept
+                    if not (isinstance(q.get("minLevel"), (int, float)) and isinstance(level, (int, float))
+                            and q["minLevel"] > level):
+                        ctx.offered[_quest_key(q)] = kept
             ctx.zones_read.add(zone.lower())
             return format_zone_quests(zone, res, ways.dungeons(zone=zone)), not res or bool(res.get("error"))
+        if name == "long_route":
+            return self._long_route(ctx, args)
         if name == "gear_upgrades":
             slot = str(args.get("slot") or "").strip("[] ")[:30]
             ctx.phase_cb("Reading the gear list…")
@@ -2975,6 +3261,7 @@ class Service:
                      "route": ctx.route_edit, "untrack": ctx.untrack, "goTo": ctx.go_to, "routeUnchanged": self._checked_unchanged(msg, ctx),
                      "routePlanned": ctx.route_marked and bool(ctx.marks),
                      **({"marksMore": True} if getattr(ctx, "route_more", False) and ctx.route_marked else {}),
+                     **ctx.long_route_payload(),
                      "sources": ctx.used_sources(text), "actions": ctx.actions,
                      "model": model_name(model),
                      "costNote": "Claude subscription", "secs": round(time.monotonic() - started, 1),

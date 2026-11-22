@@ -722,6 +722,13 @@ function M.Tell(done)
     nextStop = string.format("%d. %s", cur, (tostring(saved[cur].title):gsub("^%d+[%.%)]%s*", "")))
     meters = metersTo(saved[cur], mapID, px, py)
   end
+  local long = M.Long()
+  if not cur and long then
+    if long.current < #long.parts then
+      nextStop = string.format("part %d of the long route, %s", long.current + 1, tostring(long.parts[long.current + 1].title))
+    end
+    if M.NextPart then M.NextPart() end -- (after the last part: the app finishes the long route)
+  end
   pcall(ns.UI.RouteProgress, done, nextStop, meters)
 end
 
@@ -1892,7 +1899,76 @@ function M.RouteDone()
   return #out > 0 and out or nil
 end
 
+------------------------------------------------------------------------ the long route
+-- A long route (the AI's long_route) is kept by the app, part after part; the add-on keeps what it shows of it
+-- (ns.char.longRoute: { id, title, goal, current = the part on the map (1 = the first), end = the level it ends at,
+-- parts = { { title, zone, from, to, quests, xp, mins, note, done } } }) and tells the app when the player ended it.
+function M.Long()
+  local lr = ns.char and ns.char.longRoute
+  if type(lr) == "table" and not lr.ended and type(lr.parts) == "table" and #lr.parts > 0 then return lr end
+end
+
+-- what an answer says of the long route: the route to show from now on, or that it ended
+function M.SetLong(lr)
+  if not ns.char or type(lr) ~= "table" then return end
+  if lr.ended then
+    local had = ns.char.longRoute
+    if type(had) == "table" and (lr.id == nil or had.id == lr.id) then ns.char.longRoute = nil end
+  else
+    lr.card = nil
+    ns.char.longRoute = lr
+  end
+  changed()
+end
+
+-- the player ends the long route (the x of its strip): the app drops it with the next message
+function M.EndLong(by)
+  local lr = M.Long()
+  if not lr then return end
+  ns.char.longRoute = { id = lr.id, ended = true }
+  if ns.Seen then ns.Seen("the long route " .. tostring(lr.title) .. " was ended by " .. tostring(by or "the player")) end
+  changed()
+end
+
+function M.LongSection()
+  local lr = ns.char and ns.char.longRoute
+  if type(lr) ~= "table" or not lr.id then return nil end
+  if lr.ended then return { id = lr.id, ended = true } end
+  return { id = lr.id, part = lr.current }
+end
+
+-- The stops of the part on the map are all done: the app puts the next part on the map (its planner answers at once,
+-- without the AI). An update the quest log asks for anyway (the route's switch is on) does it as well: then nothing
+-- is asked twice.
+local NEXT_S = 2.5 -- after the last stop: the turn-in has reached the quest log by then
+local nextAsked
+function M.NextPart()
+  local long = M.Long()
+  if not long or nextAsked == long.current then return end
+  nextAsked = long.current
+  C_Timer.After(NEXT_S, function()
+    local now = M.Long()
+    if not now or now.current ~= long.current or M.Left() > 0 then nextAsked = nil return end
+    if wanted() and (settle or asked) then return end -- the update of the quest log brings the next part
+    if not ns.CanSend() then -- an answer is being written: once more in a moment
+      nextAsked = nil
+      C_Timer.After(NEXT_S, function() if M.Left() == 0 then M.NextPart() end end)
+      return
+    end
+    asked, sentLog = base, questLog()
+    sentMap = playerSpot()
+    local last = long.current >= #long.parts
+    if ns.Log then ns.Log("route", last and "the end of the long route told" or "the next part of the long route asked for") end
+    M.updateMsgId = ns.Ask(last
+      and string.format("[Quest log changed] the stops of part %d, the last of the long route, are done.", long.current)
+      or string.format("[Quest log changed] the stops of part %d of the long route are done. Put the next part on the "
+        .. "map.", long.current), { auto = true, news = last and "Finishing the long route" or "Next part of the long route",
+        fast = true })
+  end)
+end
+
 if ns.Collect and ns.Collect.sections then
+  ns.Collect.sections.longRoute = M.LongSection
   ns.Collect.sections.marks = M.Section
   ns.Collect.sections.detours = M.Detours
   ns.Collect.sections.routeDone = M.RouteDone

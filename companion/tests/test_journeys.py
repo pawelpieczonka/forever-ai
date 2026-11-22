@@ -661,3 +661,52 @@ def test_the_trainer_after_two_turn_ins_the_way_the_player_asked(start, how):
     assert any(line.startswith("Einris Brightspear (hunter trainer) — ") for line in lately), lately
     assert j.problems == [], j.story()
     assert {2040, 168, 167, 373, 389} <= j.done, j.story()
+
+
+def lakeshire_to_darkshire() -> World:
+    """Two towns of two zones for a long route at level 20: Lakeshire with its murlocs and orcs, then the road south
+    into Duskwood and Darkshire with its undead and worgen."""
+    w = World()
+    berton = w.who("Guard Berton", "Redridge Mountains", 26.5, 46.3)
+    parker = w.who("Watch Captain Parker", "Redridge Mountains", 26.0, 44.0)
+    althea = w.who("Commander Althea Ebonlocke", "Duskwood", 73.6, 46.9)
+    calor = w.who("Calor", "Duskwood", 75.8, 47.6)
+    murloc = w.who("Murloc Flesheater", "Redridge Mountains", 37.0, 45.0, level=20, more=[(38.0, 46.0)])
+    orc = w.who("Blackrock Shadowcaster", "Redridge Mountains", 45.0, 58.0, level=21, more=[(46.0, 59.0)])
+    skeleton = w.who("Skeletal Warrior", "Duskwood", 78.0, 35.0, level=22, more=[(79.0, 36.0)])
+    worgen = w.who("Nightbane Shadow Weaver", "Duskwood", 64.0, 72.0, level=23, more=[(65.0, 73.0)])
+    w.quest(501, "Murloc Poachers", 21, berton, kill=[(murloc, 8)], xp=1650)
+    w.quest(502, "Shadow Magic", 21, parker, kill=[(orc, 6)], xp=1700)
+    w.quest(601, "The Night Watch", 23, althea, kill=[(skeleton, 10)], xp=1900)
+    w.quest(602, "Worgen in the Woods", 24, calor, kill=[(worgen, 8)], xp=2050, min_level=19)
+    return w
+
+
+LONG_ROUTE = [("zone_quests", {"zone": "Redridge Mountains", "up_to_level": 22}),
+              ("zone_quests", {"zone": "Duskwood", "up_to_level": 22}),
+              ("long_route", {"op": "new", "goal_level": 22, "title": "Level 20 to 22"}),
+              ("long_route", {"op": "add", "parts": [
+                  {"title": "Lakeshire", "zone": "Redridge Mountains", "quests": ["Murloc Poachers", "Shadow Magic"]},
+                  {"title": "Darkshire", "zone": "Duskwood", "quests": ["The Night Watch", "Worgen in the Woods"]}]})]
+
+
+@pytest.mark.parametrize("auto", [True, False], ids=["updates on", "updates off"])
+def test_a_long_route_goes_on_part_after_part(start, auto):
+    """"Stwórz mi route, który dobije mnie z obecnego levela": the AI builds a long route of two parts. The player walks
+    the first, and when its last stop is done the second goes on the map by itself, the way into the next zone first,
+    with the route's updates switched on or off; after the last part the long route is finished."""
+    j = start(lakeshire_to_darkshire(), ("Redridge Mountains", 24.0, 45.0), level=20)
+    if not auto:
+        j.sim.lua("ForeverAI.db.autoRoute = false")
+    titles = j.long(LONG_ROUTE)
+    assert "Guard Berton" in titles and not any("Calor" in t for t in titles), (titles, j.long_texts[-1])
+    assert "Part 1 on the map now" in j.long_texts[-1]
+    long = j.sim.to_py(j.sim.lua("return ForeverAI.Map.Long()"))
+    assert long and long["current"] == 1 and long["goal"] == 22
+    j.follow(steps=40)
+    said = [u["said"] for u in j.updates]
+    assert "Long route: part 2 of 2, Darkshire." in said, (said, j.story())
+    assert "Long route finished: Level 20 to 22." in said, (said, j.story())
+    assert j.problems == [] and {501, 502, 601, 602} <= j.done and j.zone == "Duskwood", j.story()
+    assert j.sim.lua("return ForeverAI.Map.Long() == nil and ForeverAI.char.longRoute == nil")
+    assert j.svc.long_routes.get(j.svc._char) is None

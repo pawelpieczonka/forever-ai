@@ -337,8 +337,83 @@ TOOLS.append({
             "type": "object",
             "properties": {
                 "zone": {"type": "string", "description": "English name of the zone or dungeon"},
+                "up_to_level": {"type": "integer",
+                                "description": "For a long route: also the quests of the zone that open later, up to "
+                                               "this level (each with the level it opens at), not only the ones the "
+                                               "character can take now. Give the goal level of the long route"},
             },
             "required": ["zone"],
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "long_route",
+        "description": "A long route the player follows over hours or days, kept by the app in a file for this "
+                       "character: parts in order, each the quests of one place (a town and its surroundings, a "
+                       "zone, a dungeon run) with the way there, and the level the character is expected to have "
+                       "after each part (the quests' real XP at the level they are turned in, plus the creatures on the "
+                       "way at the player's own pace). Use it when the player wants a route to a level (\"from 25 to "
+                       "29\", \"until 30\"), a long route to follow, or where to level next with a route; plan_route "
+                       "is for the quest log. Build it in steps: op=new with the goal level, then op=add with the "
+                       "parts (all at once or a few per call), reading the zones first with zone_quests (up_to_level "
+                       "= the goal). Every result says the level the route ends at: add parts until it reaches the "
+                       "goal. The app puts the current part on the map as plan_route would, and the next part when one "
+                       "is done, by itself. The player sees the parts in the add-on's window.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "op": {"type": "string", "enum": ["new", "add", "change", "remove", "go", "show", "end"],
+                       "description": "new: start a long route (replaces the one this character has); add: parts at "
+                                      "the end; change: replace part number `part`; remove: take part `part` off; go: "
+                                      "put part `part` on the map now (the player skips ahead or goes back); show: the "
+                                      "route with its levels; end: drop the long route (the stops on the map stay)"},
+                "goal_level": {"type": "integer", "description": "new: the level the route is to reach"},
+                "title": {"type": "string", "description": "new: a short name, in English like the add-on's window "
+                                                           "(\"Level 25 to 29\")"},
+                "summary": {"type": "string", "description": "new: what the route is about in a sentence, in English "
+                                                             "(the zones, a dungeon at the end)"},
+                "skip": {"type": "array", "items": {"type": "string"},
+                         "description": "new: quests of the log to leave out of the whole route (elite or group quests "
+                                        "for a player alone, far above their level, ones you advised against)"},
+                "part": {"type": "integer", "description": "change, remove, go: the part's number (1 = the first)"},
+                "parts": {"type": "array", "description": "add, change: the parts, in the order the player goes. A part "
+                                                          "is what one stay somewhere holds, about 15 to 20 stops: its "
+                                                          "quests to pick up, do and turn in there",
+                          "items": {"type": "object", "properties": {
+                              "title": {"type": "string", "description": "Where it is, in English (\"Menethil Harbor\", "
+                                                                         "\"Dun Modr and the Thandol Span\")"},
+                              "zone": {"type": "string", "description": "English name of the zone it is in"},
+                              "then": {"type": "array", "items": {"type": "string"},
+                                       "description": "Other zones this part goes into, in order, when its quests "
+                                                      "lead there"},
+                              "quests": {"type": "array", "items": {"type": "string"},
+                                         "description": "The titles of the quests done in this part: ones to pick up "
+                                                        "(from zone_quests, nearbyQuests, the next part of a chain) and "
+                                                        "ones of the quest log finished here. A quest of the log no part "
+                                                        "names is done where the route passes it, without being counted"},
+                              "skip": {"type": "array", "items": {"type": "string"},
+                                       "description": "Quests of the log not to do in this part"},
+                              "first": {"type": "array", "items": {"type": "string"}},
+                              "last": {"type": "array", "items": {"type": "string"}},
+                              "extra": {"type": "array",
+                                        "description": "Stops that are not quests, as in plan_route (a trainer when a "
+                                                       "level brings new spells, a flight master to open, a vendor: "
+                                                       "service and zone, or title, zone, x, y, note)",
+                                        "items": {"type": "object", "properties": {
+                                            "service": {"type": "string", "description": "A kind of NPC (repair, "
+                                                                                         "vendor, hunter trainer)"},
+                                            "title": {"type": "string"}, "zone": {"type": "string"},
+                                            "x": {"type": "number"}, "y": {"type": "number"},
+                                            "note": {"type": "string"}}, "required": ["zone"]}},
+                              "note": {"type": "string", "description": "What the part is for, in a few English words "
+                                                                        "(shown under it in the add-on)"}},
+                              "required": ["zone", "quests"]}},
+            },
+            "required": ["op"],
         },
     },
 })
@@ -558,7 +633,10 @@ def format_zone_quests(zone: str, res: dict | None, entrances: list[str]) -> str
     lines = [f"Quests the character{f' (level {level})' if level else ''} can pick up for {zone}: {len(quests)}"
              + (f" (and {res['more']} more, not listed)" if res.get("more") else "") + "."]
     for q in quests:
-        kind = ", ".join(str(x) for x in (f"level {q['level']}" if q.get("level") else "", q.get("type") or "") if x)
+        opens = q.get("minLevel") if isinstance(q.get("minLevel"), (int, float)) and level and q["minLevel"] > level else None
+        kind = ", ".join(str(x) for x in (f"level {q['level']}" if q.get("level") else "", q.get("type") or "",
+                                          f"{int(q['xp']):,} XP at its level" if isinstance(q.get("xp"), (int, float)) and q["xp"] > 0 else "",
+                                          f"opens at level {int(opens)}" if opens else "") if x)
         about = f" [belongs to {q['about']}]" if q.get("about") and str(q["about"]).lower() != zone.lower() else ""
         lines.append(f"- [{q['title']}]{f' ({kind})' if kind else ''}{about} from {q.get('giver') or '?'} ({q.get('where') or '?'})"
                      + (f": {q['objective']}" if q.get("objective") else ""))
@@ -567,12 +645,14 @@ def format_zone_quests(zone: str, res: dict | None, entrances: list[str]) -> str
         if q.get("turnIn"):
             lines.append(f"    turn in: {q['turnIn']}")
     if res.get("later"):
-        lines.append(f"{res['later']} more open at a higher level than the character has.")
+        lines.append(f"{res['later']} more open at a higher level than the character has"
+                     + (" (give up_to_level to list them)." if not res.get("upTo") else "."))
     if entrances:
         lines.append("Entrances in this zone: " + "; ".join(entrances) + ".")
     if quests:
-        lines.append("To put some on the route, name their titles in plan_route's new_quests (and the zone in then): "
-                     "the route then picks each up at its giver. Quests already in the log are not listed here.")
+        lines.append("To put some on the route, name their titles in plan_route's new_quests (and the zone in then), or "
+                     "in a part of long_route: the route then picks each up at its giver. Quests already in the log are "
+                     "not listed here.")
     return "\n".join(lines)
 
 

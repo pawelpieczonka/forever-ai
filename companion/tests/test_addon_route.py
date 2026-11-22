@@ -1055,3 +1055,105 @@ def test_an_update_whose_woven_order_cannot_be_walked_takes_the_plans(sim):
     assert text(sim.lua(names)).startswith("Portal back, To Ashenvale"), text(sim.lua(names))
     assert sim.errors == []
 
+
+
+LONG = """ForeverAI.UI.UpdateAnswer({ final = true, msgId = 2, text = "Your long route is ready.",
+  marks = { { title = "1. Guard Berton", x = 41, y = 41 } },
+  longRoute = { id = "lr1", title = "Level 25 to 29", goal = 29, current = 1, ["end"] = 29.3, card = true,
+    parts = { { title = "Menethil Harbor", zone = "Wetlands", from = 25, to = 26.4, quests = 6, xp = 30000, mins = 95,
+                note = "murlocs and crocolisks by the harbour" },
+              { title = "Dun Modr", zone = "Wetlands", ["then"] = { "Arathi Highlands" }, from = 26.4, to = 27.9,
+                quests = 5, xp = 40000 },
+              { title = "Southshore", zone = "Hillsbrad Foothills", from = 27.9, to = 29.3, quests = 1, xp = 60000 } } } })"""
+
+
+def test_a_long_route_shows_its_parts_and_stays_on_the_strip(sim, tmp_path):
+    sim.lua(LONG)
+    sim.run(1)
+    seen = shown(sim)
+    assert "Long route (Level 25 to 29, saved)" in seen
+    assert "1. Menethil Harbor (Wetlands)  level 25.0 -> 26.4 · 6 quests · about 1 h 35 min  on the map" in seen
+    assert "murlocs and crocolisks by the harbour" in seen
+    assert "2. Dun Modr (Wetlands, Arathi Highlands)  level 26.4 -> 27.9 · 5 quests" in seen
+    assert "3. Southshore (Hillsbrad Foothills)  level 27.9 -> 29.3 · 1 quest" in seen
+    assert "Expected: level 29.3 at the end (goal 29)" in seen
+    assert "Long route 1/3 -> 29" in seen and "Route (1)" in seen
+    sim.screenshot(tmp_path / "long.png")
+    # the app reads what the add-on keeps of it
+    assert sim.to_py(sim.lua("return ForeverAI.Map.LongSection()")) == {"id": "lr1", "part": 1}
+    # it outlives a /reload, and the card comes back from the strip
+    sim.reload()
+    sim.slash("/fai")
+    sim.run(1)
+    assert "Long route 1/3 -> 29" in shown(sim)
+    sim.click("parts")
+    sim.run(1)
+    assert "1. Menethil Harbor (Wetlands)" in shown(sim)
+    assert sim.errors == []
+
+
+def test_the_next_part_moves_the_strip_on_and_the_end_clears_it(sim):
+    sim.lua(LONG)
+    sim.run(1)
+    # the update that put part 2 on the map: no card, the strip says it
+    sim.lua("""ForeverAI.UI.UpdateAnswer({ final = true, msgId = 3, text = "Long route: part 2 of 3, Dun Modr.",
+      marks = { { title = "1. Longbraid the Grim", x = 49.8, y = 18.3 } }, marksReplace = true, routePlanned = true,
+      longRoute = { id = "lr1", title = "Level 25 to 29", goal = 29, current = 2, ["end"] = 29.3,
+        parts = { { title = "Menethil Harbor", zone = "Wetlands", done = true },
+                  { title = "Dun Modr", zone = "Wetlands", from = 26.4, to = 27.9, quests = 5 },
+                  { title = "Southshore", zone = "Hillsbrad Foothills", from = 27.9, to = 29.3, quests = 1 } } } })""")
+    sim.run(1)
+    assert "Long route 2/3 -> 29" in shown(sim)
+    sim.click("parts")
+    sim.run(1)
+    assert "1. Menethil Harbor (Wetlands) · done" in shown(sim)
+    sim.lua("""ForeverAI.UI.UpdateAnswer({ final = true, msgId = 4, text = "Long route finished: Level 25 to 29.",
+      longRoute = { id = "lr1", ended = true } })""")
+    sim.run(1)
+    assert "Long route 2/3" not in shown(sim) and sim.lua("return ForeverAI.char.longRoute == nil")
+    assert sim.errors == []
+
+
+def test_the_player_ends_the_long_route_with_two_clicks(sim):
+    sim.lua(LONG)
+    sim.run(1)
+    # the x of the long route's chip: the first click asks, the second ends it
+    sim.lua("ForeverAI.UI.UpdateStrip()")
+    xs = sim.lua("""local n = 0
+      local function walk(f)
+        for _, c in ipairs({ f:GetChildren() }) do
+          if c.onClose and c:IsVisible() and c.text and tostring(c.text:GetText()):find("Long route", 1, true) then
+            TEST_longChip = c
+          end
+          walk(c)
+        end
+      end
+      walk(ForeverAIFrame)
+      return TEST_longChip ~= nil""")
+    assert xs
+    sim.lua("TEST_longChip.onClose()")
+    sim.run(0.5)
+    assert "Click x again to end the long route" in shown(sim)
+    assert sim.lua("return ForeverAI.Map.Long() ~= nil")
+    sim.lua("TEST_longChip.onClose()")
+    sim.run(0.5)
+    assert sim.lua("return ForeverAI.Map.Long() == nil")
+    assert sim.to_py(sim.lua("return ForeverAI.Map.LongSection()")) == {"id": "lr1", "ended": True}
+    assert "Long route" not in shown(sim).replace("Long route (Level 25 to 29, saved)", "")
+    # a first click alone runs out
+    sim.lua(LONG)
+    sim.run(1)
+    sim.lua("TEST_longChip = nil")
+    sim.lua("""local function walk(f)
+        for _, c in ipairs({ f:GetChildren() }) do
+          if c.onClose and c:IsVisible() and c.text and tostring(c.text:GetText()):find("Long route", 1, true) then
+            TEST_longChip = c
+          end
+          walk(c)
+        end
+      end
+      walk(ForeverAIFrame)""")
+    sim.lua("TEST_longChip.onClose()")
+    sim.run(5)
+    assert "Click x again" not in shown(sim) and "Long route 1/3 -> 29" in shown(sim)
+    assert sim.errors == []
