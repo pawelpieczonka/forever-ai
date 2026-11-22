@@ -328,6 +328,12 @@ SlashCmdList.FOREVERAI = function(msg)
     if ns.Track then ns.Track.Stop() end
     if ns.Map then ns.Map.Clear("the player (/fai stop)") end
     ns.print("Tracking stopped and marks cleared.")
+  elseif msg == "share" then -- the route on the map to the party (their ForeverAI shows it), and its changes from now on
+    if ns.Share and ns.Share.Start() then
+      ns.print("Route shared with the party: its changes go to them too, until you plan a route of your own.")
+    else
+      ns.print("Nothing shared: you are not in a party, or there is no route on the map.")
+    end
   elseif msg == "track" then
     if ns.Track then ns.Track.Debug() end
   elseif msg == "log" then -- the last lines of what the add-on saw and decided

@@ -72,6 +72,7 @@ local function usesTomTom() return TomTom and TomTom.AddWaypoint end
 -- the window shows how many stops are marked
 local function changed()
   if ns.UI and ns.UI.UpdateStrip then pcall(ns.UI.UpdateStrip) end
+  if M.OnChange then pcall(M.OnChange) end -- (a route shared with the party goes to it again: Share.lua)
 end
 
 function M.Count()

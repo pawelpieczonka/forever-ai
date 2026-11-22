@@ -18,6 +18,7 @@ Professions.lua
 Npcs.lua
 Links.lua
 Map.lua
+Share.lua
 Track.lua
 Players.lua
 Addons.lua

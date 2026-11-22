@@ -497,6 +497,8 @@ function UI.UpdateAnswer(data)
         ns.char.routeAuto = ns.db.autoRoute == true or nil
       end
       if isRoute then ns.Map.RouteKnown() end -- it was made for the quest log as it is now
+      -- the player's own route now, not one followed from the party; planned for the party, it goes to them
+      if ns.Share then ns.Share.Answered(data.shareRoute == true, e.news ~= nil) end
       UI.UpdateStrip()
     end
     -- the stop the AI sends the player to now (edit_route go_to): the arrow leads there
@@ -806,6 +808,30 @@ function UI.RouteCard(action)
       if ns.char then ns.char.routeRejected = true end
       self:Done("|cff8a93a0Rejected: the route stays as it is.|r")
     end },
+  })
+  relayout()
+end
+
+-- A route a party member shared (ForeverAI in their game too): Follow puts its stops on the map, and while it is
+-- followed its changes come by themselves. Nothing changes before the click.
+local SHARED_LINES = 8
+function UI.SharedRouteCard(from, stops)
+  local lines = {}
+  for i, s in ipairs(stops) do
+    if i <= SHARED_LINES then
+      lines[#lines + 1] = string.format("• %s  |cff9aa3ad(%s %.1f, %.1f)|r%s", esc(s.title), esc(s.zone or ""),
+        tonumber(s.x) or 0, tonumber(s.y) or 0, s.note and ("  |cffffd27a" .. esc(s.note) .. "|r") or "")
+    end
+  end
+  if #stops > SHARED_LINES then lines[#lines + 1] = string.format("|cff9aa3adand %d more|r", #stops - SHARED_LINES) end
+  card(string.format("|cff7fd6ff%s shares their route|r |cff6a7380(%d stop%s; nothing changes until you follow it)|r\n%s",
+    esc(from), #stops, #stops == 1 and "" or "s", table.concat(lines, "\n")), { 0.3, 0.6, 0.9, 0.7 }, {
+    { "Follow", 96, function(self)
+      local ok, err = pcall(ns.Share.Follow, from, stops)
+      self:Done(ok and string.format("|cff5dff9dFollowing %s's route: its changes come by themselves.|r", esc(from))
+        or ("|cffff6060Failed: " .. esc(tostring(err)) .. "|r"))
+    end, "primary" },
+    { "No thanks", 96, function(self) self:Done("|cff8a93a0Your route stays as it is.|r") end },
   })
   relayout()
 end

@@ -281,6 +281,13 @@ TOOLS.append({
                                               "itself: the ones the player asked for by name or kind, and a "
                                               "dungeon's quests. The quests that cost no way are taken along without "
                                               "being named here; 'take what you can on the way' is those, nothing more"},
+                "party": {"type": "boolean",
+                          "description": "true when the player plays this route with the party (a duo, \"with my "
+                                         "teammate\"): the quests of the party members the player can take come on "
+                                         "the route (a member can share each instead), and the result says, member "
+                                         "by member, the quests both have, theirs the player cannot take and why, "
+                                         "and the player's quests they lack, which can be shared and which they "
+                                         "pick up at the giver. Needs the party section"},
                 "propose": {"type": "boolean",
                             "description": "true when the player did not ask for a route and you think the one on the "
                                            "map no longer fits: the new route goes to the player as a card to accept, "

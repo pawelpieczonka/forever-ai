@@ -176,6 +176,7 @@ At a vendor you get a list with the reason for each item and one **Accept**. Hov
 | Rares and chests | "Which rares are in this zone, and what do they drop?" | with ForeverMapNotes |
 | Hunter pets | "Which abilities can my cat learn now, and which beast teaches Bite 4?" | with Tamed: the easiest beast to reach comes first |
 | Dungeons | "Which dungeon should I do now? What are the quests of the Excavation Site, and what do I take with me?" | with DungeonJournal: WoW Forever's own dungeons too, the quests you can take now (and what comes before the others), their givers on the route, the entrance and the bosses |
+| Playing together | "Make a route for me and my teammate." | with Questie in both games: your teammate's quests (the ones you can take come on the route), what to share and what each of you picks up, the quests too high for one of you; with ForeverAI in their game too, they get the same route to follow, and its changes reach them by themselves |
 | Zones | "Where do I level from 24 to 30?" | with ForeverMapNotes: the level range of each zone, and the way there; ask for a route and you get a long route to that level |
 | What Forever changed | "What did the latest hotfixes change for hunters?" | from the knowledge base, with the sources under the answer |
 | Other add-ons | "Turn off the Questie arrows on the minimap." | a proposal you accept; ForeverAI never changes another add-on's files |
@@ -341,6 +342,7 @@ ForeverAI reads other add-ons and never changes their files. Their settings chan
 | `/fai <question>` | asks right away |
 | `/fai new` | starts a new conversation |
 | `/fai stop` | ends tracking and clears the marks |
+| `/fai share` | shares the route on the map with your party: their ForeverAI asks them to follow it, and its changes reach them |
 | `/fai button` | shows or hides the AI button |
 | `/fai status`, `/fai track`, `/fai debug` | details for troubleshooting |
 

@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from . import claude_code, config, gemini, keystore, longroute
+from . import claude_code, config, gemini, keystore, longroute, party
 from .frames import Frame, FrameAssembler
 from .inbox import encode_inbox, pool_size, write_inbox
 from .kb.store import KB
@@ -675,6 +675,7 @@ class TurnContext:
         self.tool_calls = 0  # calls of the app's tools that reached the app in this answer (Claude Code)
         self.notes: list[str] = []  # what the answer did that neither marks nor actions show (memory)
         self.long_route: dict | None = None  # the long route as the add-on is to show it after this answer
+        self.share_route = False  # the route of this answer was planned for the party: the add-on sends it to them
         self.long_card = False  # ... as a card in the chat (the model built or changed it), not only on the strip
         self.long_ended: str | None = None  # the id of the long route this answer ended
         self.long_news: str | None = None  # the part the route went on to, in a few words (an update's news line)
@@ -1327,6 +1328,7 @@ class Service:
             # asks for that a moment later), so that the player sees the change without waiting for a model
             writer.send({"kind": "answer", "final": True, "msgId": msg_id, "text": ctx.long_news or self._route_news(ctx),
                          "marks": ctx.marks, "marksReplace": True, "track": ctx.track, "routePlanned": True,
+                         **({"shareRoute": True} if ctx.share_route else {}),
                          **({"marksMore": True} if getattr(ctx, "route_more", False) else {}),
                          **({"route": ctx.route_edit} if ctx.route_edit else {}), **ctx.long_route_payload(),
                          "check": bool(ctx.marks), "status": self.status()})
@@ -1562,6 +1564,7 @@ class Service:
                      "actions": ctx.actions, "marks": ctx.marks, "marksReplace": ctx.replaces_marks,
                      "track": ctx.track, "route": ctx.route_edit, "untrack": ctx.untrack, "goTo": ctx.go_to, "routeUnchanged": self._checked_unchanged(msg, ctx),
                      "routePlanned": ctx.route_marked and bool(ctx.marks),
+                     **({"shareRoute": True} if ctx.share_route and ctx.marks else {}),
                      **({"marksMore": True} if getattr(ctx, "route_more", False) and ctx.route_marked else {}),
                      **ctx.long_route_payload(),
                      "cost": None if no_cost else self.last_cost, "model": model,
@@ -1693,6 +1696,14 @@ class Service:
         new_quests = args.get("new_quests") is True or titles(args.get("new_quests"))
         skip, last, end_title = titles(args.get("skip")), titles(args.get("last")), str(args.get("end_title") or "")[:60]
         first, use = titles(args.get("first")), [u[:60] for u in titles(args.get("use"))]
+        if args.get("party") and along is None and new_quests is not True:
+            # a route the party goes together: the members' quests the player can take come on it (a member can
+            # share one instead: its giver's stop is done once it is in the quest log). An update keeps what it has.
+            left = {t.strip("[] ").lower() for t in skip}
+            theirs = [t for t in party.takeable(party.members(ctx.snapshot)) if t.lower() not in left]
+            if theirs:
+                new_quests = list(dict.fromkeys(list(new_quests or []) + theirs))
+                args = dict(args, new_quests=new_quests)
 
         def point(hop: dict, key: str) -> tuple[float, float] | None:
             try:
@@ -1776,6 +1787,8 @@ class Service:
                 snapshot = dict(snapshot, nearbyQuests=nearby + far)
                 route = planned(snapshot)
         text = route["text"]
+        if args.get("party"):
+            text += party.together(ctx.snapshot, route)  # what each member has, lacks, can be given, finds red
         # a stop given by its kind of NPC is the one the planner took from now on (an update does not move it)
         for e in extra:
             took = (route.get("picked_options") or {}).get(str(e.get("title")))
@@ -1842,6 +1855,7 @@ class Service:
                                      else {})})
                 ctx.mark_adds.append(False)
             ctx.route_marked = True
+            ctx.share_route = bool(args.get("party")) and bool(party.members(ctx.snapshot))
             # the plan has more stops than the map holds: the add-on keeps the ones it has that the sent part leaves
             # out (they come later), and the line in the chat does not call them gone
             ctx.route_more = len(route["stops"]) > MAX_ROUTE_MARKS
@@ -3329,6 +3343,7 @@ class Service:
                      "marks": ctx.marks, "marksReplace": ctx.replaces_marks, "track": ctx.track,
                      "route": ctx.route_edit, "untrack": ctx.untrack, "goTo": ctx.go_to, "routeUnchanged": self._checked_unchanged(msg, ctx),
                      "routePlanned": ctx.route_marked and bool(ctx.marks),
+                     **({"shareRoute": True} if ctx.share_route and ctx.marks else {}),
                      **({"marksMore": True} if getattr(ctx, "route_more", False) and ctx.route_marked else {}),
                      **ctx.long_route_payload(),
                      "sources": ctx.used_sources(text), "actions": ctx.actions,

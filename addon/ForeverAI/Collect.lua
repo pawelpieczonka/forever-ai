@@ -2321,6 +2321,151 @@ function S.group()
   return out
 end
 
+------------------------------------------------------------------------ the party: a route for two or more
+-- The other players of a party (not a raid), for a route they go together: each with their level and class, how far
+-- away they are or the zone they are in, the player's quests they have too (and how far they are with them), their
+-- quests the player has not got (whether the player can take each, and from whom), and the player's quests they lack
+-- (whether the game lets the player share each). Questie in their game tells Questie in the player's game what is in
+-- their quest log (QuestieComms); without it the game says only which of the player's quests they have. ("Weź pod
+-- uwagę mojego teammate'a": the AI planned for a duo without seeing his quest log.)
+local PARTY_MAX = 15 -- quests of each list, per member
+
+-- what Questie got from this player, under the name the game sent it with ("Name", "Name-Realm" from another realm)
+local function remoteLog(byName, name, realm)
+  if type(byName) ~= "table" or not name then return nil end
+  if byName[name] then return byName[name] end
+  if realm and realm ~= "" and byName[name .. "-" .. realm] then return byName[name .. "-" .. realm] end
+  for who, objectives in pairs(byName) do
+    if type(who) == "string" and who:match("^[^%-]+") == name then return objectives end
+  end
+end
+
+-- "3/8, 1/1", and whether every objective is finished (a quest without objectives is: a letter, somebody to see)
+local function remoteProgress(objectives)
+  local parts, all = {}, true
+  for _, o in ipairs(type(objectives) == "table" and objectives or {}) do
+    if type(o) == "table" then
+      parts[#parts + 1] = string.format("%d/%d", tonumber(o.fulfilled) or 0, tonumber(o.required) or 1)
+      if not o.finished then all = false end
+    end
+  end
+  return #parts > 0 and table.concat(parts, ", ") or nil, all
+end
+
+local function questieQuest(QDB, id)
+  local ok, q = pcall(QDB.GetQuest, id)
+  if not (ok and type(q) == "table") then ok, q = pcall(QDB.GetQuest, QDB, id) end
+  return ok and type(q) == "table" and q or nil
+end
+
+-- the first of Questie's givers ("Name (Zone x, y); ..."): the name, and "Zone x, y" when it has a place
+local function firstGiver(text)
+  if type(text) ~= "string" then return nil end
+  local name, where = text:match("^([^;(]-) %(([^()]- %d+%.?%d*, %d+%.?%d*)%)")
+  return name or text:match("^[^;]+"), where
+end
+
+-- why the player cannot take a quest now (nil: they can), as quest_requirements would say it in short
+local function cannotTake(QDB, id, q, myLevel)
+  if isDone(id) then return "the player has done it" end
+  if q and (tonumber(q.requiredLevel) or 0) > myLevel then return "opens at level " .. q.requiredLevel end
+  local needs, shut = stillNeeds(QDB, id)
+  if shut then return shut end
+  if type(needs) == "table" and #needs > 0 then
+    local names = {}
+    for i, pid in ipairs(needs) do
+      if i <= 3 then names[#names + 1] = "[" .. questName(QDB, pid) .. "]" end
+    end
+    return "needs " .. table.concat(names, ", ") .. " first"
+  end
+end
+
+-- is the member on one of the player's quests, as the game itself says (without Questie in their game)
+local function unitOnQuest(unit, qid)
+  if C_QuestLog.IsUnitOnQuest then return safe(C_QuestLog.IsUnitOnQuest, unit, qid) and true or false end
+  local index = IsUnitOnQuest and C_QuestLog.GetLogIndexForQuestID and safe(C_QuestLog.GetLogIndexForQuestID, qid)
+  return index and safe(IsUnitOnQuest, index, unit) and true or false
+end
+
+function C.Party()
+  if (IsInRaid and IsInRaid()) or (GetNumGroupMembers() or 0) < 2 then return nil end
+  local comms = questieModule("QuestieComms")
+  local logs = comms and type(comms.remoteQuestLogs) == "table" and comms.remoteQuestLogs or {}
+  local QDB = questieDB()
+  local myLevel = UnitLevel("player") or 1
+  local mine, order = {}, {}
+  for i = 1, (C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetNumQuestLogEntries()) or 0 do
+    local q = C_QuestLog.GetInfo(i)
+    if q and not q.isHeader and q.questID then mine[q.questID], order[#order + 1] = q.title, q.questID end
+  end
+  local mapID, px, py = playerSpot()
+  local members = {}
+  for i = 1, GetNumGroupMembers() - 1 do
+    local unit = "party" .. i
+    if UnitExists(unit) then
+      local name, realm = safe(UnitName, unit)
+      local m = { name = name, level = safe(UnitLevel, unit), class = (safe(UnitClass, unit)) }
+      if not UnitIsConnected(unit) then m.offline = true end
+      if UnitIsDeadOrGhost(unit) then m.dead = true end
+      local theirMap = safe(C_Map.GetBestMapForUnit, unit)
+      local pos = theirMap and safe(C_Map.GetPlayerMapPosition, theirMap, unit)
+      if pos and theirMap == mapID and px then
+        m.meters = math.floor((ns.MapMeters(mapID, px, py, pos.x * 100, pos.y * 100) or 0) + 0.5)
+      elseif theirMap then
+        local info = safe(C_Map.GetMapInfo, theirMap)
+        m.zone = type(info) == "table" and info.name or nil
+      end
+      local both, theirs, has = {}, {}, {}
+      local known = false
+      for qid, byName in pairs(logs) do
+        local objectives = remoteLog(byName, name, realm)
+        if objectives then
+          known, has[qid] = true, true
+          local progress, done = remoteProgress(objectives)
+          if mine[qid] then
+            both[#both + 1] = { title = mine[qid], progress = not done and progress or nil, done = done or nil }
+          elseif #theirs < PARTY_MAX then
+            local q = QDB and questieQuest(QDB, qid)
+            local e = { id = qid, title = QDB and questName(QDB, qid) or ("quest " .. qid) }
+            if done then e.done = true elseif progress then e.progress = progress end
+            if q then
+              e.level, e.minLevel = tonumber(q.questLevel), tonumber(q.requiredLevel)
+              e.giver, e.where = firstGiver(questieGivers(QDB, q.startedBy))
+              e.why = cannotTake(QDB, qid, q, myLevel)
+              e.canTake = e.why == nil
+            end
+            theirs[#theirs + 1] = e
+          end
+        end
+      end
+      local lacks = {}
+      for _, qid in ipairs(order) do
+        if known and not has[qid] then
+          if #lacks < PARTY_MAX then
+            local q = QDB and questieQuest(QDB, qid)
+            local e = { title = mine[qid] }
+            if C_QuestLog.IsPushableQuest then e.share = safe(C_QuestLog.IsPushableQuest, qid) and true or false end
+            local minLevel = q and tonumber(q.requiredLevel)
+            if minLevel and m.level and minLevel > m.level then e.opensAt = minLevel end
+            lacks[#lacks + 1] = e
+          end
+        elseif not known and unitOnQuest(unit, qid) then
+          both[#both + 1] = { title = mine[qid] }
+        end
+      end
+      m.questie = known -- (false: their quest log is not known, only which of the player's quests they have)
+      m.both = #both > 0 and both or nil
+      table.sort(theirs, function(a, b) return (a.canTake and 0 or 1) < (b.canTake and 0 or 1) end)
+      m.theirs = #theirs > 0 and theirs or nil
+      m.lacks = #lacks > 0 and lacks or nil
+      members[#members + 1] = m
+    end
+  end
+  if #members == 0 then return nil end
+  return { members = members }
+end
+S.party = C.Party
+
 function S.nearby()
   return ns.Players and ns.Players.Nearby() or nil
 end
@@ -2484,7 +2629,7 @@ end
 ------------------------------------------------------------------------ snapshot
 S.sinceLastAnswer = function() return ns.SeenSection and ns.SeenSection() or nil end
 local ORDER = { "game", "sinceLastAnswer", "player", "progress", "stats", "gearTotals", "equipment", "talents", "quests", "marks", "doneLately", "detours", "routeDone", "longRoute", "notOffered", "tracked",
-  "nearbyQuests", "services", "zoneNPCs", "flightMasters", "mapSizes", "nearbyMobs", "around", "recentEvents", "actionBars", "target", "mouseover", "pet", "tooltip", "group",
+  "nearbyQuests", "services", "zoneNPCs", "flightMasters", "mapSizes", "nearbyMobs", "around", "recentEvents", "actionBars", "target", "mouseover", "pet", "tooltip", "group", "party",
   "nearby", "auras", "windows", "bags", "bank", "spells", "skills", "professions", "reputations", "addons",
   "addonChanges", "chat" }
 local OPTIONAL = { bags = true, bank = "bags", spells = true, actionBars = "spells", around = "nearby", skills = true, reputations = true, nearby = true,
