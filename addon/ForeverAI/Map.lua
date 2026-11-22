@@ -201,6 +201,10 @@ local function entry(mk)
         e.tasks = e.tasks or {}
         e.tasks[#e.tasks + 1] = { kind = "travel", zone = toInfo.name }
       end
+    elseif type(t) == "table" and t.kind == "dungeon" and type(t.zone) == "string" then
+      -- the entrance of a dungeon of a long route: done once the player is inside it (with the group)
+      e.tasks = e.tasks or {}
+      e.tasks[#e.tasks + 1] = { kind = "dungeon", zone = t.zone }
     elseif type(t) == "table" and type(t.quest) == "string" and (t.kind == "objective" or t.kind == "turn_in" or t.kind == "pick_up") then
       e.tasks = e.tasks or {}
       -- id: the quest itself; the parts of a chain often share one title
@@ -723,7 +727,11 @@ function M.Tell(done)
     meters = metersTo(saved[cur], mapID, px, py)
   end
   local long = M.Long()
-  if not cur and long then
+  local part = long and long.parts and long.parts[long.current]
+  if not cur and part and part.dungeon and M.DungeonHolds() then
+    -- in the dungeon of the part (its entrance was the last stop): the next part waits until the player comes out
+    nextStop = string.format("%s, then the next part of the long route once you are out", tostring(part.dungeon))
+  elseif not cur and long then
     if long.current < #long.parts then
       nextStop = string.format("part %d of the long route, %s", long.current + 1, tostring(long.parts[long.current + 1].title))
     end
@@ -1292,6 +1300,8 @@ local function whatToDo(mk)
       parts[#parts + 1] = "the crossing is here: go through"
     elseif t.kind == "travel" then
       add("go on to", t.zone)
+    elseif t.kind == "dungeon" then
+      parts[#parts + 1] = "go into " .. tostring(t.zone) .. " with your group" -- (done once inside)
     elseif t.kind == "turn_in" then
       add("turn in", quest)
     elseif t.kind == "pick_up" then
@@ -1331,7 +1341,8 @@ function M.List()
     local waits
     for n, t in ipairs(mk.tasks or {}) do -- what the stop waits for, in words
       local what = t.kind == "turn_in" and "turning in" or t.kind == "pick_up" and "picking up" or (t.label or "an objective") .. " for"
-      what = t.kind == "travel" and ("arriving in " .. t.zone) or (what .. " [" .. t.quest .. "]")
+      what = t.kind == "travel" and ("arriving in " .. t.zone) or t.kind == "dungeon" and ("going into " .. tostring(t.zone))
+        or (what .. " [" .. tostring(t.quest) .. "]")
       waits = (waits and (waits .. ", ") or "") .. what
     end
     if not waits and mk.npc and not mk.done then waits = "dealing with " .. tostring(mk.npc) end
@@ -1490,6 +1501,52 @@ end
 -- The quests the route still has a stop to pick up (that stop not done, the quest not in the log, not through with it):
 -- a route is planned with the whole of such a quest, and what is to be done for it further on is not done because
 -- the quest log does not hold it yet.
+------------------------------------------------------------------------ dungeons
+-- The dungeon the player is in (the game's name for the instance), or nil outside one.
+local function key(name) return (tostring(name or ""):lower():gsub("^the ", ""):gsub("[^%w]", "")) end
+function M.Instance()
+  if not (IsInInstance and IsInInstance()) then return nil end
+  local name = GetInstanceInfo and ns.safe(GetInstanceInfo)
+  return type(name) == "string" and name ~= "" and name or (GetRealZoneText and ns.safe(GetRealZoneText)) or "a dungeon"
+end
+-- is the player inside this dungeon? ("Gnomeregan"; the journal's "Scarlet Monastery: Library" is the game's
+-- "Scarlet Monastery", and one name may hold the other: "The Stockade", "Stormwind Stockade")
+function M.InDungeon(name)
+  local inside = M.Instance()
+  if not inside then return false end
+  local a, b = key(inside), key(name)
+  if a == "" or b == "" then return false end
+  return a == b or (#a >= 4 and b:find(a, 1, true) ~= nil) or (#b >= 4 and a:find(b, 1, true) ~= nil)
+end
+
+-- The player is in the dungeon of a stop (its entrance): the stop is done. The game gives no position inside an
+-- instance, so the check of the route (M.Check) does not run there: this does it for the dungeon's stops, and the
+-- player is told what comes next.
+function M.EnterDungeon()
+  local saved = ns.char and ns.char.marks
+  if type(saved) ~= "table" then return end
+  local done = {}
+  for i, mk in ipairs(saved) do
+    if not mk.done then
+      for _, t in ipairs(mk.tasks or {}) do
+        if t.kind == "dungeon" and M.InDungeon(t.zone) then
+          local title = (tostring(mk.title):gsub("^%d+[%.%)]%s*", ""))
+          if ns.Log then ns.Log("route", string.format("stop done: %d. %s (inside the dungeon)", i, title)) end
+          if M.NoteDone then M.NoteDone(mk, "inside the dungeon") end
+          M.Finish(saved, i)
+          done[#done + 1] = title
+          break
+        end
+      end
+    end
+  end
+  if #done > 0 then
+    M.Restore()
+    changed()
+    M.Tell(done)
+  end
+end
+
 ------------------------------------------------------------------------ quests an NPC does not give
 -- The game data says the character can take a quest, and its NPC does not offer it when the player talks to him (it
 -- needs more than the data knows, or this server does not give it: "Stoję przed Harlo Barnaby i chyba nie mogę od niego
@@ -1571,6 +1628,8 @@ function M.TasksDone(mk, log)
     local done
     if t.kind == "travel" then
       done = inZone(t.zone) -- where the player is does not depend on the quest log
+    elseif t.kind == "dungeon" then
+      done = M.InDungeon(t.zone) or (M.wasInside and M.wasInside == key(t.zone)) or false
     elseif t.kind == "pick_up" and t.id and C_QuestLog.IsQuestFlaggedCompleted and C_QuestLog.IsQuestFlaggedCompleted(t.id) then
       done = true -- through with it already (picked up and turned in at once: it never shows in the log again)
     elseif q == nil and refused(t) then
@@ -2102,7 +2161,8 @@ function M.LongSection()
   local lr = ns.char and ns.char.longRoute
   if type(lr) ~= "table" or not lr.id then return nil end
   if lr.ended then return { id = lr.id, ended = true } end
-  return { id = lr.id, part = lr.current }
+  -- (inside the dungeon of the part: its turn-ins are not planned until the player is out)
+  return { id = lr.id, part = lr.current, inside = M.DungeonHolds and M.DungeonHolds() or nil }
 end
 
 -- The stops of the part on the map are all done: the app puts the next part on the map (its planner answers at once,
@@ -2110,7 +2170,38 @@ end
 -- is asked twice.
 local NEXT_S = 2.5 -- after the last stop: the turn-in has reached the quest log by then
 local nextAsked
-function M.NextPart()
+-- A dungeon part of the long route: the player is in its dungeon, or was in it and has not come out since (a
+-- /reload inside keeps it). The next part (its turn-ins) is asked for once they are out.
+function M.DungeonHolds()
+  local long = M.Long()
+  local part = long and long.parts and long.parts[long.current]
+  if not (part and part.dungeon) then return false end
+  return M.InDungeon(part.dungeon) or (ns.char and ns.char.longInside == long.current) or false
+end
+
+local function dungeonWatch()
+  if M.Instance() then M.EnterDungeon() end -- (a dungeon's stop, also of a route that is not the long route's)
+  local long = M.Long()
+  local part = long and long.parts and long.parts[long.current]
+  if not (part and part.dungeon and ns.char) then
+    M.wasInside = nil
+    return
+  end
+  if M.InDungeon(part.dungeon) then
+    M.wasInside, ns.char.longInside = key(part.dungeon), long.current
+  elseif ns.char.longInside == long.current and not (UnitIsDeadOrGhost and UnitIsDeadOrGhost("player")) then
+    -- (a ghost on its way back from the graveyard has not left: the player is out once alive outside)
+    ns.char.longInside, M.wasInside = nil, nil
+    if ns.Log then ns.Log("route", "out of " .. tostring(part.dungeon) .. ": the next part of the long route") end
+    if M.Left() == 0 then M.NextPart(part.dungeon) end
+  end
+end
+M.DungeonWatch = dungeonWatch
+ns.On("ZONE_CHANGED_NEW_AREA", function() C_Timer.After(1, dungeonWatch) end)
+ns.On("PLAYER_ENTERING_WORLD", function() C_Timer.After(2, dungeonWatch) end)
+ns.On("PLAYER_UNGHOST", function() C_Timer.After(1, dungeonWatch) end)
+
+function M.NextPart(outOf)
   local long = M.Long()
   if not long or nextAsked == long.current then return end
   nextAsked = long.current
@@ -2127,11 +2218,11 @@ function M.NextPart()
     sentMap = playerSpot()
     local last = long.current >= #long.parts
     if ns.Log then ns.Log("route", last and "the end of the long route told" or "the next part of the long route asked for") end
-    M.updateMsgId = ns.Ask(last
-      and string.format("[Quest log changed] the stops of part %d, the last of the long route, are done.", long.current)
-      or string.format("[Quest log changed] the stops of part %d of the long route are done. Put the next part on the "
-        .. "map.", long.current), { auto = true, news = last and "Finishing the long route" or "Next part of the long route",
-        fast = true })
+    local said = outOf and string.format("the player came out of %s, the dungeon of part %d of the long route", outOf,
+      long.current) or string.format("the stops of part %d%s are done", long.current, last and ", the last of the long route,"
+      or " of the long route")
+    M.updateMsgId = ns.Ask("[Quest log changed] " .. said .. (last and "." or ". Put the next part on the map."),
+      { auto = true, news = last and "Finishing the long route" or "Next part of the long route", fast = true })
   end)
 end
 

@@ -1293,6 +1293,7 @@ function UI.LongRouteCard(lr)
   for i, p in ipairs(lr.parts or {}) do
     local more = p["then"] -- the other zones the part goes into
     local where = esc(p.zone or "") .. (type(more) == "table" and #more > 0 and (", " .. esc(table.concat(more, ", "))) or "")
+    if p.dungeon then where = "dungeon, " .. where end -- (its quests are done inside, with a group)
     if p.done then
       lines[#lines + 1] = string.format("|cff6a7380%d. %s (%s) · done|r", i, esc(p.title or "?"), where)
     else
@@ -1303,9 +1304,10 @@ function UI.LongRouteCard(lr)
           or string.format("about %d min", p.mins)
       end
       local now = i == lr.current and not lr.offMap
+      local inside = now and p.dungeon and ns.Map and ns.Map.DungeonHolds and ns.Map.DungeonHolds()
       lines[#lines + 1] = string.format("|cff%s%d. %s|r |cff9aa3ad(%s)|r%s%s", now and "ffffff" or "c3cad3", i,
         esc(p.title or "?"), where, #bits > 0 and ("  |cffffd27a" .. esc(table.concat(bits, " · ")) .. "|r") or "",
-        now and "  |cff5dff9don the map|r" or "")
+        inside and "  |cff5dff9dinside now|r" or now and "  |cff5dff9don the map|r" or "")
       if p.note and p.note ~= "" then lines[#lines + 1] = "    |cff8a93a0" .. esc(p.note) .. "|r" end
     end
   end
@@ -1541,6 +1543,7 @@ UI.WORKS_WITH = {
   { "Auctionator", "Auctionator", "auction prices from your last scan" },
   { "Pawn", "Pawn", "which items are upgrades for you" },
   { "GearQuestForever", "GearQuest Forever", "the best gear for each slot at your level and where to get it" },
+  { "ForeverDungeonJournal", "DungeonJournal", "dungeons: their quests for you, entrances and bosses" },
   { "ForeverMapNotes", "ForeverMapNotes", "rares and their drops, ore, herbs, chests, pools, books, boats" },
   { "Tamed", "Tamed", "hunters: pet abilities and the beasts that teach them" },
 }

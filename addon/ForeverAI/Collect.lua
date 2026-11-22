@@ -869,6 +869,7 @@ local function chainNeeds(QDB, nextId, after)
   return out
 end
 C.ChainNeeds = chainNeeds
+C.StillNeeds, C.QuestName, C.QuestieGivers, C.QuestieDB = stillNeeds, questName, function(...) return questieGivers(...) end, questieDB
 
 local function objectiveSources(QDB, qid)
   if not (QDB and QDB.QueryQuestSingle) then return nil end
@@ -2007,6 +2008,8 @@ local function runAsync(work, done)
   runner:SetScript("OnUpdate", step)
   step()
 end
+
+C.RunAsync = runAsync
 
 -- C.ZoneQuests over as many frames as it takes (Questie's whole quest database is gone through for upTo), then
 -- done(result). Outside the game's frames (tests) it runs at once.

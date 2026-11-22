@@ -11,6 +11,7 @@
 Core.lua
 Debug.lua
 Collect.lua
+Dungeons.lua
 Events.lua
 Progress.lua
 Professions.lua

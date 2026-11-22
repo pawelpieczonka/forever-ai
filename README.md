@@ -90,6 +90,7 @@ A long route for the evening, or for the week: parts in order, each the quests o
 - The route is kept by the app for your character: it survives a `/reload`, a new conversation and a restart. **Long route 2/6 -> 29** on the strip above the text field shows where you are; **parts** shows the whole route again, and two clicks on its **x** end it.
 - "I don't want the Stonetalon part." "Skip to Menethil Harbor." "Add a part for the Deadmines at the end." The route changes, and the levels after it are counted again.
 - A quest that opens at a higher level waits for that level, and comes on the route when you have it.
+- "Take me through Blackfathom Deeps on the way." A dungeon is a part of its own (with DungeonJournal): its quests are picked up on the way, its entrance is the last stop, done once you are inside with your group, and the creatures of a run in a group of five count towards the levels. The part after it turns the quests in; it goes on the map once you are out of the dungeon, not while you are still in there.
 
 </td>
 </tr>
@@ -174,7 +175,7 @@ At a vendor you get a list with the reason for each item and one **Accept**. Hov
 | Gathering | "Where do I mine copper around here?" "Where are the fishing pools?" | with ForeverMapNotes: how many nodes a zone has and where they are densest |
 | Rares and chests | "Which rares are in this zone, and what do they drop?" | with ForeverMapNotes |
 | Hunter pets | "Which abilities can my cat learn now, and which beast teaches Bite 4?" | with Tamed: the easiest beast to reach comes first |
-| Dungeons | "I want to do the Deadmines. Which quests do I need, and where do I get them?" | the quests of other zones are looked up, and their givers go on the route |
+| Dungeons | "Which dungeon should I do now? What are the quests of the Excavation Site, and what do I take with me?" | with DungeonJournal: WoW Forever's own dungeons too, the quests you can take now (and what comes before the others), their givers on the route, the entrance and the bosses |
 | Zones | "Where do I level from 24 to 30?" | with ForeverMapNotes: the level range of each zone, and the way there; ask for a route and you get a long route to that level |
 | What Forever changed | "What did the latest hotfixes change for hunters?" | from the knowledge base, with the sources under the answer |
 | Other add-ons | "Turn off the Questie arrows on the minimap." | a proposal you accept; ForeverAI never changes another add-on's files |
@@ -290,11 +291,12 @@ The app finds Claude Code on `PATH`, in `~/.local/bin`, in npm/nvm installs and 
 | Leatrix Maps | recommended | where the zones are joined (border crossings, boats, zeppelins, the tram, portals) and where each dungeon is entered, with its levels | a route into another zone has only the few ways built in; the AI looks the others up |
 | Auctionator | optional | prices from your last scan (open the auction house and run a full scan first; what that scan did not see counts as sold); **Search on the AH** and **Save as list** on the shopping list | no auction prices, no shopping list |
 | Pawn | optional | which items are upgrades for you, and which of a kind are the best for you | upgrades are judged from the item stats alone |
+| DungeonJournal | optional | every dungeon with its levels, its entrance and the way in, its quests (who gives each and where, the quests before it, what to bring) and its bosses, WoW Forever's own dungeons too | the quests of a dungeon come from Questie, and a long route has no dungeon part |
 | GearQuest Forever | optional | the best items for each slot at your class, spec and level, and where each comes from (quest, vendor, creature, dungeon, profession), with the place | "what gear should I get" is answered from the items you have and the web |
 | ForeverMapNotes | optional | rare creatures with their spawn spots and drops, ore, herbs, chests and fishing pools (how many and where they are densest), town NPCs of any zone, library books, the level range of each zone | "where do I mine copper", "which rares are here" are looked up on the web |
 | Tamed | optional, for hunters | which abilities your pet's family can learn, the highest rank its level allows, and which beasts to tame for it, the easiest to reach first | pet abilities are answered from the web |
 
-**Settings** in the add-on's window lists these eight with a tick or a cross: whether each one is loaded right now.
+**Settings** in the add-on's window lists these nine with a tick or a cross: whether each one is loaded right now.
 
 ForeverAI reads other add-ons and never changes their files. Their settings change only through a proposal you accept in the game.
 
@@ -329,6 +331,7 @@ ForeverAI reads other add-ons and never changes their files. Their settings chan
 - **The next part of a chain is planned for.** Its stop says "turn in …; then pick up …" and stays until you took it. A next part that needs another quest done too is not planned until that one is.
 - **A quest its NPC does not give is left out.** When you talk to the NPC of a stop and his window lacks the quest the route came for (the game data says you can take it, the server does not give it), the add-on notes it: the stop is done with, the route goes on without that quest, and no later route sends you there again until you gain a level. "Why can't I take this quest?" gets the reason from the game's quest data: the quest to do first and who gives it, the level, the reputation or the profession it needs.
 - **A quest whose objectives the data has no place for** (some of WoW Forever's own quests) is picked up on the route, and its turn-in comes once your quest log says it is done.
+- **A dungeon's entrance is done when you are inside**, also though the game gives no position in a dungeon. A quest done in there is turned in by the part after it, which goes on the map when you come out (dying and running back from the graveyard is not coming out).
 - **Where the game has no data** (portals, boats, gates), the AI places the stop from what it knows and says when a spot is approximate. With Leatrix Maps installed, the crossings come from its map data.
 - **Tracking** watches for every creature that counts for the same objective and stops by itself when the objective is done. While it tracks, the game shows the nameplates of all enemies; your own setting comes back afterwards.
 

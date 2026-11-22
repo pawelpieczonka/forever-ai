@@ -25,7 +25,7 @@ from .prompt import NOTES_SYSTEM, build_messages, entity_names, notes_prompt
 from .mapnotes import MapNotes, format_map_notes
 from .petskills import PetSkills, format_pet_abilities
 from .tools import (TOOLS, auction_request, format_addon_options, format_auction, format_gear_upgrades, format_sell_prices,
-                    format_quest_requirements, format_zone_quests, next_action_id, remember_options, run_fetch, run_kb_search, sell_price_request,
+                    format_dungeon_plan, format_quest_requirements, format_zone_quests, next_action_id, remember_options, run_fetch, run_kb_search, sell_price_request,
                     validate_abandon, validate_mark, validate_proposal, validate_vendor)
 from .wowformat import bracket_names, md_to_wow
 
@@ -839,6 +839,7 @@ class Service:
         self._route_plans: dict | None = None  # conversation -> how its route was planned (see _plans)
         self.long_routes = longroute.Store()  # character -> the long route they follow (see longroute.py)
         self._long_quests: dict[str, dict] = {}  # character -> the quests zone_quests listed (also later ones), by key
+        self._dungeons: dict[str, dict] = {}  # character -> the dungeons read with dungeon_plan, by name
         self._claude_lock = threading.Lock()
         self.screen_for: Callable[[int], bytes | None] = lambda msg_id: None  # set by the app (screenshot watcher)
 
@@ -1982,7 +1983,8 @@ class Service:
                 if len(parts) >= longroute.MAX_PARTS:
                     problems.append(f"A long route holds at most {longroute.MAX_PARTS} parts: the rest is not added.")
                     break
-                part, why = longroute.make_part(r, snap, offered, longroute.taken_titles(route))
+                part, why = longroute.make_part(r, snap, offered, longroute.taken_titles(route),
+                                                self._dungeons.get(self._char))
                 problems += why
                 if part:
                     parts.append(part)
@@ -1991,7 +1993,8 @@ class Service:
                 return f"Give part (1 to {len(parts)}) and the new part in parts.", True
             part, why = longroute.make_part(raw[0], snap, offered,
                                             longroute.taken_titles(route) - {longroute.norm(q.get("title")) for q in
-                                                                            parts[n - 1].get("quests") or []})
+                                                                            parts[n - 1].get("quests") or []},
+                                            self._dungeons.get(self._char))
             problems += why
             if not part:
                 return "Nothing changed. " + " ".join(problems), True
@@ -2058,6 +2061,13 @@ class Service:
             return None
         parts = route["parts"]
         i = int(route["current"])
+        seen = ctx.snapshot.get("longRoute")
+        d = parts[i].get("dungeon") if i < len(parts) and isinstance(parts[i].get("dungeon"), dict) else None
+        if d and isinstance(seen, dict) and seen.get("inside") and str(seen.get("id")) == str(route.get("id")):
+            # the dungeon part: its entrance was the last stop, and the player is inside. Its quests are done in
+            # there; the next part (their turn-ins) goes on the map once the player comes out (the add-on says so).
+            return (f"The player is inside {d.get('name')}, the dungeon of part {i + 1} of the long route: its quests "
+                    "are done in there. The next part, with their turn-ins, goes on the map once they come out.")
         if i < len(parts):
             parts[i]["done"] = True
         while i + 1 < len(parts):
@@ -2597,6 +2607,11 @@ class Service:
                 return text
         # a stop the player asked for that the route held is done once the map shows it done or no longer has it
         plan = dict(plan, extra=self._still_wanted(plan, ctx.snapshot))
+        if long and long.get("mapped") is not None:
+            # a dungeon part on the map: the quests it picked up are turned in by the part after it, not here
+            held = longroute.turned_in_later(long, int(long["mapped"]), ctx.snapshot)
+            if held:
+                plan = dict(plan, skip=list(dict.fromkeys(list(plan.get("skip") or []) + held)))
         # The zones where stops of the route on the map still wait go on the route too: a player who left a zone
         # before its stops were done (a flight, a hearthstone) kept losing them at the next update.
         waiting = self._waiting_zones(ctx, list(plan.get("then") or []))
@@ -2895,6 +2910,24 @@ class Service:
                         ctx.offered[_quest_key(q)] = kept
             ctx.zones_read.add(zone.lower())
             return format_zone_quests(zone, res, ways.dungeons(zone=zone), ctx.snapshot), not res or bool(res.get("error"))
+        if name == "dungeon_plan":
+            which = str(args.get("dungeon") or "").strip("[] ")[:60]
+            ctx.phase_cb(f"Reading {which} in the dungeon journal…" if which else "Reading the dungeon journal…")
+            res = self.game_call(ctx, "dungeon_plan", {"dungeon": which} if which else {})
+            if isinstance(res, dict) and not res.get("error") and res.get("name"):
+                self._dungeons.setdefault(self._char, {})[str(res["name"])] = res
+                level = (ctx.snapshot.get("player") or {}).get("level")
+                for q in res.get("quests") or []:
+                    kept = longroute.dungeon_quest(q, str(res["name"]))
+                    if not kept:
+                        continue
+                    # (a dungeon part of the long route names it; plan_route only when the character can take it now)
+                    self._long_quests.setdefault(self._char, {})[_quest_key(kept)] = kept
+                    if q.get("state") == "can be taken now" and kept.get("where") and not (
+                            isinstance(kept.get("minLevel"), (int, float)) and isinstance(level, (int, float))
+                            and kept["minLevel"] > level):
+                        ctx.offered[_quest_key(kept)] = kept
+            return format_dungeon_plan(which, res), not res or bool(res.get("error"))
         if name == "quest_requirements":
             title = str(args.get("quest") or "").strip("[] ")[:80]
             try:

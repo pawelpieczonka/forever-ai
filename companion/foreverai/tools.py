@@ -375,6 +375,29 @@ TOOLS.append({
 TOOLS.append({
     "type": "function",
     "function": {
+        "name": "dungeon_plan",
+        "description": "A dungeon from the player's DungeonJournal add-on (WoW Forever's own dungeons too): its levels, "
+                       "where its entrance is and how to get there, its quests for this character (each with who gives "
+                       "it and where, what it needs, what to bring, and whether the character can take it now, it opens "
+                       "later or other quests come first) and its bosses. Without a dungeon: the dungeons for about the "
+                       "character's level, with how many of their quests are open now. Call it when the player asks "
+                       "about a dungeon or which one to do, and before a dungeon part of long_route (it needs the "
+                       "entrance from here). Works only when the addons section lists ForeverDungeonJournal as loaded.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "dungeon": {"type": "string", "description": "The dungeon's English name (\"Gnomeregan\", \"Scarlet "
+                                                             "Monastery: Library\"); leave out for the list of "
+                                                             "dungeons for the character's level"},
+            },
+        },
+    },
+})
+
+
+TOOLS.append({
+    "type": "function",
+    "function": {
         "name": "long_route",
         "description": "A long route the player follows over hours or days, kept by the app in a file for this "
                        "character: parts in order, each the quests of one place (a town and its surroundings, a "
@@ -386,7 +409,11 @@ TOOLS.append({
                        "parts (all at once or a few per call), reading the zones first with zone_quests (up_to_level "
                        "= the goal). Every result says the level the route ends at: add parts until it reaches the "
                        "goal. The app puts the current part on the map as plan_route would, and the next part when one "
-                       "is done, by itself. The player sees the parts in the add-on's window.",
+                       "is done, by itself. The player sees the parts in the add-on's window. A dungeon run is a part "
+                       "of its own (dungeon: its name, after reading it with dungeon_plan): its quests are picked up "
+                       "on the way, the entrance is its last stop, the creatures of a run in a group of five are "
+                       "counted, and the next part waits until the player is out of the dungeon; put a part with the "
+                       "turn-ins of its quests after it.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -411,6 +438,11 @@ TOOLS.append({
                               "title": {"type": "string", "description": "Where it is, in English (\"Menethil Harbor\", "
                                                                          "\"Dun Modr and the Thandol Span\")"},
                               "zone": {"type": "string", "description": "English name of the zone it is in"},
+                              "dungeon": {"type": "string",
+                                          "description": "For a dungeon run: the dungeon's name, as dungeon_plan gives "
+                                                         "it. quests: the dungeon's quests (picked up in this part, "
+                                                         "done inside); zone: where the part starts (their givers); "
+                                                         "the entrance is its last stop"},
                               "then": {"type": "array", "items": {"type": "string"},
                                        "description": "Other zones this part goes into, in order, when its quests "
                                                       "lead there"},
@@ -753,6 +785,78 @@ def format_quest_requirements(title: str, res: dict | None) -> str:
     return "\n".join(out)
 
 
+def format_dungeon_plan(name: str, res: dict | None) -> str:
+    """Game result of dungeon_plan -> text for the model: one dungeon with its entrance, quests and bosses, or the
+    dungeons for the character's level."""
+    if not res:
+        return "The game did not respond in time; the dungeon journal could not be read."
+    if res.get("error"):
+        return f"The dungeon journal could not be read: {res['error']}."
+    if isinstance(res.get("dungeons"), list):
+        rows = [d for d in res["dungeons"] if isinstance(d, dict) and d.get("name")]
+        if not rows:
+            return f"The dungeon journal has no dungeon for about level {res.get('level')}."
+        out = [f"Dungeons for about level {res.get('level')} (the DungeonJournal add-on):"]
+        for d in rows:
+            out.append(f"- {d['name']} (levels {d.get('level')}" + (f", {d['location']}" if d.get("location") else "")
+                       + f"): {d.get('quests', 0)} quests for this character, {d.get('open', 0)} of them open now"
+                       + (f"; entrance {d['entrance']}" if d.get("entrance") else ""))
+        out.append("dungeon_plan with a dungeon's name gives its quests, entrance and bosses.")
+        return "\n".join(out)
+    me = res.get("character")
+    head = f"{res.get('name') or name}" + (f", levels {res['level']}" if res.get("level") else "") \
+        + (f" (the character is {me})" if me else "") + (f", in {res['location']}" if res.get("location") else "") + "."
+    out = [head + (f" {res['about']}" if res.get("about") else "")]
+    e = res.get("entrance") if isinstance(res.get("entrance"), dict) else None
+    if e and e.get("zone"):
+        out.append(f"Entrance: {e['zone']} {e.get('x')}, {e.get('y')}" + (f" — {e['detail']}" if e.get("detail") else ""))
+    else:
+        out.append("The journal has no entrance on a zone map for it: it cannot be a part of a long route.")
+    quests = [q for q in res.get("quests") or [] if isinstance(q, dict) and q.get("title")]
+    if quests:
+        out.append("Its quests for this character:")
+    for q in quests:
+        head = f"- [{q['title']}]" + (f" (level {q['level']}" if q.get("level") else " (") \
+            + (f", opens at {q['minLevel']})" if q.get("minLevel") else ")") + f": {q.get('state') or '?'}"
+        bits = [head]
+        if q.get("giver"):
+            bits.append(f"given by {q['giver']}" + (f" ({q['where']})" if q.get("where") else "")
+                        + (" inside the dungeon" if q.get("givenInside") else ""))
+        if q.get("turnIn"):
+            bits.append(f"turned in to {q['turnIn']}" + (" (inside: no turn-in part needed)" if q.get("turnedInside") else ""))
+        if q.get("objective"):
+            bits.append(str(q["objective"]))
+        if q.get("needs"):
+            bits.append("needs " + ", ".join(str(n) for n in q["needs"]) + " first")
+        if q.get("blocked"):
+            bits.append(f"not for this character: {q['blocked']}")
+        if q.get("bring"):
+            bits.append(f"bring {q['bring']}")
+        if q.get("provided"):
+            bits.append(f"its giver hands over {q['provided']}")
+        if q.get("xp"):
+            bits.append(f"{int(q['xp']):,} XP")
+        if q.get("repeatable"):
+            bits.append("repeatable")
+        if q.get("warning"):
+            bits.append(f"warning: {q['warning']}")
+        if q.get("note"):
+            bits.append(f"note: {q['note']}")
+        out.append("; ".join(bits))
+    if not quests:
+        out.append("The journal has no quest of it for this character.")
+    bosses = [b for b in res.get("bosses") or [] if isinstance(b, dict) and b.get("name")]
+    if bosses:
+        out.append("Bosses: " + "; ".join(b["name"] + (" (rare)" if b.get("rare") else "")
+                                         + (f": {b['about']}" if b.get("about") else "") for b in bosses))
+    if e and e.get("zone"):
+        out.append(f"For a long route: a part with dungeon=\"{res.get('name') or name}\" and the quests the character "
+                   "can take (picked up in that part on the way, done inside; the entrance is its last stop), then a "
+                   "part with their turn-ins (the same titles) after it. A quest given inside the dungeon is not "
+                   "picked up before. A group of five: the world chat, or /lfg when the addons section lists LFGForever.")
+    return "\n".join(out)
+
+
 def format_addon_options(addon: str, res: dict | None) -> str:
     """Game result of addon_options -> text for the model."""
     if not res:
@@ -937,7 +1041,7 @@ AH_EXACT_MAX = 40
 # runs such calls at once may do so. The ones that ask the game then go to it together, and it answers them together,
 # instead of a round trip through the screenshot channel for each.
 READ_ONLY_TOOLS = frozenset({"search_knowledge_base", "fetch_url", "addon_options", "zone_quests", "gear_upgrades",
-                             "quest_requirements",
+                             "quest_requirements", "dungeon_plan",
                              "map_notes", "pet_abilities", "way_to", "my_auctions", "search_auction_house",
                              "compare_sell_prices"})
 

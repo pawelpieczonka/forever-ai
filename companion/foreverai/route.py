@@ -974,6 +974,7 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
             return
         objectives, followers, blocked = [], [], False
         unplaced = []  # what it asks for that the data has no place for: the turn-in waits until the log says done
+        dungeons, inside_n = [], 0  # ... because it is inside a dungeon (no place on a zone map): done in there
         # what the quest log calls the open objectives, for the ones the database only knows as "Credit"
         every = [(re.sub(r"^\d+/\d+\s+", "", re.sub(r"\[(TO DO|DONE)\]", "", p).strip()), "[DONE]" in p)
                  for p in str(q.get("objectives") or "").split(";") if p.strip()]
@@ -1013,6 +1014,11 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
                 leg = _leg_of(legs, z, xy, floor, early=wanted_first) if m else None
                 if not m:
                     unplaced.append(label.strip())
+                    inside = re.search(r"\binside (.+?) \(no place on a zone map\)", sources)
+                    if inside:
+                        inside_n += 1
+                        if inside.group(1) not in dungeons:
+                            dungeons.append(inside.group(1))
                 elif leg is None and z in zones:
                     left_out.append(f"[{title}]: {label} in {z} ({m.group('x')}, {m.group('y')}), "
                                     f"not where the route passes through {z}")
@@ -1053,7 +1059,13 @@ def _route(snapshot: dict, new_quests: bool | list = False, skip: list | None = 
                                        "mob": name if creature else None, "quest": title,
                                        **({"at_once": True} if event and q.get("startsWhenTaken") else {}),
                                        "tasks": [{"kind": "objective", "quest": title, **qid, "label": label, **around[0]}]})
-            if unplaced and not blocked:
+            if unplaced and not blocked and dungeons and inside_n == len(unplaced):
+                # done in a dungeon: the route leads to its entrance (a long route's dungeon part), the turn-in comes
+                # once the quest log says it is done
+                left_out.append(f"[{title}]: done inside {', '.join(dungeons)}, with a group; its turn-in comes once "
+                                "the quest log says it is done")
+                blocked = not objectives
+            elif unplaced and not blocked:
                 # Something it asks for has no known place (the database lacks it, it is made or bought somewhere
                 # unsaid): what has a place is on the route, the turn-in is not. Planned at once, the turn-in sent the
                 # player to the NPC with the quest unfinished, and the next part of its chain was "picked up" there.

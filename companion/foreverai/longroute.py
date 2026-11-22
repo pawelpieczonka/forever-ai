@@ -40,12 +40,16 @@ SHARE_SAMPLE_XP = 15000
 SHARE_SESSIONS = 20
 TYPICAL_XP_PER_LEVEL = 80  # a quest whose XP the data does not have: about this much per quest level (2000 at 25)
 ABOVE_RED = 3  # a quest this many levels above the character when its part comes is hard alone
+# a dungeon run: about this many elite creatures killed, in a group of this many, with the game's XP bonus for it; and
+# about this long, with finding the group and the way in
+RUN_KILLS, GROUP, GROUP_BONUS, RUN_HOURS = 100, 5, 1.4, 1.5
 # what the app keeps of each quest of a part, as the game listed it: enough to plan it when the part's turn comes
 QUEST_KEYS = ("id", "title", "level", "minLevel", "xp", "type", "giver", "where", "objective", "whereToGet", "turnIn",
-              "next", "nextId", "nextXp", "nextNeeds", "goals", "startsWhenTaken")
+              "next", "nextId", "nextXp", "nextNeeds", "goals", "startsWhenTaken", "needs", "dungeon", "turnedInside")
 _FOLLOW = re.compile(r"^\[(?P<title>.+?)\](?: \(level (?P<level>\d+)\))? from (?P<giver>.+?) \((?P<where>[^()]+)\)$")
 _ZONE_AT = re.compile(r"(?:—|\() *(?P<zone>[A-Z][^—(),:]*?) \d+(?:\.\d+)?, \d+(?:\.\d+)?")
 _REWARD_XP = re.compile(r"(\d[\d,]*) XP")
+_WHERE_XY = re.compile(r"^.+? \d+(?:\.\d+)?, \d+(?:\.\d+)?$")
 
 
 def _num(v: Any, default: float = 0.0) -> float:
@@ -223,9 +227,46 @@ def lookup(title: str, snapshot: dict, offered: dict) -> tuple[dict | None, str]
 
 
 # ------------------------------------------------------------------------ parts
-def make_part(raw: dict, snapshot: dict, offered: dict, taken: set[str]) -> tuple[dict | None, list[str]]:
+def dungeon_quest(q: dict, dungeon: str) -> dict | None:
+    """A quest of dungeon_plan as zone_quests gives one, for a part of the long route to name: None when it is done,
+    in the quest log already (the log has it), or not for this character. Its objectives are inside the dungeon (no
+    place on a zone map), so a route picks it up and turns it in once the quest log says it is done."""
+    if not (isinstance(q, dict) and q.get("title")) or q.get("state") in ("done", "in the quest log",
+                                                                           "not for this character"):
+        return None
+    kept = {k: q[k] for k in ("id", "title", "level", "minLevel", "xp", "giver", "objective", "turnIn")
+            if q.get(k) is not None}
+    if _WHERE_XY.match(str(q.get("where") or "")) and not q.get("givenInside"):
+        kept["where"] = q["where"]  # (a quest given inside the dungeon has no stop outside)
+    lines = [str(x) for x in q.get("whereToGet") or [] if x] or [
+        f"{_clip(q.get('objective') or 'what it asks for', 160)}: inside {dungeon} (no place on a zone map)"]
+    kept.update(whereToGet=lines[:4], goals=max(1, len(lines)), dungeon=dungeon)
+    if q.get("needs"):
+        kept["needs"] = [str(n) for n in q["needs"]][:4]
+    if q.get("turnedInside"):
+        kept["turnedInside"] = True  # (turned in to somebody in the dungeon: its XP comes in there)
+    return kept
+
+
+def find_dungeon(dungeons: dict, name: str) -> dict | None:
+    """The dungeon of this name among the ones read with dungeon_plan (by its key): the same name, else the one whose
+    name starts with it or holds it ("Gnomer")."""
+    want = re.sub(r"[^a-z0-9]", "", norm(name).removeprefix("the "))
+    if not want:
+        return None
+    keys = {re.sub(r"[^a-z0-9]", "", norm(k).removeprefix("the ")): d for k, d in (dungeons or {}).items()}
+    if want in keys:
+        return keys[want]
+    return next((d for k, d in keys.items() if k.startswith(want)), None) or \
+        next((d for k, d in keys.items() if want in k), None)
+
+
+def make_part(raw: dict, snapshot: dict, offered: dict, taken: set[str],
+              dungeons: dict | None = None) -> tuple[dict | None, list[str]]:
     """A part as the model gives it -> (the part as the app keeps it, what is wrong with it). Quests the data does
-    not have are left out of it, with a word why; ``taken``: the quests earlier parts already hold."""
+    not have are left out of it, with a word why; ``taken``: the quests earlier parts already hold. ``dungeons``: the
+    dungeons read with dungeon_plan, for a dungeon part (dungeon: its name): its quests are picked up on the way and
+    done inside, its entrance is its last stop, and the part after it turns them in."""
     problems: list[str] = []
     if not isinstance(raw, dict):
         return None, ["A part is an object with title, zone and quests."]
@@ -235,6 +276,18 @@ def make_part(raw: dict, snapshot: dict, offered: dict, taken: set[str]) -> tupl
     title = title or zone
     then = [z for z in (_clip(z, 60) for z in (raw.get("then") if isinstance(raw.get("then"), list) else []))
             if z and z.lower() != zone.lower()][:6]
+    dungeon = None
+    if _clip(raw.get("dungeon"), 60):
+        d = find_dungeon(dungeons or {}, raw["dungeon"])
+        e = (d or {}).get("entrance") or {}
+        if not (d and isinstance(e.get("x"), (int, float)) and isinstance(e.get("y"), (int, float))):
+            return None, [f"Part \"{title}\" is a dungeon part, and the app has no entrance of {raw['dungeon']}: read the "
+                          "dungeon with dungeon_plan first, then add the part again."]
+        dungeon = {"name": str(d.get("name")), "zone": str(e.get("zone") or zone), "x": e["x"], "y": e["y"],
+                   **({"detail": _clip(e["detail"], 160)} if e.get("detail") else {}),
+                   **{k: int(d[k]) for k in ("min", "max") if isinstance(d.get(k), (int, float))}}
+        if dungeon["zone"].lower() != zone.lower() and dungeon["zone"].lower() not in (z.lower() for z in then):
+            then.append(dungeon["zone"])  # (the entrance is the last stop: its zone comes last)
     done = done_ids(snapshot)
     quests, seen = [], set()
     for t in _titles(raw.get("quests"))[:MAX_QUESTS + 6]:
@@ -251,7 +304,7 @@ def make_part(raw: dict, snapshot: dict, offered: dict, taken: set[str]) -> tupl
         if isinstance(q.get("id"), int) and q["id"] in done and not q.get("inLog"):
             problems.append(f"[{q['title']}] is left out: the character has done it already.")
             continue
-        if key in taken:
+        if key in taken and not dungeon:  # (a dungeon part does the quests an earlier part picks up)
             problems.append(f"[{q['title']}] is left out of part \"{title}\": an earlier part has it already.")
             continue
         refused = None if q.get("inLog") else refusal(snapshot, q)
@@ -271,13 +324,13 @@ def make_part(raw: dict, snapshot: dict, offered: dict, taken: set[str]) -> tupl
         quests.append(q)
     extra = [e for e in (raw.get("extra") if isinstance(raw.get("extra"), list) else []) if isinstance(e, dict)][:10]
     part = {"title": title, "zone": zone, "quests": quests,
-            **({"then": then} if then else {}),
+            **({"then": then} if then else {}), **({"dungeon": dungeon} if dungeon else {}),
             **({"note": _clip(raw.get("note"), NOTE_MAX)} if _clip(raw.get("note"), NOTE_MAX) else {}),
             **({"extra": extra} if extra else {})}
     for key in ("skip", "first", "last", "use", "avoid"):
         if _titles(raw.get(key)):
             part[key] = _titles(raw.get(key))[:20]
-    if not quests and not extra:
+    if not quests and not extra and not dungeon:
         problems.append(f"Part \"{title}\" has nothing to do: no quest of it is known and it has no stop. It is not "
                         "added.")
         return None, problems
@@ -293,8 +346,41 @@ def new_route(goal: int, title: str, summary: str, snapshot: dict, conv: str, sk
 
 
 def taken_titles(route: dict, upto: int | None = None) -> set[str]:
-    """The quests the parts hold (the first ``upto`` of them)."""
-    return {norm(q.get("title")) for part in route.get("parts", [])[:upto] for q in part.get("quests") or []}
+    """The quests the parts hold (the first ``upto`` of them). Not a dungeon part's: the part after it turns them in."""
+    return {norm(q.get("title")) for part in route.get("parts", [])[:upto] if not part.get("dungeon")
+            for q in part.get("quests") or []}
+
+
+def run_xp(level: float, lo: int | None = None, hi: int | None = None) -> int:
+    """The XP of the creatures of a dungeon run in a group of five: about RUN_KILLS elites, each worth twice a creature
+    of the character's level (45 + 5 x level, and 5% more for every level the dungeon's middle lies above the character,
+    four at most), shared by the five with the game's bonus for a full group."""
+    lvl = int(level)
+    mid = ((lo or lvl) + (hi or lvl)) / 2
+    per = (45 + 5 * lvl) * (1 + 0.05 * max(0.0, min(4.0, mid - lvl))) * 2
+    return int(RUN_KILLS * per * GROUP_BONUS / GROUP)
+
+
+def turned_in_later(route: dict, i: int, snapshot: dict) -> list[str]:
+    """The quests of the quest log that dungeon part ``i`` holds and a part after it turns in: the dungeon part picks
+    them up and leads to the entrance, so once they are in the log it plans nothing of them (done, their turn-ins came
+    on its map, and the part that turns them in never did)."""
+    part = (route.get("parts") or [])[i] if i < len(route.get("parts") or []) else {}
+    after = turned_in_after(route, i) if isinstance(part.get("dungeon"), dict) else None
+    if after is None:
+        return []
+    later = {norm(q.get("title")) for q in route["parts"][after].get("quests") or []}
+    return [q["title"] for q in log_quests(snapshot) if norm(q["title"]) in later
+            and norm(q["title"]) in {norm(x.get("title")) for x in part.get("quests") or []}]
+
+
+def turned_in_after(route: dict, i: int) -> int | None:
+    """The part after dungeon part ``i`` that turns its quests in (the first that names one of them), or None."""
+    mine = {norm(q.get("title")) for q in route["parts"][i].get("quests") or []}
+    for k, part in enumerate(route.get("parts") or []):
+        if k > i and mine & {norm(q.get("title")) for q in part.get("quests") or []}:
+            return k
+    return None
 
 
 # ------------------------------------------------------------------------ the levels it leads to
@@ -316,10 +402,17 @@ def estimate(route: dict, snapshot: dict) -> dict:
             parts.append({"done": True})
             continue
         start, qxp, guessed, left = lv.value(), 0.0, [], 0
+        dungeon = part.get("dungeon") if isinstance(part.get("dungeon"), dict) else None
+        after = turned_in_after(route, i) if dungeon else None
+        if dungeon and after is None and any(not q.get("turnedInside") for q in part.get("quests") or []):
+            warnings.append(f"The quests of part {i + 1} ({dungeon.get('name')}) are turned in after the dungeon: add a "
+                            "part with their turn-ins after it, or their XP is not counted.")
         for q in part.get("quests") or []:
             if isinstance(q.get("id"), int) and q["id"] in done and q["id"] not in in_log:
                 continue  # turned in already: the character's XP has it
             left += 1
+            if dungeon and not q.get("turnedInside"):
+                continue  # (its XP comes with its turn-in, in the part after the dungeon that names it)
             base, guess = base_xp(q, level)
             if guess:
                 guessed.append(str(q.get("title")))
@@ -335,14 +428,18 @@ def estimate(route: dict, snapshot: dict) -> dict:
             gain = quest_xp(base, qlevel, lv.level)
             qxp += gain
             lv.add(gain)
-        kills = qxp * share
+        # the creatures on the way: the player's own share of the quests' XP; in a dungeon, a run's creatures
+        kills = run_xp(lv.level, dungeon.get("min"), dungeon.get("max")) if dungeon else qxp * share
         bonus = min(rested, kills)
         rested -= bonus
         lv.add(kills + bonus)
-        entry = {"from": start, "to": lv.value(), "quests": qxp, "kills": kills + bonus, "left": left}
+        entry = {"from": start, "to": lv.value(), "quests": qxp, "kills": kills + bonus, "left": left,
+                 **({"run": True, "after": after} if dungeon else {})}
         if guessed:
             entry["guessed"] = guessed
-        if rate:
+        if dungeon:
+            entry["hours"] = RUN_HOURS  # (a group's pace, not the player's own)
+        elif rate:
             entry["hours"] = (qxp + kills + bonus) / rate
         parts.append(entry)
     goal = int(route.get("goal") or 0)
@@ -376,15 +473,27 @@ def render(route: dict, snapshot: dict, est: dict | None = None, detail: bool = 
     for i, part in enumerate(route.get("parts") or []):
         e = est["parts"][i] if i < len(est["parts"]) else {}
         where = part["zone"] + (" then " + ", ".join(part["then"]) if part.get("then") else "")
+        d = part.get("dungeon") if isinstance(part.get("dungeon"), dict) else None
+        if d:
+            lv = f", levels {d['min']}-{d['max']}" if d.get("min") and d.get("max") else ""
+            where = f"the dungeon {d['name']}{lv}, a group of five; its entrance in {d['zone']} {d['x']:g}, {d['y']:g}" \
+                + (f"; on the way: {where}" if where.lower() != d["zone"].lower() else "")
         if e.get("done"):
             lines.append(f"{i + 1}. {part['title']} ({where}): done.")
             continue
         state = ("" if i != cur else " [on the map now]" if route.get("mapped") == cur
                  else " [the current part, not on the map: long_route go puts it there]")
         hours = f", about {duration(e['hours'] * 3600)} of play" if e.get("hours") else ""
-        lines.append(f"{i + 1}. {part['title']} ({where}){state}: level {e.get('from', 0):.1f} -> {e.get('to', 0):.1f}, "
-                     f"{e.get('left', 0)} quests, {int(e.get('quests', 0)):,} XP from quests + about "
-                     f"{int(e.get('kills', 0)):,} from creatures{hours}")
+        if d:
+            turn = (f"its quests are turned in in part {e['after'] + 1}" if e.get("after") is not None
+                    else "no later part turns its quests in")
+            lines.append(f"{i + 1}. {part['title']} ({where}){state}: level {e.get('from', 0):.1f} -> {e.get('to', 0):.1f}, "
+                         f"{e.get('left', 0)} quests picked up on the way and done inside ({turn}), about "
+                         f"{int(e.get('kills', 0)):,} XP from the creatures of a run{hours}")
+        else:
+            lines.append(f"{i + 1}. {part['title']} ({where}){state}: level {e.get('from', 0):.1f} -> {e.get('to', 0):.1f}, "
+                         f"{e.get('left', 0)} quests, {int(e.get('quests', 0)):,} XP from quests + about "
+                         f"{int(e.get('kills', 0)):,} from creatures{hours}")
         if detail:
             for q in part.get("quests") or []:
                 lines.append("   " + _quest_line(q, level))
@@ -417,7 +526,9 @@ def summary(route: dict, snapshot: dict, est: dict | None = None) -> dict:
     parts = []
     for i, part in enumerate(route.get("parts") or []):
         e = est["parts"][i] if i < len(est["parts"]) else {}
+        d = part.get("dungeon") if isinstance(part.get("dungeon"), dict) else None
         parts.append({"title": part["title"], "zone": part["zone"], **({"then": part["then"]} if part.get("then") else {}),
+                      **({"dungeon": d["name"]} if d else {}),
                       **({"done": True} if e.get("done") else
                          {"from": round(e.get("from", 0), 1), "to": round(e.get("to", 0), 1),
                           "quests": e.get("left", 0), "xp": int(e.get("quests", 0) + e.get("kills", 0)),
@@ -441,11 +552,16 @@ def part_args(route: dict, i: int, snapshot: dict) -> dict:
     mine = {norm(q.get("title")) for q in part.get("quests") or []}
     later = sorted(t for t in taken_titles(route) - taken_titles(route, i + 1) if t not in mine)
     log_titles = {norm(q["title"]): q["title"] for q in log_quests(snapshot)}
+    d = part.get("dungeon") if isinstance(part.get("dungeon"), dict) else None
     skip = list(dict.fromkeys(list(route.get("skip") or []) + list(part.get("skip") or [])
-                              + [log_titles[t] for t in later if t in log_titles]))
+                              + [log_titles[t] for t in later if t in log_titles] + turned_in_later(route, i, snapshot)))
     # a quest that opens at a level the character does not have yet cannot be picked up: it waits (its stop would wait
     # for nothing the player can do)
-    new = [q for q in part.get("quests") or [] if not q.get("inLog")
+    # (a quest picked up in an earlier part, as a dungeon part's quests are for the part that turns them in, is in
+    # the quest log by now: the route plans it from there)
+    done = done_ids(snapshot)
+    new = [q for q in part.get("quests") or [] if not q.get("inLog") and norm(q.get("title")) not in log_titles
+           and not (isinstance(q.get("id"), int) and q["id"] in done)
            and not (isinstance(q.get("minLevel"), (int, float)) and q["minLevel"] > level)]
     args: dict = {"new_quests": [q["title"] for q in new]} if new else {}
     if then:
@@ -455,6 +571,12 @@ def part_args(route: dict, i: int, snapshot: dict) -> dict:
     for key in ("first", "last", "use", "avoid", "extra"):
         if part.get(key):
             args[key] = list(part[key])
+    if d:
+        # the entrance, the last stop: done once the player is inside (the add-on waits there for the group)
+        args["extra"] = list(args.get("extra") or []) + [{
+            "title": f"{d['name']} entrance", "zone": d["zone"], "x": d["x"], "y": d["y"], "when": "last",
+            "note": d.get("detail") or f"go into {d['name']} with your group",
+            "tasks": [{"kind": "dungeon", "zone": d["name"]}]}]
     offered = [{k: q[k] for k in QUEST_KEYS if q.get(k) is not None} for q in new if q.get("where")]
     if offered:
         args["offered"] = offered
